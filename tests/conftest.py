@@ -31,7 +31,7 @@ NO_PROVIDER_TIERS: dict[str, Any] = {"population": {"tier_mutation_prob": 0.0}}
 def _no_provider_credentials():
     """Strip provider credentials for the whole session so no test can reach a model API."""
     with pytest.MonkeyPatch.context() as mp:
-        for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
             mp.delenv(key, raising=False)
         yield
 

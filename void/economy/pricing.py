@@ -36,6 +36,17 @@ MODEL_PRICES: dict[str, tuple[float, float, float, float]] = {
     "claude-sonnet-5": (2.0, 10.0, 0.2, 2.5),
     "claude-sonnet-4-6": (3.0, 15.0, 0.3, 3.75),
     "claude-haiku-4-5": (1.0, 5.0, 0.1, 1.25),
+    # Gemini API list prices, September 2026 (cache reads at 10% of input; no cache-write charge). The
+    # Flash 3.x rate is promotional through 2026-12-31 and doubles after. Verify at
+    # ai.google.dev/gemini-api/docs/pricing before a paid run; the tier's own prices always win.
+    "gemini-3.1-pro": (2.0, 12.0, 0.20, 0.0),
+    "gemini-3.8-flash": (0.75, 3.75, 0.075, 0.0),
+    "gemini-3.7-flash": (0.75, 3.75, 0.075, 0.0),
+    "gemini-3.6-flash": (0.75, 3.75, 0.075, 0.0),
+    "gemini-3.1-flash-lite": (0.25, 1.50, 0.025, 0.0),
+    "gemini-2.5-pro": (1.25, 10.0, 0.125, 0.0),
+    "gemini-2.5-flash": (0.30, 2.50, 0.03, 0.0),
+    "gemini-2.5-flash-lite": (0.10, 0.40, 0.01, 0.0),
 }
 
 
@@ -51,12 +62,21 @@ def prices_for_model(model: str, tier: TierConfig, tiers: dict[str, TierConfig] 
     tier_prices = (tier.price_in_per_mtok, tier.price_out_per_mtok, tier.price_cache_read_per_mtok, tier.price_cache_write_per_mtok)
     if not model or model == tier.model or model.startswith(tier.model):
         return tier_prices
+    # served names carry version suffixes (``gemini-2.5-flash-lite-001``), so match by the LONGEST known
+    # prefix: ``gemini-2.5-flash`` must not capture ``gemini-2.5-flash-lite``. Configured tiers win over the table.
+    best: tuple[int, tuple[float, float, float, float]] | None = None
     for t in (tiers or {}).values():
-        if t.model == model:
-            return (t.price_in_per_mtok, t.price_out_per_mtok, t.price_cache_read_per_mtok, t.price_cache_write_per_mtok)
+        if model == t.model or model.startswith(t.model):
+            cand = (len(t.model), (t.price_in_per_mtok, t.price_out_per_mtok, t.price_cache_read_per_mtok, t.price_cache_write_per_mtok))
+            best = cand if best is None or cand[0] > best[0] else best
+    if best is not None:
+        return best[1]
     for known, prices in MODEL_PRICES.items():
         if model == known or model.startswith(known):
-            return prices
+            cand = (len(known), prices)
+            best = cand if best is None or cand[0] > best[0] else best
+    if best is not None:
+        return best[1]
     log.warning("unknown served model %s priced at tier %s rates", model, tier.model)
     return tier_prices
 
@@ -84,7 +104,8 @@ def hold_micro(tier: TierConfig, economy: EconomyConfig, prompt_tokens: int, sys
     agent's balance nor the caps can be overrun by a call that stays within max_tokens.
     """
     prompt_tokens = int(math.ceil(prompt_tokens * 1.3))
-    u = Usage(input_tokens=prompt_tokens + system_tokens, output_tokens=tier.max_tokens, cache_write_tokens=system_tokens)
+    out_tokens = tier.max_tokens + max(0, int(tier.thinking_budget or 0))  # thinking tokens are billed as output
+    u = Usage(input_tokens=prompt_tokens + system_tokens, output_tokens=out_tokens, cache_write_tokens=system_tokens)
     worst = max(real_cost_micro(u, tier), world_cost_micro(u, tier, economy))
     worst = int(math.ceil(worst * max(0.0, economy.hold_multiplier)))
     return max(worst, int(math.ceil(economy.min_call_reserve_usd * MICRO)))

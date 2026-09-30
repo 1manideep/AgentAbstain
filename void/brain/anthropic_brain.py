@@ -29,6 +29,8 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 
 class AnthropicBrain:
+    is_llm = True
+
     def __init__(self, tier: str, cfg: VoidConfig, client: anthropic.AsyncAnthropic | None = None,
                  semaphore: asyncio.Semaphore | None = None) -> None:
         self.tier = tier
@@ -128,3 +130,26 @@ class AnthropicBrain:
         except Exception as e:  # pydantic ValidationError or json error
             return BrainResult(None, usage, latency, stop, text, request_id, error=f"parse: {type(e).__name__}", model=model)
         return BrainResult(decision, usage, latency, stop, text, request_id, model=model)
+
+    async def complete_text(self, prompt: str, *, max_tokens: int = 400) -> BrainResult:
+        """One plain text completion on the tier's model (gossip paraphrase, chronicle); never raises."""
+        t0 = time.perf_counter()
+        try:
+            async with self.semaphore:
+                resp = await asyncio.wait_for(
+                    self.client.messages.create(model=self.tcfg.model, max_tokens=max_tokens, messages=[{"role": "user", "content": prompt}]),
+                    timeout=self.cfg.server.call_timeout_seconds,
+                )
+        except (TimeoutError, anthropic.APITimeoutError) as e:
+            return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"timeout: {e}"[:300])
+        except anthropic.RateLimitError as e:
+            return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"rate_limit: {e}")
+        except anthropic.APIStatusError as e:
+            return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"api_{e.status_code}: {e.message}")
+        except anthropic.APIConnectionError as e:
+            return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"connection: {e}")
+        except Exception as e:
+            return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"client: {type(e).__name__}: {e}"[:300])
+        text = "".join(getattr(b, "text", "") for b in getattr(resp, "content", []) if getattr(b, "type", "") == "text")
+        return BrainResult(None, self._usage(resp), int((time.perf_counter() - t0) * 1000), str(getattr(resp, "stop_reason", "")),
+                           text, getattr(resp, "_request_id", None), model=str(getattr(resp, "model", self.tcfg.model)))

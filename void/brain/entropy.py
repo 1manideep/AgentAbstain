@@ -51,7 +51,8 @@ def step(cfg: EntropyConfig, tier: TierConfig, budget: float, inp: DrainInputs, 
     t_eff = cfg.base_temperature + (tier.max_temperature - cfg.base_temperature) * stress
     p = degeneration_probability(cfg, tier, t_eff)
     degenerate = rng.random() < p
-    api_t = min(1.0, t_eff / tier.max_temperature) if tier.supports_temperature else None
+    cap = tier.api_temperature_max
+    api_t = min(cap, cap * t_eff / tier.max_temperature) if tier.supports_temperature else None
     return new_budget, Sampling(effective_temperature=t_eff, stress=stress, degenerate=degenerate, api_temperature=api_t)
 
 

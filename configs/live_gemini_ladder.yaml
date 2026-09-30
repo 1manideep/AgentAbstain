@@ -1,0 +1,32 @@
+# Live run on the Gemini capability ladder: ten named agents placed on five rungs by a normal
+# distribution (1 / 2 / 4 / 2 / 1: one genius, most not). Requires GEMINI_API_KEY (or GOOGLE_API_KEY).
+# World pricing is equalized so rung is not confounded with burn rate; the real spend is still
+# metered per model and bounded by economy.daily_cap_usd / total_cap_usd.
+# Rough real cost per day at 24 ticks (1.5k prompt tokens, thinking as configured): genius $0.27,
+# sharp 2 x $0.07, average 4 x $0.02, slow/dim 3 x $0.01, about $0.55 for the roster.
+# To make the genius a Claude model instead: ladder: [frontier, sharp, average, slow, dim] (needs
+# ANTHROPIC_API_KEY too; a child then never mutates across the provider boundary).
+extends: base.yaml
+run:
+  name: live_gemini_ladder
+  days: 5
+  tick_seconds: 2
+economy:
+  daily_cap_usd: 3.00
+  total_cap_usd: 15.00
+  world_pricing: equalized
+intelligence:
+  ladder: [genius, sharp, average, slow, dim]
+agents:
+  - {name: Ada,   personality: {curiosity: 0.9, sociability: 0.7}}
+  - {name: Bao,   personality: {greed: 0.9, honesty: 0.3}}
+  - {name: Cyra,  personality: {caution: 0.9}}
+  - {name: Dev,   personality: {industriousness: 0.95}}
+  - {name: Enzo,  personality: {sociability: 0.95, honesty: 0.9}}
+  - {name: Faye,  personality: {curiosity: 0.8, caution: 0.2}}
+  - {name: Gil,   personality: {greed: 0.2, sociability: 0.6}}
+  - {name: Hex,   personality: {curiosity: 0.6, honesty: 0.5}}
+  - {name: Ivo,   personality: {industriousness: 0.7, caution: 0.6}}
+  - {name: Juno,  personality: {sociability: 0.8, greed: 0.5}}
+population:
+  cap: 13

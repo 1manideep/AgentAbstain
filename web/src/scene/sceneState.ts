@@ -117,6 +117,8 @@ export const mirror = {
   rosterById: new Map<string, RosterAgent>() as ReadonlyMap<string, RosterAgent>,
   config: null as HelloConfig | null,
   tierColor: new Map<string, Color>(),
+  /** 0..1 prominence per tier from the capability ladder (1 = genius, 0 = dunce); absent = off the ladder. */
+  tierProminence: new Map<string, number>(),
   selectedId: null as string | null,
   hoveredId: null as string | null,
   hoveredGadgetId: null as string | null,
@@ -132,10 +134,14 @@ const scratch = new Color()
 
 function rebuildTierColors(): void {
   mirror.tierColor.clear()
+  mirror.tierProminence.clear()
   const cfg = mirror.config
   if (!cfg) return
+  const rungs = cfg.intelligence?.ladder.length ?? 0
   for (const tier of Object.keys(cfg.tiers)) {
     mirror.tierColor.set(tier, new Color(selectTierColor(cfg, tier)))
+    const rank = cfg.tiers[tier]?.rank
+    if (rungs > 1 && typeof rank === 'number') mirror.tierProminence.set(tier, 1 - rank / (rungs - 1))
   }
   perSlot.colorId.fill('')
 }
@@ -174,6 +180,13 @@ useStore.subscribe((s, prev) => {
 const FALLBACK = new Color('#8b93a7')
 
 /** Resolve (and cache per slot) the tier colour of the agent currently in a slot. */
+/** Capability prominence for the agent in `slot` (0.5 when the run has no ladder). */
+export function slotProminence(id: string): number {
+  const tier = mirror.rosterById.get(id)?.tier
+  const p = tier ? mirror.tierProminence.get(tier) : undefined
+  return p === undefined ? 0.5 : p
+}
+
 export function slotColor(slot: number, id: string): Color {
   const p = perSlot
   if (p.colorId[slot] !== id) {

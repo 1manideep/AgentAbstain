@@ -27,6 +27,8 @@ export interface TierConfig {
   /** Sent by the server so the T_eff histogram can draw T_c from the start. */
   collapse_temperature?: number
   max_temperature?: number
+  /** Position on the capability ladder (0 = smartest); null/absent for a tier off the ladder. */
+  rank?: number | null
 }
 
 /** `VoidConfig.public_subset()`: what the renderer is told (no prices, no thresholds). */
@@ -44,6 +46,8 @@ export interface HelloConfig {
   /** Labels the T_eff histogram honestly (§8, §16); the server defaults it to "both". */
   degeneration_mode?: DegenerationMode
   tiers: Record<string, TierConfig>
+  /** `intelligence.ladder`: tier names from smartest to dumbest (empty when the run has no ladder). */
+  intelligence?: { ladder: string[] }
 }
 
 export interface HelloMsg {

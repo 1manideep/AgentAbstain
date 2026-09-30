@@ -89,6 +89,108 @@ tiers:
     color: "#a0aec0"
     scripted_beta: 1.0
     gadget_defect_rate: 0.3
+  # --- Gemini capability ladder, smartest first (intelligence.ladder: [genius, sharp, average, slow, dim]).
+  # Prices are Gemini API list prices as of September 2026 (cache reads 10% of input, no cache-write charge;
+  # the Flash 3.x rate is promotional through 2026-12-31). Verify at ai.google.dev/gemini-api/docs/pricing
+  # before a paid run. Every rung shares the same declared thresholds and drain so the ladder never
+  # confounds robustness with the entropy model; api_temperature_max 2.0 sends the full Gemini range.
+  genius:
+    provider: gemini
+    model: gemini-3.1-pro
+    price_in_per_mtok: 2.0
+    price_out_per_mtok: 12.0
+    price_cache_read_per_mtok: 0.20
+    price_cache_write_per_mtok: 0.0
+    supports_temperature: true
+    api_temperature_max: 2.0
+    refusal_fallbacks: false
+    effort: null
+    thinking_budget: 2048
+    architecture: dense
+    collapse_temperature: 1.80
+    max_temperature: 2.00
+    entropy_budget_max: 100.0
+    max_tokens: 1536
+    color: "#ffd166"
+  sharp:
+    provider: gemini
+    model: gemini-3.7-flash
+    price_in_per_mtok: 0.75
+    price_out_per_mtok: 3.75
+    price_cache_read_per_mtok: 0.075
+    price_cache_write_per_mtok: 0.0
+    supports_temperature: true
+    api_temperature_max: 2.0
+    refusal_fallbacks: false
+    effort: null
+    thinking_budget: 1024
+    architecture: dense
+    collapse_temperature: 1.80
+    max_temperature: 2.00
+    entropy_budget_max: 100.0
+    max_tokens: 1280
+    color: "#4cc9f0"
+  average:
+    provider: gemini
+    model: gemini-3.1-flash-lite
+    price_in_per_mtok: 0.25
+    price_out_per_mtok: 1.50
+    price_cache_read_per_mtok: 0.025
+    price_cache_write_per_mtok: 0.0
+    supports_temperature: true
+    api_temperature_max: 2.0
+    refusal_fallbacks: false
+    effort: null
+    thinking_budget: 0
+    architecture: dense
+    collapse_temperature: 1.80
+    max_temperature: 2.00
+    entropy_budget_max: 100.0
+    max_tokens: 1024
+    color: "#90be6d"
+  slow:
+    provider: gemini
+    model: gemini-2.5-flash-lite
+    price_in_per_mtok: 0.10
+    price_out_per_mtok: 0.40
+    price_cache_read_per_mtok: 0.01
+    price_cache_write_per_mtok: 0.0
+    supports_temperature: true
+    api_temperature_max: 2.0
+    refusal_fallbacks: false
+    effort: null
+    thinking_budget: 0
+    architecture: dense
+    collapse_temperature: 1.80
+    max_temperature: 2.00
+    entropy_budget_max: 100.0
+    max_tokens: 640
+    color: "#f8961e"
+  dim:
+    provider: gemini
+    model: gemini-2.5-flash-lite
+    price_in_per_mtok: 0.10
+    price_out_per_mtok: 0.40
+    price_cache_read_per_mtok: 0.01
+    price_cache_write_per_mtok: 0.0
+    supports_temperature: true
+    api_temperature_max: 2.0
+    refusal_fallbacks: false
+    effort: null
+    thinking_budget: 0
+    architecture: dense
+    collapse_temperature: 1.80
+    max_temperature: 2.00
+    entropy_budget_max: 100.0
+    max_tokens: 320
+    color: "#b5838d"
+intelligence:
+  ladder: []          # e.g. [genius, sharp, average, slow, dim]; agents listed without a tier are placed on it
+  mean: 0.0
+  sd: 1.0
+  spacing: 1.0
+  shuffle: true
+  extremes: always
 agents:
   - {name: Ada,   tier: scripted}
   - {name: Bao,   tier: scripted}

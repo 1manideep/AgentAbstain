@@ -51,7 +51,21 @@ Headless runs and experiments:
 
 Frontend development without a server: `cd web && VITE_FEED=fixture npm run dev` replays `web/public/fixtures/mock.jsonl`, a genuine recorded run produced by `void mock-feed`. Drop a rigged character at `web/public/models/rig.glb` or a prop pack with `web/public/models/manifest.json` to replace the procedural placeholders (see `web/README.md`).
 
-Live models: set `ANTHROPIC_API_KEY` (or log in with `ant auth login`) and use `configs/live_two_tier.yaml`. Spend is bounded by `economy.daily_cap_usd` and `economy.total_cap_usd`; every call is reserved before and metered from the provider's reported usage after.
+Live models: two providers are built in. `configs/live_two_tier.yaml` runs Claude tiers (`ANTHROPIC_API_KEY`, or `ant auth login`); `configs/live_gemini_ladder.yaml` runs the Gemini capability ladder (`GEMINI_API_KEY` or `GOOGLE_API_KEY`). Spend is bounded by `economy.daily_cap_usd` and `economy.total_cap_usd`; every call is reserved before and metered from the provider's reported usage after.
+
+## Not everyone is equally smart
+
+`intelligence.ladder` names tiers from smartest to dumbest; agents listed without a `tier` are placed on it by a normal distribution (`void/intelligence.py`): ten agents on five rungs come out **1 / 2 / 4 / 2 / 1**, one genius and one dunce guaranteed, and which personality is the genius rotates with `run.seed` (so a paired-by-seed experiment averages personality out of the intelligence effect). The resolved roster is part of the config hash and is printed at start (`intelligence: genius=1 (Dev) · sharp=2 (Hex, Juno) · ...`). Children mutate one rung up or down, never across a provider. In the scene the halo says the rung: wide, bright and fast for the genius, small and dull for the dunce.
+
+| rung | live model (Gemini) | thinking | out cap | list price in / out per MTok | ≈ real cost per call | offline stand-in (`demo.yaml`) |
+|---|---|---|---|---|---|---|
+| genius | `gemini-3.1-pro` | 2048 | 1536 | $2.00 / $12.00 | $0.011 | scripted, β 3.0, defect 0.10 |
+| sharp | `gemini-3.7-flash` | 1024 | 1280 | $0.75 / $3.75 | $0.003 | scripted, β 2.0, defect 0.20 |
+| average | `gemini-3.1-flash-lite` | off | 1024 | $0.25 / $1.50 | $0.0007 | scripted, β 1.0, defect 0.30 |
+| slow | `gemini-2.5-flash-lite` | off | 640 | $0.10 / $0.40 | $0.0002 | scripted, β 0.6, defect 0.45 |
+| dim | `gemini-2.5-flash-lite` | off | 320 | $0.10 / $0.40 | $0.0002 | scripted, β 0.35, defect 0.60 |
+
+Per call assumes a 1.5k-token prompt and typical thinking use; a ten-agent day at 24 ticks is about **$0.55** on the ladder against about $2.40 all-Opus or $0.60 all-Haiku (Claude Opus 5.5 $4 / $20, Haiku 4.5 $1 / $5). Prices are September 2026 list prices and live in the config, not the code: check `ai.google.dev/gemini-api/docs/pricing` before a paid run. Every Gemini rung takes a real sampling temperature in `[0, 2]` (`api_temperature_max: 2.0`), so `T_eff` reaches the sampler instead of only the prompt. Swap the genius for Claude with `ladder: [frontier, sharp, average, slow, dim]`.
 
 ## Guardrails that are code, not policy
 
@@ -63,4 +77,4 @@ Live models: set `ANTHROPIC_API_KEY` (or log in with `ant auth login`) and use `
 
 ## Known limits
 
-Claude 5.x models expose no sampling temperature, so on those tiers degeneration is either induced by a documented kernel operator (demo mode) or measured from real outputs under prompt-visible stress (experiment mode, `entropy.degeneration.mode: observe`). The scripted provider samples at real temperature. The sandbox is namespace isolation, not a hypervisor. Nothing here resolves a philosophical question; the self-node version history is a browsable Ship of Theseus, not an answer to one.
+Claude 5.x models expose no sampling temperature, so on those tiers degeneration is either induced by a documented kernel operator (demo mode) or measured from real outputs under prompt-visible stress (experiment mode, `entropy.degeneration.mode: observe`). Gemini tiers and the scripted provider sample at real temperature (Gemini over its full `[0, 2]` range). The sandbox is namespace isolation, not a hypervisor. Nothing here resolves a philosophical question; the self-node version history is a browsable Ship of Theseus, not an answer to one.

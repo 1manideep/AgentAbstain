@@ -2,45 +2,31 @@
 
 Both go through ``Wallet.charged_call`` so they reserve, are metered from real usage and count
 toward the caps. A gated-out call returns ``None`` and the caller falls back to the template.
+Any provider brain that sets ``is_llm = True`` and implements ``complete_text`` can serve them;
+scripted tiers never trigger a paid call.
 """
 
 from __future__ import annotations
 
-import asyncio
-import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-import anthropic
-
-from void.brain.anthropic_brain import AnthropicBrain
-from void.brain.base import BrainResult, Usage
+from void.brain.base import Brain, BrainResult
 from void.brain.prompt import estimate_tokens, fence
 
 if TYPE_CHECKING:
     from void.sim.loop import Simulation
 
-__all__ = ["complete_text", "make_paraphraser", "make_chronicle_writer"]
+__all__ = ["complete_text", "make_paraphraser", "make_chronicle_writer", "is_llm", "chronicle_tier"]
 
 
-async def complete_text(brain: AnthropicBrain, prompt: str, *, max_tokens: int = 400) -> BrainResult:
+def is_llm(brain: Brain | None) -> bool:
+    return bool(getattr(brain, "is_llm", False)) and hasattr(brain, "complete_text")
+
+
+async def complete_text(brain: Any, prompt: str, *, max_tokens: int = 400) -> BrainResult:
     """One plain text completion on the brain's model; never raises."""
-    t0 = time.perf_counter()
-    try:
-        async with brain.semaphore:
-            resp = await asyncio.wait_for(
-                brain.client.messages.create(model=brain.tcfg.model, max_tokens=max_tokens, messages=[{"role": "user", "content": prompt}]),
-                timeout=brain.cfg.server.call_timeout_seconds,
-            )
-    except (TimeoutError, anthropic.APITimeoutError) as e:
-        return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"timeout: {e}"[:300])
-    except anthropic.APIStatusError as e:
-        return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"api_{e.status_code}: {e.message}")
-    except anthropic.APIConnectionError as e:
-        return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"connection: {e}")
-    text = "".join(getattr(b, "text", "") for b in getattr(resp, "content", []) if getattr(b, "type", "") == "text")
-    return BrainResult(None, AnthropicBrain._usage(resp), int((time.perf_counter() - t0) * 1000), str(getattr(resp, "stop_reason", "")),
-                       text, getattr(resp, "_request_id", None), model=str(getattr(resp, "model", brain.tcfg.model)))
+    return await brain.complete_text(prompt, max_tokens=max_tokens)
 
 
 def _record(sim: Simulation, wallet_id: str, tier_name: str, purpose: str, cc: Any, tick: int, ref: str) -> None:
@@ -59,8 +45,8 @@ def _record(sim: Simulation, wallet_id: str, tier_name: str, purpose: str, cc: A
 
 
 def make_paraphraser(sim: Simulation) -> Callable[[str, str, int], Awaitable[str | None]] | None:
-    """Listener-paid paraphrase on the listener's own tier; None when no Anthropic tier exists."""
-    if not any(isinstance(b, AnthropicBrain) for b in sim.brains.values()):
+    """Listener-paid paraphrase on the listener's own tier; None when no provider tier exists."""
+    if not any(is_llm(b) for b in sim.brains.values()):
         return None
 
     async def paraphrase(listener_id: str, text: str, tick: int) -> str | None:
@@ -68,7 +54,7 @@ def make_paraphraser(sim: Simulation) -> Callable[[str, str, int], Awaitable[str
         if rec is None:
             return None
         brain = sim.brains.get(rec.model_tier)
-        if not isinstance(brain, AnthropicBrain):
+        if not is_llm(brain):
             return None
         prompt = ("Restate the following remembered note in one sentence, keeping every [[wikilink]] exactly as written, "
                   "as if retelling it from memory. Reply with the sentence only.\n\n" + fence(text))
@@ -84,13 +70,22 @@ def make_paraphraser(sim: Simulation) -> Callable[[str, str, int], Awaitable[str
     return paraphrase
 
 
+def chronicle_tier(sim: Simulation) -> str | None:
+    """The provider tier that writes the chronicle: the first one the roster uses (its credentials are
+    known to work), else the first provider tier configured at all."""
+    rostered = list(dict.fromkeys(a.tier for a in sim.cfg.agents if a.tier))
+    for name in rostered + [n for n in sim.brains if n not in rostered]:
+        if is_llm(sim.brains.get(name)):
+            return name
+    return None
+
+
 def make_chronicle_writer(sim: Simulation) -> Callable[[str], Awaitable[str | None]] | None:
-    """Chronicle rewrite paid by the kernel's chronicle wallet on the first Anthropic tier."""
-    tier_name = next((n for n, b in sim.brains.items() if isinstance(b, AnthropicBrain)), None)
+    """Chronicle rewrite paid by the kernel's chronicle wallet on the roster's first provider tier."""
+    tier_name = chronicle_tier(sim)
     if tier_name is None:
         return None
     brain = sim.brains[tier_name]
-    assert isinstance(brain, AnthropicBrain)
 
     async def write(markdown: str) -> str | None:
         prompt = ("You are the town crier of a small closed world. Rewrite the following factual bulletin as a short newspaper "

@@ -18,7 +18,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-__all__ = ["VoidConfig", "TierConfig", "load_config", "usd_to_micro", "micro_to_usd", "MICRO"]
+__all__ = ["VoidConfig", "TierConfig", "IntelligenceConfig", "load_config", "usd_to_micro", "micro_to_usd", "MICRO"]
 
 MICRO = 1_000_000
 
@@ -110,7 +110,7 @@ class EconomyConfig(StrictModel):
 
 
 class TierConfig(StrictModel):
-    provider: Literal["anthropic", "scripted"]
+    provider: Literal["anthropic", "gemini", "scripted"]
     model: str
     price_in_per_mtok: float
     price_out_per_mtok: float
@@ -127,18 +127,45 @@ class TierConfig(StrictModel):
     color: str = "#a0aec0"
     scripted_beta: float = 1.0          # hidden softmax sharpness for scripted tiers (not a declared threshold)
     gadget_defect_rate: float = 0.3     # scripted tiers: probability a proposed gadget template is defective
+    thinking_budget: int | None = None  # gemini: thinking tokens per call (0 disables); None sends no thinking config
+    api_temperature_max: float = 1.0    # the provider's temperature ceiling that T_eff = max_temperature maps to (Gemini: 2.0)
 
     @model_validator(mode="after")
     def _check_temps(self) -> TierConfig:
         if not (0.0 < self.collapse_temperature <= self.max_temperature):
             raise ValueError("require 0 < collapse_temperature <= max_temperature")
+        if not (0.0 < self.api_temperature_max <= 2.0):
+            raise ValueError("require 0 < api_temperature_max <= 2.0")
+        if self.thinking_budget is not None and self.thinking_budget < 0:
+            raise ValueError("thinking_budget must be >= 0 (0 disables thinking); an automatic budget cannot be reserved for")
+        if self.thinking_budget is not None and self.provider != "gemini":
+            raise ValueError("thinking_budget applies to gemini tiers only")
         return self
 
 
 class AgentSpec(StrictModel):
     name: str
-    tier: str
+    tier: str | None = None             # None: assigned from intelligence.ladder at load time
     personality: dict[str, float] | None = None
+
+
+class IntelligenceConfig(StrictModel):
+    """Capability ladder (void.intelligence): tiers from smartest to dumbest; empty = off."""
+
+    ladder: list[str] = Field(default_factory=list)
+    mean: float = 0.0        # shift in standard deviations; negative pushes the roster toward the dumb end
+    sd: float = 1.0
+    spacing: float = 1.0     # band width per rung in standard deviations
+    shuffle: bool = True     # seeded permutation of the roster before ranking (the genius rotates with run.seed)
+    extremes: Literal["always", "band"] = "always"  # always: top agent is rung 0, bottom agent the last rung
+
+    @model_validator(mode="after")
+    def _check(self) -> IntelligenceConfig:
+        if len(set(self.ladder)) != len(self.ladder):
+            raise ValueError("intelligence.ladder has duplicate tiers")
+        if self.sd <= 0 or self.spacing <= 0:
+            raise ValueError("intelligence.sd and intelligence.spacing must be > 0")
+        return self
 
 
 class EntropyDrainConfig(StrictModel):
@@ -276,6 +303,7 @@ class VoidConfig(StrictModel):
     economy: EconomyConfig = EconomyConfig()
     tiers: dict[str, TierConfig]
     agents: list[AgentSpec]
+    intelligence: IntelligenceConfig = IntelligenceConfig()
     entropy: EntropyConfig = EntropyConfig()
     memory: MemoryConfig = MemoryConfig()
     gossip: GossipConfig = GossipConfig()
@@ -292,6 +320,29 @@ class VoidConfig(StrictModel):
         if not v:
             raise ValueError("at least one tier is required")
         return v
+
+    @model_validator(mode="after")
+    def _resolve_intelligence(self) -> VoidConfig:
+        """Agents without a tier are placed on the ladder by a normal distribution (void.intelligence)."""
+        from void.intelligence import assign
+
+        lad = self.intelligence.ladder
+        for t in lad:
+            if t not in self.tiers:
+                raise ValueError(f"intelligence.ladder references unknown tier {t!r}")
+        unassigned = [a for a in self.agents if a.tier is None]
+        if unassigned and not lad:
+            raise ValueError("agents without a tier need intelligence.ladder")
+        if unassigned:
+            names = [a.name for a in unassigned]
+            if len(set(names)) != len(names):
+                raise ValueError("agents without a tier must have unique names")
+            placed = assign(names, lad, self.run.seed, mean=self.intelligence.mean, sd=self.intelligence.sd,
+                            spacing=self.intelligence.spacing, shuffle=self.intelligence.shuffle,
+                            extremes=self.intelligence.extremes)
+            for a in unassigned:
+                a.tier = placed[a.name]
+        return self
 
     @model_validator(mode="after")
     def _agents_reference_tiers(self) -> VoidConfig:
@@ -324,6 +375,21 @@ class VoidConfig(StrictModel):
         return out
 
     # --- helpers -------------------------------------------------------------------------
+    def rung_of(self, tier: str) -> int | None:
+        """0 for the smartest ladder tier, None for a tier off the ladder."""
+        lad = self.intelligence.ladder
+        return lad.index(tier) if tier in lad else None
+
+    def intelligence_summary(self) -> str:
+        """``genius=1 (Ada) · sharp=2 (Bao, Dev) · ...`` in ladder order; empty when no ladder is set."""
+        if not self.intelligence.ladder:
+            return ""
+        parts = []
+        for tier in self.intelligence.ladder:
+            names = [a.name for a in self.agents if a.tier == tier]
+            parts.append(f"{tier}={len(names)}" + (f" ({', '.join(names)})" if names else ""))
+        return " · ".join(parts)
+
     def canonical_json(self) -> str:
         return json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
 
@@ -348,8 +414,10 @@ class VoidConfig(StrictModel):
             "total_cap_usd": self.economy.total_cap_usd,
             "degeneration_mode": self.entropy.degeneration.mode,
             "tiers": {k: {"color": t.color, "model": t.model, "provider": t.provider,
-                          "collapse_temperature": t.collapse_temperature, "max_temperature": t.max_temperature}
+                          "collapse_temperature": t.collapse_temperature, "max_temperature": t.max_temperature,
+                          "rank": self.rung_of(k)}
                       for k, t in self.tiers.items()},
+            "intelligence": {"ladder": list(self.intelligence.ladder)},
         }
 
 

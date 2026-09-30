@@ -27,6 +27,19 @@ def _prov(**fields: object) -> Provenance:
     return Provenance(**{k: v for k, v in fields.items() if k in names})
 
 
+
+def mutation_candidates(cfg: VoidConfig, tier: str) -> list[str]:
+    """Tiers a child of ``tier`` may mutate onto: one rung up or down on the capability ladder when the
+    parent is on it, otherwise any other tier; never across a provider boundary (credentials and the
+    no-network test suite both depend on that)."""
+    provider = cfg.tiers[tier].provider
+    ladder = cfg.intelligence.ladder
+    if tier in ladder:
+        i = ladder.index(tier)
+        return [ladder[j] for j in (i - 1, i + 1) if 0 <= j < len(ladder) and cfg.tiers[ladder[j]].provider == provider]
+    return sorted(t for t, c in cfg.tiers.items() if t != tier and c.provider == provider)
+
+
 class Lifecycle:
     def __init__(self, cfg: VoidConfig, db: Database, registry: AgentRegistry, wallet: Wallet, memory: MemoryStore,
                  bus: EventBus, ids: IdFactory, rng: RNG, vault_root: Path, graveyard_root: Path) -> None:
@@ -122,8 +135,7 @@ class Lifecycle:
     def _child_of(self, parent: AgentRecord, name: str, tick: int, day: int, funding: tuple[str, int, str, str], kind: str) -> AgentRecord:
         r = self.rng.stream("mutate", parent.agent_id, tick)
         tier = parent.model_tier
-        provider = self.cfg.tiers[tier].provider
-        others = sorted(t for t, c in self.cfg.tiers.items() if t != tier and c.provider == provider)
+        others = mutation_candidates(self.cfg, tier)
         if others and r.random() < self.cfg.population.tier_mutation_prob:
             tier = r.choice(others)
         parent_self = self.memory.get_self(parent.agent_id)

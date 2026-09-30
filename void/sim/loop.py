@@ -69,7 +69,7 @@ class TickReport:
 
 
 class Simulation:
-    def __init__(self, cfg: VoidConfig, run_dir: Path, *, client: Any = None, resume: bool = False) -> None:
+    def __init__(self, cfg: VoidConfig, run_dir: Path, *, client: Any = None, gemini_client: Any = None, resume: bool = False) -> None:
         self.cfg = cfg
         self.run_dir = Path(run_dir)
         self.run_dir.mkdir(parents=True, exist_ok=True)
@@ -108,7 +108,7 @@ class Simulation:
         self.control = ControlQueue(self.db)
         self.metrics = MetricsRecorder(cfg, self.db, self.registry, self.run_id, self.run_dir / "metrics.jsonl")
         self.seed_of: dict[str, PersonalitySeed] = {}
-        self.brains: dict[str, Brain] = build_brains(cfg, self.rng, self.seed_of, client=client)
+        self.brains: dict[str, Brain] = build_brains(cfg, self.rng, self.seed_of, client=client, gemini_client=gemini_client)
         # LLM writers are opt-in and always routed through the wallet choke point
         if cfg.gossip.paraphrase == "llm" and self.gossip is not None:
             from void.brain.utility_calls import make_paraphraser

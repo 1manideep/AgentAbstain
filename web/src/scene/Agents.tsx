@@ -7,7 +7,7 @@ import { history } from '../state/history'
 import { useStore } from '../state/store'
 import { attachInstanceAttributes, makeInstancedMaterial } from './instancedMaterial'
 import { rigState } from './rigState'
-import { mirror, perSlot, registerSystem, sampled, slotColor, SYS_AGENTS, type FrameCtx } from './sceneState'
+import { mirror, perSlot, registerSystem, sampled, slotColor, slotProminence, SYS_AGENTS, type FrameCtx } from './sceneState'
 
 const W_IDLE = 0
 const W_WALK = 1
@@ -203,16 +203,18 @@ export function Agents() {
         pulseArr[n] = pulse
         fadeArr[n] = alpha * (1 - 0.15 * ws)
 
-        // tier halo hovering over the head, spinning slowly, dimmed while asleep, gone when dead
+        // tier halo hovering over the head, spinning slowly, dimmed while asleep, gone when dead;
+        // on a capability ladder the genius wears a wide bright fast ring and the dunce a small dull slow one
+        const prom = slotProminence(id)
         const hy = ground + (HALO_HEIGHT + 0.08 * Math.sin(now * 2.2 + s)) * sy * sc + bob
         dummy.position.set(x, hy, z)
-        dummy.rotation.set(0.25 * Math.sin(now * 0.9 + s), now * 0.8 + s, 0)
-        const hs = sc * (1 - 0.6 * wx) * (1 - 0.3 * ws)
+        dummy.rotation.set(0.25 * Math.sin(now * 0.9 + s), now * (0.5 + 0.8 * prom) + s, 0)
+        const hs = sc * (0.7 + 0.6 * prom) * (1 - 0.6 * wx) * (1 - 0.3 * ws)
         dummy.scale.set(hs, hs, hs)
         dummy.updateMatrix()
         halos.setMatrixAt(n, dummy.matrix)
-        halos.setColorAt(n, color.copy(base).lerp(WHITE, id === selected ? 0.35 : 0.1))
-        hPulse[n] = 0.75 + 0.35 * pulse - 0.5 * ws
+        halos.setColorAt(n, color.copy(base).lerp(WHITE, id === selected ? 0.35 : 0.1 + 0.15 * prom))
+        hPulse[n] = 0.55 + 0.4 * prom + 0.35 * pulse - 0.5 * ws
         hFade[n] = alpha * (1 - 0.35 * ws) * (1 - wx)
 
         instToSlot.map[n] = s

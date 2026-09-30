@@ -132,14 +132,18 @@ export const AgentPanel = memo(function AgentPanel() {
 
   if (!id) return <div className="muted small">Click an agent in the scene (double-click to follow). Esc clears.</div>
   const color = selectTierColor(config, agent?.tier ?? '')
+  const rankOf = agent ? config?.tiers[agent.tier]?.rank : undefined
+  const ladderSize = config?.intelligence?.ladder.length ?? 0
+  const rung = typeof rankOf === 'number' && ladderSize > 0 ? { rank: rankOf, of: ladderSize } : null
   const parent = agent?.parent_id ? rosterById.get(agent.parent_id) : undefined
   return (
     <div className="agent-panel">
       <div className="agent-head">
         <span className="tree-dot big" style={{ background: color }} />
         <span className="agent-name">{agent?.name ?? id}</span>
-        <span className="muted">
-          {agent?.tier ?? '?'} · g{agent?.generation ?? '?'}
+        <span className="muted" title={rung ? `capability ladder rung ${rung.rank + 1} of ${rung.of}` : undefined}>
+          {agent?.tier ?? '?'}
+          {rung ? ` · rung ${rung.rank + 1}/${rung.of}` : ''} · g{agent?.generation ?? '?'}
         </span>
         <span className={'tag ' + (agent?.status ?? 'unknown')}>{agent?.status ?? 'unknown'}</span>
         <span className="spacer" />

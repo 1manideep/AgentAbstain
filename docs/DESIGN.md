@@ -19,6 +19,8 @@ The build is real: every mechanism below runs end to end with a deterministic br
 | World price vs real price **[v2]** | `economy.world_pricing: real | equalized`. Real cost is always metered and capped; in `equalized` mode every tier is debited at one price so tier is not confounded with economic stress | Research Q1/Q2 need tier decoupled from burn rate |
 | Daily cap policy | `fcfs` (default) or `sync_sleep`, both implemented | The plan flagged it as deliberate |
 | Sampling temperature on Claude 5.x | Not exposed by the API and not exposed by SDK 1.x for any model; on tiers that accept it (Haiku 4.5) it is sent via `extra_body`. Entropy drives prompt-visible stress; the kernel degeneration operator is optional (`induce`/`observe`/`both`) | Honest about the API; experiments run in `observe` mode so results are measured, not configured |
+| Second provider **[v3]** | `provider: gemini` (`void/brain/gemini_brain.py`, Google GenAI SDK): JSON-schema-constrained output, `system_instruction`, native `temperature` in `[0, 2]` (`tiers.<name>.api_temperature_max: 2.0`), `thinking_budget` reserved for by the hold, usage from `usage_metadata` | Flash-Lite is an order of magnitude cheaper than any Claude tier, which is what makes a ten-agent capability ladder affordable, and every rung samples at real temperature |
+| Capability ladder **[v3]** | `intelligence.ladder` places agents without a tier by a normal distribution (`void/intelligence.py`): ten on five rungs is 1/2/4/2/1, one genius and one dunce guaranteed, the genius rotating with the seed; children mutate one rung | "Not every character is equally smart"; heterogeneous capability is an independent variable, and a seeded placement keeps it out of the personality confound |
 | One LLM call per tick | One structured-output call returning `Decision` | Cost predictability; the gate needs a bounded worst case |
 | Sandbox isolation **[v2]** | `unshare -Urmpfn --kill-child` (user, mount, pid, net namespaces) into a `pivot_root` allow-list root holding only `/usr`, `/etc`, `/proc`, `/tmp`, `/dev/null` and the work dir; rlimits, allow-list static checker, curated builtins. Fails closed if the self-test fails | Docker/gVisor unavailable in the build box; namespaces are available unprivileged |
 | Replacement on bankruptcy | Fitness-proportional parent among survivors, mutated, funded by a kernel spawn pool; the dead agent's estate returns to the pool | Bankruptcy becomes a selection signal and money is conserved |
@@ -62,10 +64,10 @@ The referee/kernel is `void.world.kernel.Kernel`. It is the only writer to world
 ```
 pyproject.toml            uv-managed; package `void`
 void/
-  config.py rng.py ids.py db.py events.py types.py
+  config.py intelligence.py rng.py ids.py db.py events.py types.py
   world/      state.py kernel.py weather.py resources.py epochs.py
   agents/     models.py registry.py lifecycle.py
-  brain/      decision.py base.py prompt.py scripted.py anthropic_brain.py entropy.py
+  brain/      decision.py base.py prompt.py scripted.py anthropic_brain.py gemini_brain.py entropy.py
               coherence.py claims.py gadget_templates.py factory.py
   economy/    pricing.py wallet.py scheduler.py taskboard.py benefactor.py
   memory/     embed.py notes.py vault.py graph.py store.py
@@ -160,11 +162,15 @@ economy:
   world_pricing: real, equalized_price_in_per_mtok: 4.0, equalized_price_out_per_mtok: 20.0
   chronicle_budget_usd: 0.50
 tiers.<name>:
-  provider (anthropic|scripted), model, price_in/out/cache_read/cache_write_per_mtok
-  supports_temperature, refusal_fallbacks, effort, architecture, collapse_temperature,
-  max_temperature, entropy_budget_max, max_tokens, color, scripted_beta (hidden softmax
-  sharpness for scripted tiers; the empirical collapse point the analysis must recover)
-agents: [{name, tier, personality?}]
+  provider (anthropic|gemini|scripted), model, price_in/out/cache_read/cache_write_per_mtok
+  supports_temperature, api_temperature_max 1.0 (2.0 on Gemini), refusal_fallbacks, effort,
+  thinking_budget (gemini only; 0 disables, reserved for by the hold), architecture,
+  collapse_temperature, max_temperature, entropy_budget_max, max_tokens, color,
+  scripted_beta (hidden softmax sharpness for scripted tiers; the empirical collapse point the
+  analysis must recover), gadget_defect_rate
+intelligence: {ladder [] (tier names, smartest first), mean 0.0, sd 1.0, spacing 1.0, shuffle true,
+               extremes always|band}
+agents: [{name, tier? (omitted: placed on the ladder), personality?}]
 entropy:
   base_temperature: 0.7
   drain: {baseline 1.0, low_balance 6.0, failed_action 4.0, crowding 0.5, weather 2.0, hunger 3.0, hunger_ticks 6}
@@ -196,6 +202,12 @@ server: {host, port, max_concurrent_calls 4, render_delay_ticks 2}
 Load-time validation prints warnings (never fails) when: `estimated_call_usd(tier) / forage_income_per_tick` is outside `[0.3, 2.0]` for any tier used by the roster; `total_cap_usd < days * daily_cap_usd`. It fails when `total_cap_usd < daily_cap_usd`, when an agent references an unknown tier, or when a tier's `collapse_temperature > max_temperature`.
 
 `VoidConfig.hash()` is sha256 over canonical JSON. Two runs with equal hash and seed under scripted brains produce byte-identical `metrics.jsonl` (minus the excluded wall-clock fields `created_at`, `latency_ms`, `ts_ms`).
+
+### 4.1 Capability ladder (`intelligence`) **[v3]**
+
+`void/intelligence.py` is a pure function of `(names, ladder, seed, mean, sd, spacing, shuffle, extremes)`. Rung `k` of `K` owns the z band centred at `(mid − k)·spacing`, `mid = (K − 1)/2`; agent `i` of `N` (after a shuffle keyed by `f"{seed}:intelligence"`) receives the mid-quantile `z = mean + sd·Φ⁻¹((i + 0.5)/N)`, so counts follow the bell exactly (ten on five rungs: 1/2/4/2/1) instead of by luck. `extremes: always` (default) pins the highest-z agent to rung 0 and the lowest to rung `K − 1`, so a six-agent roster still has one genius and one dunce (1/1/2/1/1); `band` keeps the pure bands (0/2/2/2/0 at six). Placement runs in `VoidConfig` validation, so the resolved roster is in `hash()`, `to_yaml()` and the run table: two runs with the same seed and roster place the same people (common random numbers across arms), and a different seed moves the genius. Explicit `tier:` entries are overrides and are excluded from the draw. `public_subset()` carries `tiers.<name>.rank` and `intelligence.ladder` so the renderer can size the halo by rung; the CLI prints `intelligence: genius=1 (Dev) · sharp=2 (…)` at start.
+
+Tier mutation on a ladder (§13) moves one rung up or down and never across a provider boundary. `exp_tiers` still uses its own two scripted tiers; a ladder experiment compares arms that differ only in `intelligence.*` (an allowed path under `experiment.independent_variables`).
 
 ---
 
@@ -258,7 +270,10 @@ Memory ops: `remember` on windfalls, transfers, gossip, notable forages (always 
 Synthetic usage: `input = tokens(system) + tokens(rendered obs)`, system portion billed as `cache_read` after the agent's first call; `output = tokens(decision json)`. The scripted tier is priced like the frontier tier so the economy is exercised.
 
 ### 7.3 AnthropicBrain
-As built: `client.messages.create` (or `client.beta.messages.create` with `betas=["server-side-fallback-2026-07-01"], fallbacks="default"` when `refusal_fallbacks`), `output_config={"format": {"type": "json_schema", "schema": ...}, "effort": tier.effort}`, cache-controlled system block, `extra_body={"temperature": api_t}` only when `supports_temperature`. `api_temperature = min(1, T_eff / max_temperature)`. Stop reasons handled: `refusal` → `decision=None`; `max_tokens` → parse attempt; parse failures recorded. Served `response.model` and `request_id` stored per call. Every call is bounded by `server.call_timeout_seconds` (client timeout, one retry, and an `asyncio.wait_for` around the request); timeouts are metered as the hold under the `timeout:` error class. When a refusal fallback served the response, every billed attempt in `usage.iterations` is priced at its own model's rates.
+As built: `client.messages.create` (or `client.beta.messages.create` with `betas=["server-side-fallback-2026-07-01"], fallbacks="default"` when `refusal_fallbacks`), `output_config={"format": {"type": "json_schema", "schema": ...}, "effort": tier.effort}`, cache-controlled system block, `extra_body={"temperature": api_t}` only when `supports_temperature`. `api_temperature = min(1, T_eff / max_temperature)`. Stop reasons handled: `refusal` → `decision=None`; `max_tokens` → parse attempt; parse failures recorded. Served `response.model` and `request_id` stored per call. Every call is bounded by `server.call_timeout_seconds` (client timeout, one retry, and an `asyncio.wait_for` around the request); timeouts are metered as the hold under the `timeout:` error class. When a refusal fallback served the response, every billed attempt in `usage.iterations` is priced at its own model's rates. `complete_text` (gossip paraphrase, chronicle) lives on the brain; `utility_calls` accepts any brain with `is_llm = True`.
+
+### 7.3b GeminiBrain **[v3]**
+`client.aio.models.generate_content(model, contents=rendered observation, config={system_instruction, response_mime_type: "application/json", response_json_schema: <the same strict schema; every keyword it uses is in Gemini's supported subset>, max_output_tokens, candidate_count: 1, temperature, thinking_config: {thinking_budget}})`. `api_temperature = min(api_temperature_max, api_temperature_max · T_eff / max_temperature)`, i.e. the full `[0, 2]` range on Gemini tiers (the same formula gives `[0, 1]` on Haiku). A 400 that mentions thinking drops the thinking config for the rest of the run (one retry, then remembered). Usage: `input = prompt_token_count − cached_content_token_count`, `cache_read = cached_content_token_count`, `output = candidates_token_count + thoughts_token_count`, `cache_write = 0`; `attempts = [(model_version, usage)]` so a served version suffix (`gemini-2.5-flash-lite-001`) is priced by longest known prefix. Finish reasons: `STOP` → parse; `MAX_TOKENS` → parse attempt under `max_tokens`; `SAFETY | RECITATION | BLOCKLIST | PROHIBITED_CONTENT | SPII | LANGUAGE`, a `prompt_feedback.block_reason` or an empty candidate list → `refusal:<reason>`. Errors: 429 → `rate_limit:`, 408/504 and `asyncio.TimeoutError`/`httpx.TimeoutException` → `timeout:`, other `APIError` → `api_<code>:`, `httpx.TransportError` → `connection:`, anything else (including a missing `GEMINI_API_KEY`, since the client is built lazily) → `client:`. The chronicle writer runs on the first provider tier the roster uses, so a Gemini-only roster never needs an Anthropic key.
 
 ### 7.4 Kernel validation **[v2]**
 `Kernel.validate(agent, action)` reads **live** state only. Preconditions that earlier agents in the same tick can invalidate (population cap, node stock, task status, target alive+awake+in range, balance) are re-checked in `apply`. Outcome kinds: `ok`, `invalid` (never valid; adds `failed_action` drain), `stale` (valid against the observation; no drain). Invalid or stale actions are applied as `idle` with a reason in `last_action_result`.
@@ -307,7 +322,7 @@ In `observe` mode the operator never runs; stress remains prompt-visible and rea
 - `transfer`: target alive and awake, not self, `balance_after ≥ min_reserve` (the reserve applies to every voluntary outflow: transfers, endowments, fees).
 
 ### 9.2 Pricing
-`real_cost = ceil((in·p_in + out·p_out + cr·p_cr + cw·p_cw)/1e6 · MICRO)`; `world_cost` the same with equalized prices when configured. Both are stored on the ledger row and the call row.
+`real_cost = ceil((in·p_in + out·p_out + cr·p_cr + cw·p_cw)/1e6 · MICRO)`; `world_cost` the same with equalized prices when configured. Both are stored on the ledger row and the call row. The served model is priced by the longest matching prefix among configured tiers first and the `MODEL_PRICES` table second (so `gemini-2.5-flash-lite-001` is not captured by `gemini-2.5-flash`); an unknown served model is priced at the tier's rates with a warning. The hold's output term is `max_tokens + thinking_budget`, because thinking tokens are billed as output.
 
 ### 9.3 Scheduler
 Unchanged. A second `sleep` in a day is `invalid`. Under `sync_sleep`, when `spend_today + n_awake·hold_min > daily_cap` all awake agents sleep. Under `fcfs` the gate decides one agent at a time in tick order.
@@ -377,7 +392,7 @@ Single end-of-tick evaluation in `lifecycle.resolve()`, in tick order:
 2. for each alive agent with `balance < hold_min(tier)` (or flagged by a metering overrun): `bankrupt(a)` → estate to `spawn_pool` (`estate_out`/`estate_in`), status `bankrupt`, `died_tick`, event `death {cause: gate|overrun}`; then `spawn_replacement` if `population < cap` and `spawn_pool ≥ replacement_grant`: parent chosen with weight `balance + 1000 µ$` among alive agents via `rng("replace", tick, agent)`, child funded by `spawn_grant` from the pool (no parent debit), event `birth {kind: replacement}`; refusals emit `replacement_skipped {reason: cap|pool_empty}`; if no alive agent exists the child is a fresh generation-0 agent from the roster template;
 3. archive: after the tick commits, vault → graveyard, paths rewritten, status `archived` (a crash in between leaves a recoverable `bankrupt` row, never an alive one with a moved vault). Offspring cannot take a living agent's name; replacement names are made unique; a name that matches several living agents is not a valid target.
 
-`create_offspring` preconditions: `reproduction_enabled`, population < cap, `balance − endowment ≥ min_reserve`, `endowment ≥ min_call_reserve × min_endowment_calls`. Child: tier mutated with `tier_mutation_prob`, seed mutated (traits ± N(0, 0.1); motto from the parent's self summary), position beside parent, remaining weather allowance inherited, top-K notes copied with `channel=inherited`, `self.md` = "Child of <parent>. <first sentence of parent self>".
+`create_offspring` preconditions: `reproduction_enabled`, population < cap, `balance − endowment ≥ min_reserve`, `endowment ≥ min_call_reserve × min_endowment_calls`. Child: tier mutated with `tier_mutation_prob` (`mutation_candidates`: one rung up or down when the parent's tier is on `intelligence.ladder`, else any other tier of the same provider; never across providers), seed mutated (traits ± N(0, 0.1); motto from the parent's self summary), position beside parent, remaining weather allowance inherited, top-K notes copied with `channel=inherited`, `self.md` = "Child of <parent>. <first sentence of parent self>".
 
 Run end states: after `resolve`, `end_run("capped_total")` when `spend_total + hold_min > total_cap`, `end_run("extinct")` when population is 0; `completed` after the last day. `end_run` writes the final chronicle, flushes metrics, emits `run_ended`; CLI exit code 0 for completed, 2 otherwise.
 
@@ -516,7 +531,8 @@ Control room (right pane, `React.memo` charts built with the `dataviz` skill as 
 
 ## 20. Known limits
 
-- Claude 5.x tiers have no sampling temperature; degeneration there is either induced by the documented operator (demo) or measured from real outputs under prompt-visible stress (experiments). The "real temperature" claim holds for the scripted provider and any future provider whose API accepts the full range.
+- Claude 5.x tiers have no sampling temperature; degeneration there is either induced by the documented operator (demo) or measured from real outputs under prompt-visible stress (experiments). The "real temperature" claim holds for the scripted provider and for Gemini tiers, whose API accepts the full `[0, 2]` range.
+- Gemini prices in `configs/base.yaml` and `MODEL_PRICES` are September 2026 list prices copied from secondary sources (the pricing page is not reachable from the build environment); the tier's configured prices are what is metered, so verify them before a paid run. `slow` and `dim` share a model and differ only in the output cap until a smaller served model exists.
 - The sandbox is namespace isolation, not a hypervisor. It is fail-closed, network-isolated and filesystem-isolated; the `SandboxRunner` protocol is where gVisor/Firecracker goes.
 - Template chronicle and scripted paraphrase keep runs reproducible; LLM writers are opt-in, metered and gated.
 - Nothing here resolves a philosophical question. `self_versions` is a browsable Ship of Theseus, not an answer to one.

@@ -4,7 +4,7 @@
 
 - Python 3.11+, `uv` (or pip), Node 22+.
 - Linux with unprivileged user namespaces (`unshare -Urmpfn` must work) for the gadget sandbox. Without it the sandbox fails closed: gadget actions are rejected with `sandbox_unavailable`, everything else runs. Set `sandbox.require_isolation: false` only if you accept running gadget code without filesystem isolation (not recommended).
-- For live tiers: `ANTHROPIC_API_KEY`, or a profile from `ant auth login`.
+- For live tiers: `ANTHROPIC_API_KEY` (or a profile from `ant auth login`) for Claude tiers; `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) for Gemini tiers.
 
 ## Install
 
@@ -21,6 +21,7 @@ cd web && npm install && npm run build && cd ..
 | Frontend only, no server | `cd web && VITE_FEED=fixture npm run dev` (replays the recorded fixture) |
 | Headless scripted run | `.venv/bin/void run --config configs/scripted_smoke.yaml --days 3 --out data/runs` |
 | Live two-tier run | `ANTHROPIC_API_KEY=... .venv/bin/void serve --config configs/live_two_tier.yaml` |
+| Live Gemini capability ladder (ten agents, 1/2/4/2/1 by a normal distribution) | `GEMINI_API_KEY=... .venv/bin/void serve --config configs/live_gemini_ladder.yaml` (the resolved rungs print at start; `--seed 7` moves the genius) |
 | Resume a run | add `--resume` (a run whose tick counter is behind its metered calls is marked `inconsistent` and refuses) |
 | Slow down or pause | in the control room, or `POST /api/control/speed {"tick_seconds": 1.5}`, `/pause`, `/resume`, `/step` |
 | Export protocol schemas | `.venv/bin/void schema --out schemas/` |

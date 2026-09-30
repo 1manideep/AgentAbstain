@@ -127,6 +127,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         cfg = load_config(config, _run_overrides(seed=seed, days=args.days, tick_seconds=args.tick_seconds))
         for w in cfg.warnings():
             print(f"warning: {w}", file=sys.stderr)
+        if cfg.intelligence.ladder:
+            print(f"intelligence: {cfg.intelligence_summary()}", file=sys.stderr)
         run_dir = _run_dir(out, cfg, sweep=sweep)
         try:
             statuses.append(asyncio.run(_run_headless(cfg, run_dir, resume=args.resume)))
@@ -142,6 +144,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
     cfg = load_config(_resolve(args.config), _run_overrides(seed=args.seed, tick_seconds=args.tick_seconds))
     for w in cfg.warnings():
         print(f"warning: {w}", file=sys.stderr)
+    if cfg.intelligence.ladder:
+        print(f"intelligence: {cfg.intelligence_summary()}", file=sys.stderr)
     host = args.host or cfg.server.host
     port = int(args.port or cfg.server.port)
     static = _resolve(args.static)

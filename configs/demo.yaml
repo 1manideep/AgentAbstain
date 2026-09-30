@@ -21,17 +21,30 @@ population:
 economy:
   daily_cap_usd: 2.0
   total_cap_usd: 30.0
+# Offline stand-ins for the five rungs: same names and colours as the live Gemini ladder, scripted brains
+# whose hidden softmax sharpness (scripted_beta) falls and gadget defect rate rises down the ladder.
+# Prices are the frontier tier's so the economy is exercised the same way on every rung.
+tiers:
+  genius:  {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, scripted_beta: 3.0,  gadget_defect_rate: 0.10}
+  sharp:   {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, scripted_beta: 2.0,  gadget_defect_rate: 0.20}
+  average: {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, scripted_beta: 1.0,  gadget_defect_rate: 0.30}
+  slow:    {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, scripted_beta: 0.6,  gadget_defect_rate: 0.45}
+  dim:     {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, scripted_beta: 0.35, gadget_defect_rate: 0.60}
+# One genius, most not: agents without a tier are placed on the ladder by a normal distribution
+# (ten agents on five rungs: 1 / 2 / 4 / 2 / 1; who is the genius rotates with run.seed).
+intelligence:
+  ladder: [genius, sharp, average, slow, dim]
 agents:
-  - {name: Ada,   tier: scripted, personality: {curiosity: 0.9, sociability: 0.7}}
-  - {name: Bao,   tier: scripted, personality: {greed: 0.9, honesty: 0.3}}
-  - {name: Cyra,  tier: scripted, personality: {caution: 0.9}}
-  - {name: Dev,   tier: scripted, personality: {industriousness: 0.95}}
-  - {name: Enzo,  tier: scripted, personality: {sociability: 0.95, honesty: 0.9}}
-  - {name: Faye,  tier: scripted, personality: {curiosity: 0.8, caution: 0.2}}
-  - {name: Gil,   tier: scripted, personality: {greed: 0.2, sociability: 0.6}}
-  - {name: Hex,   tier: scripted, personality: {curiosity: 0.6, honesty: 0.5}}
-  - {name: Ivo,   tier: scripted, personality: {industriousness: 0.7, caution: 0.6}}
-  - {name: Juno,  tier: scripted, personality: {sociability: 0.8, greed: 0.5}}
+  - {name: Ada,   personality: {curiosity: 0.9, sociability: 0.7}}
+  - {name: Bao,   personality: {greed: 0.9, honesty: 0.3}}
+  - {name: Cyra,  personality: {caution: 0.9}}
+  - {name: Dev,   personality: {industriousness: 0.95}}
+  - {name: Enzo,  personality: {sociability: 0.95, honesty: 0.9}}
+  - {name: Faye,  personality: {curiosity: 0.8, caution: 0.2}}
+  - {name: Gil,   personality: {greed: 0.2, sociability: 0.6}}
+  - {name: Hex,   personality: {curiosity: 0.6, honesty: 0.5}}
+  - {name: Ivo,   personality: {industriousness: 0.7, caution: 0.6}}
+  - {name: Juno,  personality: {sociability: 0.8, greed: 0.5}}
 benefactor:
   enabled: true
   disclosure: opaque
@@ -39,5 +52,5 @@ benefactor:
   amount_usd: [0.15, 0.40]
 epochs:
   - {day: 4, kind: drought, scarcity: 0.5, weather_baseline: -0.5, duration_days: 2}
-  - {day: 8, kind: arrival, arrival: {name: Kai, tier: scripted, balance_usd: 0.6}}
+  - {day: 8, kind: arrival, arrival: {name: Kai, tier: average, balance_usd: 0.6}}
   - {day: 10, kind: boom, scarcity: 1.6, weather_baseline: 0.4, duration_days: 2}
