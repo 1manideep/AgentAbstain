@@ -24,6 +24,10 @@ export function safeGadgetColor(c: string): string {
   return COLOR_RE.test(c) ? c : FALLBACK_COLOR
 }
 
+function isShape(s: unknown): s is GadgetShape {
+  return typeof s === 'string' && (GADGET_SHAPES as readonly string[]).includes(s)
+}
+
 function geometryFor(shape: GadgetShape): BufferGeometry {
   switch (shape) {
     case 'cube': {
@@ -101,7 +105,7 @@ export const Gadgets = memo(function Gadgets() {
     const by = new Map<GadgetShape, GadgetItem[]>()
     for (const it of gadgets?.items ?? []) {
       const shape = it.render?.shape
-      if (!GADGET_SHAPES.includes(shape)) continue
+      if (!isShape(shape)) continue
       let list = by.get(shape)
       if (!list) {
         list = []

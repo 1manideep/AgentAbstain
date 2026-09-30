@@ -159,6 +159,11 @@ select {
   font-size: 12px;
   color: var(--text);
 }
+.run-name {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
 .run {
   font-family: var(--mono);
   font-size: 11px;

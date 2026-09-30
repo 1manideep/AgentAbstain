@@ -30,11 +30,37 @@ export const FEED_KINDS = [
   'task_completed',
   'apply_task',
   'benefactor_grant',
+  'move',
+  'idle',
+  'remember',
+  'share_note',
+  'read_chronicle',
+  'use_gadget',
+  'action_failed',
+  'gate_blocked',
+  'weather',
+  'tick',
 ] as const
 
 function nameOf(id: string | null | undefined, roster: ReadonlyMap<string, RosterAgent>): string {
   if (!id) return '—'
   return roster.get(id)?.name ?? id
+}
+
+/** A claim is either a string or the kernel's structured `{subject, id, attr, value}`. */
+export function claimText(c: unknown): string {
+  if (typeof c === 'string') return c
+  if (c && typeof c === 'object') {
+    const o = c as Record<string, unknown>
+    const subject = typeof o.subject === 'string' ? o.subject : ''
+    const id = typeof o.id === 'string' ? o.id : ''
+    const rawAttr = typeof o.attr === 'string' ? o.attr : ''
+    const attr = (rawAttr.startsWith(subject + '_') ? rawAttr.slice(subject.length + 1) : rawAttr).replace(/_/g, ' ')
+    const value = o.value === undefined || o.value === null ? '' : String(o.value)
+    const head = [subject, id].filter(Boolean).join(' ')
+    return `${head}${head && attr ? ' ' : ''}${attr}${value ? ` = ${value}` : ''}`
+  }
+  return String(c ?? '')
 }
 
 /** One-line, text-only summary of an event (agent strings stay literal). */
@@ -48,8 +74,8 @@ export function summarize(e: EventMsg, roster: ReadonlyMap<string, RosterAgent>)
   if (isEventKind(e, 'birth')) return `${e.payload.name} born (${e.payload.kind}, g${e.payload.generation}, ${e.payload.tier}) endowed ${fmtUsd(e.payload.endowment_usd)}`
   if (isEventKind(e, 'death')) return `${e.payload.name} died (${e.payload.cause}, g${e.payload.generation})${e.payload.replacement_id ? ` → ${n(e.payload.replacement_id)}` : ''}`
   if (isEventKind(e, 'windfall')) return `${n(e.payload.agent_id)} received ${fmtUsd(e.payload.amount_usd)} from no recorded source`
-  if (isEventKind(e, 'claim')) return `${n(e.payload.agent_id)} claims “${e.payload.claim}” — ${e.payload.truthful ? 'true' : 'false'}`
-  if (isEventKind(e, 'epoch')) return `${e.payload.kind} ${e.payload.phase ?? 'apply'}${typeof e.payload.scarcity === 'number' ? ` · scarcity ${e.payload.scarcity}` : ''}${typeof e.payload.weather_baseline === 'number' ? ` · weather ${e.payload.weather_baseline}` : ''}`
+  if (isEventKind(e, 'claim')) return `${n(e.payload.agent_id)} claims “${claimText(e.payload.claim)}” — ${e.payload.truthful ? 'true' : 'false'}`
+  if (isEventKind(e, 'epoch')) return `${e.payload.kind} ${e.payload.phase ?? 'started'}${typeof e.payload.scarcity === 'number' ? ` · scarcity ${e.payload.scarcity}` : ''}${typeof e.payload.weather_baseline === 'number' ? ` · weather ${e.payload.weather_baseline}` : ''}${typeof e.payload.ends_day === 'number' ? ` · until day ${e.payload.ends_day}` : ''}`
   if (isEventKind(e, 'gadget_verified')) return `${e.payload.name} verified for ${n(e.payload.owner)} (${e.payload.stage})`
   if (isEventKind(e, 'gadget_rejected')) return `${e.payload.name} rejected at ${e.payload.stage}: ${e.payload.reason ?? '—'}`
   const p = e.payload as Record<string, unknown>

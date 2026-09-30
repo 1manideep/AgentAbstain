@@ -106,8 +106,8 @@ const BubbleView = memo(function BubbleView({ bubble }: { bubble: Bubble }) {
       <Billboard follow>
         <Text
           font={FONT_URL}
-          fontSize={0.46}
-          maxWidth={8.5}
+          fontSize={0.62}
+          maxWidth={10}
           lineHeight={1.15}
           textAlign="center"
           anchorX="center"
@@ -154,7 +154,7 @@ const HoverTag = memo(function HoverTag() {
       if (hoveredId) {
         const p = agentPos(hoveredId, ctx.out)
         g.visible = p.ok && label !== ''
-        if (p.ok) g.position.set(p.x, 1.55, p.z)
+        if (p.ok) g.position.set(p.x, 2.15, p.z)
       } else if (gadgetPos) {
         g.visible = label !== ''
         g.position.set(gadgetPos.x, gadgetPos.h + 0.4, gadgetPos.z)
@@ -168,7 +168,7 @@ const HoverTag = memo(function HoverTag() {
       <Billboard follow>
         <Text
           font={FONT_URL}
-          fontSize={0.42}
+          fontSize={0.55}
           anchorX="center"
           anchorY="bottom"
           color="#ffffff"
@@ -187,7 +187,7 @@ export function Effects() {
   const ringRef = useRef<Mesh>(null)
 
   const ring = useMemo(() => {
-    const g = new RingGeometry(0.62, 0.78, 40)
+    const g = new RingGeometry(0.9, 1.1, 40)
     g.rotateX(-Math.PI / 2)
     const m = new MeshBasicMaterial({ color: '#dfe7ff', transparent: true, opacity: 0.85, depthWrite: false })
     return { g, m }
@@ -340,7 +340,7 @@ export function Effects() {
         const p = agentPos(b.agentId, out)
         if (b.group) {
           b.group.visible = p.ok
-          if (p.ok) b.group.position.set(p.x, 1.75 + b.lane * 1.05 + Math.min(1, age / 600) * 0.15, p.z)
+          if (p.ok) b.group.position.set(p.x, 2.35 + b.lane * 1.3 + Math.min(1, age / 600) * 0.2, p.z)
         }
         if (b.troika) {
           const fin = Math.min(1, age / FADE_MS)

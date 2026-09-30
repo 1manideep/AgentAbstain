@@ -140,12 +140,11 @@ export class Series {
   /** Per snapshot: T_eff histogram window, population, mean balance, gini, generations. */
   onSnapshot(snap: SnapshotMsg, rosterById: ReadonlyMap<string, RosterAgent>): void {
     const alive = snap.agents.filter((a) => a.status === 'alive')
-    const vals = new Float32Array(alive.length)
+    const withCall = alive.filter((a) => typeof a.t_eff === 'number' && Number.isFinite(a.t_eff))
+    const vals = new Float32Array(withCall.length)
     let bal = 0
-    for (let i = 0; i < alive.length; i++) {
-      vals[i] = alive[i]!.t_eff
-      bal += alive[i]!.balance_usd
-    }
+    for (let i = 0; i < withCall.length; i++) vals[i] = withCall[i]!.t_eff as number
+    for (const a of alive) bal += a.balance_usd
     // T_eff window
     if (this.teffRing.length < TEFF_WINDOW) {
       this.teffRing.push(vals)
@@ -216,6 +215,7 @@ export class Series {
         }
         this.coherenceByTierByStressBin.set(tier, acc)
       }
+      if (typeof agg.mean_stress !== 'number') continue
       let b = Math.floor(agg.mean_stress * STRESS_BINS)
       if (b < 0) b = 0
       if (b >= STRESS_BINS) b = STRESS_BINS - 1
@@ -277,7 +277,7 @@ export class Series {
         tick: e.tick,
         day: e.day,
         kind: String(p.kind),
-        phase: typeof p.phase === 'string' ? p.phase : 'apply',
+        phase: typeof p.phase === 'string' ? p.phase : 'started',
         duration_days: typeof p.duration_days === 'number' ? p.duration_days : null,
         scarcity: typeof p.scarcity === 'number' ? p.scarcity : null,
         weather_baseline: typeof p.weather_baseline === 'number' ? p.weather_baseline : null,

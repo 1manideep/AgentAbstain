@@ -18,6 +18,8 @@ export interface FrameCtx {
   speed: number
   out: SampleOut
   reducedMotion: boolean
+  /** World units per pixel at unit distance: 2·tan(fov/2) / viewport height (in device pixels). */
+  pixelAngle: number
 }
 
 type System = (ctx: FrameCtx) => void

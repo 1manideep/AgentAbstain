@@ -645,6 +645,8 @@ class Simulation:
         n = 0
         while self.status == "running" and (max_ticks is None or n < max_ticks):
             await self.paused.wait()
+            if self.status != "running":  # a /step while paused may have ended the run
+                break
             t0 = time.perf_counter()
             report = await self.tick()
             n += 1

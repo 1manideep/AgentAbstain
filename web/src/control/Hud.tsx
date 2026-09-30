@@ -86,8 +86,8 @@ const Playback = memo(function Playback() {
 })
 
 export const Hud = memo(function Hud() {
-  const { conn, runId, runStatus, serverPaused } = useStore(
-    useShallow((s) => ({ conn: s.conn, runId: s.runId, runStatus: s.runStatus, serverPaused: s.serverPaused })),
+  const { conn, runId, runName, runStatus, serverPaused } = useStore(
+    useShallow((s) => ({ conn: s.conn, runId: s.runId, runName: s.config?.name ?? null, runStatus: s.runStatus, serverPaused: s.serverPaused })),
   )
   const { tick, day, tickOfDay, newestTick } = useStore(
     useShallow((s) => ({ tick: s.clock.tick, day: s.clock.day, tickOfDay: s.clock.tickOfDay, newestTick: s.clock.newestTick })),
@@ -103,6 +103,7 @@ export const Hud = memo(function Hud() {
           <span className="dot" />
           {c.text}
         </span>
+        {runName ? <span className="run-name">{runName}</span> : null}
         <span className="run muted" title="run id">
           {runId ?? '—'}
         </span>

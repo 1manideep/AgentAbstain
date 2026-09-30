@@ -280,7 +280,7 @@ export const useStore = create<VoidState>()((set, get) => {
             y: a.y,
             balance: a.balance_usd,
             stress: a.stress,
-            tEff: a.t_eff,
+            tEff: typeof a.t_eff === 'number' ? a.t_eff : Number.NaN,
             asleep: a.asleep,
             degenerate: a.degenerate,
             status: a.status,
@@ -295,7 +295,7 @@ export const useStore = create<VoidState>()((set, get) => {
           st.y = a.y
           st.balance = a.balance_usd
           st.stress = a.stress
-          st.tEff = a.t_eff
+          st.tEff = typeof a.t_eff === 'number' ? a.t_eff : Number.NaN
           st.asleep = a.asleep
           st.degenerate = a.degenerate
           st.status = a.status

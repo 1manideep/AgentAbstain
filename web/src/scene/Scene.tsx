@@ -1,6 +1,6 @@
 import { PerformanceMonitor } from '@react-three/drei'
 import { Canvas } from '@react-three/fiber'
-import { Suspense, useCallback, useState } from 'react'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 import { useStore } from '../state/store'
 import { Agents } from './Agents'
 import { Atmosphere } from './Atmosphere'
@@ -8,31 +8,34 @@ import { CameraRig } from './CameraRig'
 import { Driver } from './Driver'
 import { Effects } from './Effects'
 import { Gadgets } from './Gadgets'
+import { gpuProfile } from './gpu'
 import { Ground } from './Ground'
 import { Nodes } from './Nodes'
 
-function initialDpr(): number {
-  const d = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
-  return Math.min(1.5, Math.max(1, d))
-}
+const steps = gpuProfile.dprSteps
 
 export function Scene() {
   const size = useStore((s) => s.config?.world_size ?? 60)
   const runId = useStore((s) => s.runId)
-  const [dpr, setDpr] = useState(initialDpr)
-  const lower = useCallback(() => setDpr(1), [])
-  const raise = useCallback(() => setDpr(initialDpr()), [])
+  // Start at the top quality step; PerformanceMonitor lowers dpr first (§16).
+  const [step, setStep] = useState(steps.length - 1)
+  const dpr = steps[step]!
+  const lower = useCallback(() => setStep((s) => Math.max(0, s - 1)), [])
+  const raise = useCallback(() => setStep((s) => Math.min(steps.length - 1, s + 1)), [])
   const onClickMiss = useCallback(() => {
     const st = useStore.getState()
     if (st.followAgentId) st.follow(null)
+  }, [])
+  useEffect(() => {
+    if (gpuProfile.software) console.info(`[void] software renderer detected (${gpuProfile.renderer}): MSAA off, dpr ${steps.join('/')}`)
   }, [])
 
   return (
     <Canvas
       frameloop="always"
       dpr={dpr}
-      gl={{ antialias: true, powerPreference: 'high-performance', alpha: false, stencil: false }}
-      camera={{ fov: 42, near: 0.5, far: 600, position: [size * 0.5, size * 0.62, size * 1.22] }}
+      gl={{ antialias: gpuProfile.antialias, powerPreference: 'high-performance', alpha: false, stencil: false }}
+      camera={{ fov: 42, near: 0.5, far: 600, position: [0, size * 0.55, size * 0.95] }}
       onPointerMissed={onClickMiss}
       style={{ position: 'absolute', inset: 0 }}
     >

@@ -52,8 +52,8 @@ export function Nodes() {
         if (!out.nodePresent[s]) continue
         const cap = out.ncap[s]! > 0 ? out.ncap[s]! : 1
         const fill = Math.min(1, Math.max(0, out.nstock[s]! / cap))
-        const h = 0.45 + 3.6 * fill
-        const r = 0.75 + 0.45 * fill
+        const h = 0.6 + 3.4 * fill
+        const r = 1.0 + 0.6 * fill
         dummy.position.set(out.nx[s]!, 0, out.ny[s]!)
         dummy.rotation.set(0, now * 0.15 + s, 0)
         dummy.scale.set(r, h, r)

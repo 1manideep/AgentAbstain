@@ -44,8 +44,8 @@ export function CameraRig({ size, runId }: CameraRigProps) {
       camera.position.set(saved.p[0], saved.p[1], saved.p[2])
       c.target.set(saved.t[0], saved.t[1], saved.t[2])
     } else {
-      camera.position.set(size * 0.5, size * 0.62, size * 1.22)
-      c.target.set(size * 0.5, 0, size * 0.5)
+      camera.position.set(0, size * 0.55, size * 0.95)
+      c.target.set(0, 0, 0)
     }
     c.update()
   }, [runId, size, camera])
@@ -93,10 +93,10 @@ export function CameraRig({ size, runId }: CameraRigProps) {
           n++
         }
         if (n === 0) {
-          minX = 0
-          maxX = size
-          minZ = 0
-          maxZ = size
+          minX = -size / 2
+          maxX = size / 2
+          minZ = -size / 2
+          maxZ = size / 2
         }
         const cx = (minX + maxX) / 2
         const cz = (minZ + maxZ) / 2
@@ -124,7 +124,7 @@ export function CameraRig({ size, runId }: CameraRigProps) {
       if (followId) {
         const s = history.agentIndex.get(followId)
         if (s !== undefined && s < out.count && out.present[s]) {
-          tmp.set(out.x[s]!, 0.6, out.y[s]!)
+          tmp.set(out.x[s]!, 0.9, out.y[s]!)
           tmp2.copy(tmp).sub(c.target).multiplyScalar(k)
           c.target.add(tmp2)
           camera.position.add(tmp2)

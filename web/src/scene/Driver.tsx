@@ -6,6 +6,7 @@
  */
 import { useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useRef } from 'react'
+import type { PerspectiveCamera } from 'three'
 import type { EventMsg } from '../protocol'
 import { history } from '../state/history'
 import { useStore } from '../state/store'
@@ -32,6 +33,7 @@ const ctx: FrameCtx = {
   speed: 1,
   out: sampled.out,
   reducedMotion: false,
+  pixelAngle: 0.002,
 }
 
 export function Driver() {
@@ -105,6 +107,9 @@ export function Driver() {
     ctx.speed = dt > 0 ? (renderVts - before) / (dt * 1000) : 0
     ctx.out = out
     ctx.reducedMotion = mirror.reducedMotion
+    const cam = state.camera as PerspectiveCamera
+    const hPx = state.size.height * gl.getPixelRatio()
+    ctx.pixelAngle = hPx > 0 && typeof cam.fov === 'number' ? (2 * Math.tan((cam.fov * Math.PI) / 360)) / hPx : 0.002
     runSystems(ctx)
     tm.systems += performance.now() - tSampled
 

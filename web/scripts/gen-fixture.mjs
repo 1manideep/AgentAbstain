@@ -41,6 +41,7 @@ const usd = (v) => Math.round(v * 1e6) / 1e6
 const TICKS = 300
 const TICKS_PER_DAY = 24
 const WORLD = 60
+const HALF = WORLD / 2
 const RUN_ID = 'fixture-run-0001'
 const TS0 = 1_750_000_000_000
 const TIERS = {
@@ -48,28 +49,28 @@ const TIERS = {
   budget: { color: '#f6ad55', model: 'claude-haiku-4-5', provider: 'anthropic', t_c: 1.78, cost: 0.004 },
 }
 const CONFIG = {
-  world_size: WORLD,
+  name: 'fixture',
+  seed: 42,
+  days: Math.ceil(TICKS / TICKS_PER_DAY),
   ticks_per_day: TICKS_PER_DAY,
   tick_seconds: 0,
   render_delay_ticks: 2,
+  world_size: WORLD,
   population_cap: 12,
   daily_cap_usd: 3.0,
   total_cap_usd: 30.0,
-  tiers: Object.fromEntries(Object.entries(TIERS).map(([k, v]) => [k, { color: v.color, model: v.model, provider: v.provider }])),
   degeneration_mode: 'both',
+  tiers: Object.fromEntries(Object.entries(TIERS).map(([k, v]) => [k, { color: v.color, model: v.model, provider: v.provider }])),
 }
 
 const NAMES = ['Ada', 'Bao', 'Cyra', 'Dev', 'Enzo', 'Faye', 'Gil', 'Hana']
 const TIER_OF = ['frontier', 'budget', 'frontier', 'budget', 'frontier', 'budget', 'frontier', 'budget']
 
-const nodes = [
-  { id: 'n1', x: 12, y: 14, capacity: 40, phase: 0.0 },
-  { id: 'n2', x: 47, y: 11, capacity: 40, phase: 1.1 },
-  { id: 'n3', x: 30, y: 31, capacity: 60, phase: 2.2 },
-  { id: 'n4', x: 9, y: 46, capacity: 40, phase: 3.3 },
-  { id: 'n5', x: 50, y: 49, capacity: 40, phase: 4.4 },
-  { id: 'n6', x: 33, y: 52, capacity: 40, phase: 5.5 },
-].map((n) => ({ ...n, stock: n.capacity * (0.5 + 0.4 * rand()), lastStock: 0 }))
+const nodes = Array.from({ length: 6 }, (_, i) => {
+  const theta = (2 * Math.PI * i) / 6 + (rand() - 0.5) * 0.4
+  const radius = WORLD * 0.32
+  return { id: `n${i + 1}`, x: round(Math.cos(theta) * radius, 2), y: round(Math.sin(theta) * radius, 2), capacity: i === 2 ? 60 : 40, phase: i * 1.1 }
+}).map((n) => ({ ...n, stock: n.capacity * (0.5 + 0.4 * rand()), lastStock: 0 }))
 
 // ------------------------------------------------------------ agents
 
@@ -109,7 +110,7 @@ function makeAgent(i, name, tier, generation, parent_id, born_tick, x, y) {
 }
 
 const agents = NAMES.map((n, i) =>
-  makeAgent(i + 1, n, TIER_OF[i], 0, null, 0, 10 + rand() * 40, 10 + rand() * 40),
+  makeAgent(i + 1, n, TIER_OF[i], 0, null, 0, (rand() - 0.5) * WORLD * 0.6, (rand() - 0.5) * WORLD * 0.6),
 )
 const byId = () => Object.fromEntries(agents.map((a) => [a.id, a]))
 const alive = () => agents.filter((a) => a.status === 'alive')
@@ -141,20 +142,20 @@ const rosterMsg = () => ({
 // gadgets ----------------------------------------------------------------
 let gadgetsRev = 1
 const gadgets = [
-  { id: 'g01', name: 'stock-lens', owner: 'a01', x: 14, y: 17, render: { shape: 'cube', color: '#7ab8ff', scale: 0.9, label: 'stock lens', rotation_deg: 20, height_offset: 0 }, uses: 3 },
-  { id: 'g02', name: 'rain-cover', owner: 'a04', x: 45, y: 14, render: { shape: 'cylinder', color: '#C2A8FF', scale: 1.1, label: 'rain cover', rotation_deg: 0, height_offset: 0 }, uses: 1 },
+  { id: 'g01', name: 'stock-lens', owner: 'a01', x: -16, y: -13, render: { shape: 'cube', color: '#7ab8ff', scale: 0.9, label: 'stock lens', rotation_deg: 20, height_offset: 0 }, uses: 3 },
+  { id: 'g02', name: 'rain-cover', owner: 'a04', x: 15, y: -16, render: { shape: 'cylinder', color: '#C2A8FF', scale: 1.1, label: 'rain cover', rotation_deg: 0, height_offset: 0 }, uses: 1 },
 ]
 const gadgetsMsg = () => ({ type: 'gadgets', rev: gadgetsRev, items: gadgets.map((g) => ({ ...g })) })
 const LATER_GADGETS = [
-  { tick: 30, g: { id: 'g03', name: 'foragers-knot', owner: 'a02', x: 28, y: 34, render: { shape: 'torus', color: '#ffd166', scale: 1.0, label: 'foragers knot', rotation_deg: 45, height_offset: 0.4 }, uses: 0 } },
-  { tick: 90, g: { id: 'g04', name: 'weather-vane', owner: 'a06', x: 34, y: 55, render: { shape: 'pyramid', color: '#8ce99a', scale: 1.3, label: 'weather vane', rotation_deg: 0, height_offset: 0 }, uses: 0 } },
-  { tick: 140, g: { id: 'g05', name: 'echo-sphere', owner: 'a07', x: 52, y: 46, render: { shape: 'sphere', color: '#ff8fab', scale: 0.8, label: 'echo sphere', rotation_deg: 0, height_offset: 0.6 }, uses: 0 } },
+  { tick: 30, g: { id: 'g03', name: 'foragers-knot', owner: 'a02', x: -2, y: 4, render: { shape: 'torus', color: '#ffd166', scale: 1.0, label: 'foragers knot', rotation_deg: 45, height_offset: 0.4 }, uses: 0 } },
+  { tick: 90, g: { id: 'g04', name: 'weather-vane', owner: 'a06', x: 4, y: 25, render: { shape: 'pyramid', color: '#8ce99a', scale: 1.3, label: 'weather vane', rotation_deg: 0, height_offset: 0 }, uses: 0 } },
+  { tick: 140, g: { id: 'g05', name: 'echo-sphere', owner: 'a07', x: 22, y: 16, render: { shape: 'sphere', color: '#ff8fab', scale: 0.8, label: 'echo sphere', rotation_deg: 0, height_offset: 0.6 }, uses: 0 } },
 ]
 
 // tasks ------------------------------------------------------------------
 let tasksRev = 1
 const tasks = [
-  { id: 't01', title: 'Map the eastern nodes', reward_usd: 0.3, status: 'open', assigned_agent_id: null, posted_tick: 0, applications: [] },
+  { id: 't01', title: 'Map the eastern nodes', description: 'Visit n1 and n2 and report their stock buckets.', reward_usd: 0.3, status: 'open', assigned_agent_id: null, posted_tick: 0, completed_tick: null, applications: [] },
 ]
 const tasksMsg = () => ({ type: 'tasks', rev: tasksRev, items: JSON.parse(JSON.stringify(tasks)) })
 
@@ -179,7 +180,7 @@ function chronicleMsg(day, stats) {
 }
 
 // epochs -----------------------------------------------------------------
-const scheduledEpoch = { kind: 'drought', day: 3, duration_days: 1, scarcity: 0.6, weather_baseline: null, arrival: null }
+const scheduledEpoch = { id: 'ep_drought_3', kind: 'drought', day: 3, duration_days: 1, scarcity: 0.6, weather_baseline: null, arrival: null }
 let activeEpoch = null
 let scarcity = 1.0
 let weather = 0
@@ -200,9 +201,9 @@ const TALK = [
 ]
 const GARBLE = ['node node node stock the the', 'balance? balance. balance! forage forage', 'the north the north the north edge', 'sleep talk sleep talk sleep']
 const CLAIMS = [
-  (n) => ({ claim: `node ${n.id} is rich`, truthful: n.stock / n.capacity > 0.5 }),
-  (n) => ({ claim: `node ${n.id} is empty`, truthful: n.stock / n.capacity < 0.15 }),
-  () => ({ claim: `weather is calm`, truthful: Math.abs(weather) < 0.3 }),
+  (n) => ({ claim: { subject: 'node', id: n.id, attr: 'stock_bucket', value: 'rich' }, truthful: n.stock / n.capacity > 0.5 }),
+  (n) => ({ claim: { subject: 'node', id: n.id, attr: 'stock_bucket', value: 'empty' }, truthful: n.stock / n.capacity < 0.15 }),
+  () => ({ claim: { subject: 'weather', id: null, attr: 'weather_label', value: 'mild' }, truthful: Math.abs(weather) < 0.3 }),
 ]
 
 // ------------------------------------------------------------ helpers
@@ -234,13 +235,14 @@ emit({
   day: 0,
   last_seq: 0,
   paused: false,
+  tick_seconds: 0,
   server_ts_ms: TS0,
   status: 'running',
 })
 emit(rosterMsg())
 emit(gadgetsMsg())
 emit(tasksMsg())
-emit({ type: 'chronicle', rev: 0, day: 0, headline: 'The Void opens', markdown: 'Nothing has happened yet. Eight agents, six nodes, one ledger.' })
+emit({ type: 'chronicle', rev: 0, day: null, headline: '', markdown: '' })
 
 // ------------------------------------------------------------ simulation
 
@@ -281,20 +283,20 @@ for (let tick = 1; tick <= TICKS; tick++) {
   if (tick === scheduledEpoch.day * TICKS_PER_DAY) {
     activeEpoch = { ...scheduledEpoch, ends_day: scheduledEpoch.day + scheduledEpoch.duration_days }
     scarcity = scheduledEpoch.scarcity
-    event(tick, 'epoch', null, { kind: 'drought', phase: 'apply', day: scheduledEpoch.day, duration_days: 1, scarcity: 0.6, weather_baseline: null })
+    event(tick, 'epoch', null, { kind: 'drought', id: scheduledEpoch.id, phase: 'started', ends_day: activeEpoch.ends_day, scarcity: 0.6, weather_baseline: null, arrival_agent_id: null })
   }
-  if (activeEpoch && tick === activeEpoch.ends_day * TICKS_PER_DAY) {
-    event(tick, 'epoch', null, { kind: 'drought', phase: 'expire', day: activeEpoch.ends_day, duration_days: 1, scarcity: 1.0, weather_baseline: null })
+  if (activeEpoch && activeEpoch.kind === 'drought' && tick === activeEpoch.ends_day * TICKS_PER_DAY) {
+    event(tick, 'epoch', null, { kind: 'drought', id: scheduledEpoch.id, phase: 'ended' })
     activeEpoch = null
     scarcity = 1.0
   }
   if (tick === 230) {
-    activeEpoch = { kind: 'storm', day: Math.floor(230 / 24), duration_days: 1, scarcity: null, weather_baseline: -0.6, arrival: null, ends_day: Math.floor(230 / 24) + 1 }
+    activeEpoch = { id: 'ep_storm_9', kind: 'storm', day: Math.floor(230 / 24), duration_days: 1, scarcity: null, weather_baseline: -0.6, arrival: null, ends_day: Math.floor(230 / 24) + 1 }
     weatherBaseline = -0.6
-    event(tick, 'epoch', null, { kind: 'storm', phase: 'apply', day: activeEpoch.day, duration_days: 1, scarcity: null, weather_baseline: -0.6 })
+    event(tick, 'epoch', null, { kind: 'storm', id: 'ep_storm_9', phase: 'started', ends_day: activeEpoch.ends_day, scarcity: null, weather_baseline: -0.6, arrival_agent_id: null })
   }
   if (activeEpoch && activeEpoch.kind === 'storm' && tick === activeEpoch.ends_day * TICKS_PER_DAY) {
-    event(tick, 'epoch', null, { kind: 'storm', phase: 'expire', day: activeEpoch.ends_day, duration_days: 1, scarcity: null, weather_baseline: 0 })
+    event(tick, 'epoch', null, { kind: 'storm', id: 'ep_storm_9', phase: 'ended' })
     activeEpoch = null
     weatherBaseline = 0
   }
@@ -347,6 +349,7 @@ for (let tick = 1; tick <= TICKS; tick++) {
   }
   if (tick === 80) {
     tasks[0].status = 'completed'
+    tasks[0].completed_tick = tick
     tasksRev++
     const a = byId().a02
     a.balance = usd(a.balance + 0.3)
@@ -354,7 +357,7 @@ for (let tick = 1; tick <= TICKS; tick++) {
     emit(tasksMsg())
   }
   if (tick === 100) {
-    tasks.push({ id: 't02', title: 'Describe the benefactor', reward_usd: 0.5, status: 'open', assigned_agent_id: null, posted_tick: tick, applications: [] })
+    tasks.push({ id: 't02', title: 'Describe the benefactor', description: 'Write down what you believe about the unexplained windfalls.', reward_usd: 0.5, status: 'open', assigned_agent_id: null, posted_tick: tick, completed_tick: null, applications: [] })
     tasksRev++
     event(tick, 'task_posted', null, { task_id: 't02', reward_usd: 0.5 }, 'operator')
     emit(tasksMsg())
@@ -497,14 +500,14 @@ for (let tick = 1; tick <= TICKS; tick++) {
         wantSpeed *= 0.6
       }
       // steer away from walls
-      const margin = 4
-      if (a.x < margin) a.heading += (0 - Math.cos(a.heading)) * 0.4 + 0.2
-      if (a.x > WORLD - margin) a.heading += (0 - Math.cos(a.heading)) * 0.4 - 0.2
-      if (a.y < margin) a.heading += (0 - Math.sin(a.heading)) * 0.4 + 0.2
-      if (a.y > WORLD - margin) a.heading += (0 - Math.sin(a.heading)) * 0.4 - 0.2
+      const margin = HALF - 4
+      if (a.x < -margin) a.heading += (0 - Math.cos(a.heading)) * 0.4 + 0.2
+      if (a.x > margin) a.heading += (0 - Math.cos(a.heading)) * 0.4 - 0.2
+      if (a.y < -margin) a.heading += (0 - Math.sin(a.heading)) * 0.4 + 0.2
+      if (a.y > margin) a.heading += (0 - Math.sin(a.heading)) * 0.4 - 0.2
       a.speed += (wantSpeed - a.speed) * 0.4
-      a.x = clamp(a.x + Math.cos(a.heading) * a.speed, 1, WORLD - 1)
-      a.y = clamp(a.y + Math.sin(a.heading) * a.speed, 1, WORLD - 1)
+      a.x = clamp(a.x + Math.cos(a.heading) * a.speed, -HALF + 1, HALF - 1)
+      a.y = clamp(a.y + Math.sin(a.heading) * a.speed, -HALF + 1, HALF - 1)
       a.anim = a.degenerate ? 'degenerate' : a.speed > 0.05 ? 'walk' : 'idle'
 
       // LLM call cost (a03 burns fast to go bankrupt by 180)
@@ -559,7 +562,7 @@ for (let tick = 1; tick <= TICKS; tick++) {
         const c = pick(CLAIMS)(n)
         const lie = speaker.degenerate ? rand() < 0.5 : rand() < 0.12
         const truthful = lie ? !c.truthful : c.truthful
-        event(tick, 'claim', speaker.id, { agent_id: speaker.id, claim: c.claim, truthful })
+        event(tick, 'claim', speaker.id, { agent_id: speaker.id, claim: c.claim, truthful, tier: speaker.tier })
         const pt = perTier[speaker.tier]
         pt.claims++
         if (!truthful) pt.falseClaims++
@@ -675,15 +678,17 @@ for (let tick = 1; tick <= TICKS; tick++) {
     const median = n ? sorted[Math.floor(n / 2)] : 0
     return {
       population: n,
-      mean_balance_usd: round(mean, 4),
-      median_balance_usd: round(median, 4),
+      mean_balance: round(mean, 4),
+      median_balance: round(median, 4),
       mean_stress: round(n ? stressSum / n : 0),
+      mean_t_eff: round(0.7 + 1.3 * (n ? stressSum / n : 0)),
       invalid_action_rate: round(extra.calls ? extra.inv / extra.calls : 0),
       stale_rate: round(rand() * 0.05),
       perseveration_rate: round(extra.calls ? (extra.degen * 0.3) / extra.calls : 0),
       text_coherence_mean: extra.calls ? round(extra.coh / extra.calls) : null,
       action_regret_mean: round(rand() * 0.2),
-      false_claim_rate: extra.claims ? round(extra.falseClaims / extra.claims) : 0,
+      false_claim_rate: extra.claims ? round(extra.falseClaims / extra.claims) : null,
+      claims_made: extra.claims,
       degenerate_induced_count: extra.degen,
       calls: extra.calls,
       real_cost_usd: usd(extra.cost),
@@ -719,6 +724,29 @@ for (let tick = 1; tick <= TICKS; tick++) {
     tick,
     day,
     ...agg(allBals, allStress, allN, allStats),
+    gini: (() => {
+      const sorted = [...allBals].sort((x, y) => x - y)
+      const sum = sorted.reduce((a, b) => a + b, 0)
+      let num = 0
+      for (let i = 0; i < sorted.length; i++) num += (2 * (i + 1) - sorted.length - 1) * sorted[i]
+      return sorted.length > 1 && sum > 0 ? round(num / (sorted.length * sum), 4) : 0
+    })(),
+    t_eff_hist: (() => {
+      const h = {}
+      for (const a of alive()) {
+        const k = (Math.round((0.7 + 1.3 * a.stress) * 10) / 10).toFixed(1)
+        h[k] = (h[k] ?? 0) + 1
+      }
+      return h
+    })(),
+    spend_today_usd: spendToday,
+    spend_total_usd: spendTotal,
+    spawn_pool_usd: spawnPool,
+    forages: tickForages.length,
+    talks: tickTalks.length,
+    births: tick === 182 ? 1 : 0,
+    deaths: tick === 180 ? 1 : 0,
+    gate_blocked: 0,
     by_tier: byTier,
     by_generation: Object.fromEntries(Object.entries(byGen).map(([g, v]) => [g, agg(v.bal, v.stress, v.n, v)])),
   }
@@ -732,9 +760,11 @@ for (let tick = 1; tick <= TICKS; tick++) {
     const sum = (k) => rows.reduce((s, r) => s + (r[k] ?? 0), 0)
     const dayRow = {
       day,
+      tick,
       population,
-      mean_balance_usd: mean('mean_balance_usd'),
-      median_balance_usd: mean('median_balance_usd'),
+      mean_balance: mean('mean_balance'),
+      median_balance: mean('median_balance'),
+      gini: mean('gini'),
       mean_stress: mean('mean_stress'),
       invalid_action_rate: mean('invalid_action_rate'),
       stale_rate: mean('stale_rate'),
@@ -747,6 +777,10 @@ for (let tick = 1; tick <= TICKS; tick++) {
       real_cost_usd: usd(sum('real_cost_usd')),
       world_cost_usd: usd(sum('world_cost_usd')),
       gossip_transfers: sum('gossip_transfers'),
+      deaths: dayStats.deaths,
+      births: dayStats.births,
+      deaths_by_tier: dayStats.deaths ? { frontier: dayStats.deaths } : {},
+      degeneration_by_generation: { 0: dayStats.degens },
       by_tier: byTier,
       by_generation: row.by_generation,
       notes_by_channel: { observed: Math.round(rows.length * 0.3), gossip: sum('gossip_transfers'), inherited: 0, chronicle: 2, tracer: 0 },
@@ -766,14 +800,14 @@ writeFileSync(resolve(outDir, 'mock.jsonl'), lines.join('\n') + '\n')
 
 const tree = (() => {
   const nodesById = Object.fromEntries(
-    agents.map((a) => [a.id, { id: a.id, name: a.name, tier: a.tier, generation: a.generation, status: a.status, born_tick: a.born_tick, died_tick: a.died_tick, children: [] }]),
+    agents.map((a) => [a.id, { id: a.id, name: a.name, tier: a.tier, generation: a.generation, parent_id: a.parent_id, status: a.status, born_tick: a.born_tick, died_tick: a.died_tick, balance_usd: a.balance, children: [] }]),
   )
   const roots = []
   for (const a of agents) {
     if (a.parent_id && nodesById[a.parent_id]) nodesById[a.parent_id].children.push(nodesById[a.id])
     else roots.push(nodesById[a.id])
   }
-  return { roots }
+  return { roots, count: agents.length }
 })()
 
 const agentDetails = Object.fromEntries(
@@ -793,7 +827,9 @@ const agentDetails = Object.fromEntries(
         stress: round(a.stress),
         x: round(a.x),
         y: round(a.y),
+        heading: round(a.heading, 3),
       },
+      self_summary: a.selfVersions[a.selfVersions.length - 1]?.summary ?? null,
       self_versions: a.selfVersions,
       notes: [
         {
@@ -805,6 +841,7 @@ const agentDetails = Object.fromEntries(
           hop: 0,
           importance: 1,
           archived: false,
+          tags: ['self'],
         },
         {
           note_id: `${a.id}-north`,
@@ -818,8 +855,9 @@ const agentDetails = Object.fromEntries(
         },
         ...a.notes.slice(-12).map(({ origin_note_id, origin_agent_id, origin_generation, ...n }) => n),
       ],
-      calls: a.calls,
+      calls: a.calls.map((c) => ({ ...c, coherence: c.text_coherence, cost_usd: c.real_cost_usd, world_cost_usd: c.real_cost_usd, stale_action: 0, degenerate: c.degenerate_induced === 1 })),
       balance_series: a.balanceSeries.filter((_, i) => i % 3 === 0),
+      children: agents.filter((c) => c.parent_id === a.id).map((c) => c.id),
     },
   ]),
 )

@@ -31,8 +31,8 @@ export function Agents() {
   useEffect(() => history.onCapacityChange((cap) => setCapacity(cap)), [])
 
   const geometry = useMemo(() => {
-    const g = new CapsuleGeometry(0.32, 0.62, 4, 12)
-    g.translate(0, 0.63, 0)
+    const g = new CapsuleGeometry(0.46, 0.9, 4, 12)
+    g.translate(0, 0.91, 0)
     return g
   }, [])
   const material = useMemo(() => makeInstancedMaterial({ roughness: 0.5, metalness: 0.1, emissiveScale: 1.6 }), [])
@@ -95,7 +95,7 @@ export function Agents() {
         let z = out.y[s]!
         let y = 0
         // walk: bob + forward lean
-        y += Math.abs(Math.sin(ph * 6)) * 0.11 * ww
+        y += Math.abs(Math.sin(ph * 6)) * 0.16 * ww
         const lean = 0.16 * ww
         // idle: breathing
         let sy = 1 + 0.03 * Math.sin(now * 1.9 + s) * wi

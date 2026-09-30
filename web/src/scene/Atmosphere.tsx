@@ -3,15 +3,15 @@ import { useThree } from '@react-three/fiber'
 import { Color, DirectionalLight, FogExp2, HemisphereLight } from 'three'
 import { registerSystem, SYS_ATMOSPHERE, type FrameCtx } from './sceneState'
 
-const BG_CLEAR = new Color('#0b1327')
-const BG_STORM = new Color('#04060c')
+const BG_CLEAR = new Color('#0d1530')
+const BG_STORM = new Color('#05070e')
 const SUN_CLEAR = new Color('#fff1dc')
 const SUN_STORM = new Color('#8d9bc4')
 
 /** Weather → fog density and sky tint; lights dim under storms. */
 export function Atmosphere() {
   const scene = useThree((s) => s.scene)
-  const fog = useMemo(() => new FogExp2(BG_CLEAR.clone(), 0.006), [])
+  const fog = useMemo(() => new FogExp2(BG_CLEAR.clone(), 0.0036), [])
   const bg = useMemo(() => BG_CLEAR.clone(), [])
   const sun = useRef<DirectionalLight>(null)
   const hemi = useRef<HemisphereLight>(null)
@@ -36,7 +36,7 @@ export function Atmosphere() {
       bg.r += 0.02 * clear
       bg.g += 0.02 * clear
       fog.color.copy(bg)
-      fog.density = 0.0045 + 0.018 * storm
+      fog.density = 0.0036 + 0.016 * storm
       if (sun.current) {
         sun.current.intensity = 1.25 - 0.8 * storm + 0.2 * clear
         sun.current.color.copy(SUN_CLEAR).lerp(SUN_STORM, storm)

@@ -198,6 +198,13 @@ function shortestArc(a: number, b: number, t: number): number {
   return a + d * t
 }
 
+/** Linear interpolation that tolerates a missing (NaN) endpoint, e.g. t_eff when an agent made no call. */
+function lerpNaN(a: number, b: number, t: number): number {
+  if (a !== a) return b
+  if (b !== b) return a
+  return a + (b - a) * t
+}
+
 function smoothstep(k: number): number {
   const x = k < 0 ? 0 : k > 1 ? 1 : k
   return x * x * (3 - 2 * x)
@@ -452,7 +459,7 @@ export class History {
       frame.data[d + 1] = a.y
       frame.data[d + 2] = a.heading
       frame.data[d + 3] = a.stress
-      frame.data[d + 4] = a.t_eff
+      frame.data[d + 4] = typeof a.t_eff === 'number' ? a.t_eff : Number.NaN
       frame.data[d + 5] = a.balance_usd
       const f = s * FLAG_STRIDE
       frame.flags[f] = a.asleep ? 1 : 0
@@ -729,7 +736,7 @@ export class History {
           out.y[s] = A.data[dA + 1]! + (B.data[dB + 1]! - A.data[dA + 1]!) * t
           out.heading[s] = shortestArc(A.data[dA + 2]!, B.data[dB + 2]!, t)
           out.stress[s] = A.data[dA + 3]! + (B.data[dB + 3]! - A.data[dA + 3]!) * t
-          out.tEff[s] = A.data[dA + 4]! + (B.data[dB + 4]! - A.data[dA + 4]!) * t
+          out.tEff[s] = lerpNaN(A.data[dA + 4]!, B.data[dB + 4]!, t)
           out.balance[s] = A.data[dA + 5]! + (B.data[dB + 5]! - A.data[dA + 5]!) * t
           out.vx[s] = (B.data[dB]! - A.data[dA]!) * invSeg
           out.vy[s] = (B.data[dB + 1]! - A.data[dA + 1]!) * invSeg
@@ -769,7 +776,7 @@ export class History {
           out.y[s] = A.data[dA + 1]! + (B.data[dB + 1]! - A.data[dA + 1]!) * t
           out.heading[s] = shortestArc(A.data[dA + 2]!, B.data[dB + 2]!, t)
           out.stress[s] = A.data[dA + 3]! + (B.data[dB + 3]! - A.data[dA + 3]!) * t
-          out.tEff[s] = A.data[dA + 4]! + (B.data[dB + 4]! - A.data[dA + 4]!) * t
+          out.tEff[s] = lerpNaN(A.data[dA + 4]!, B.data[dB + 4]!, t)
           out.balance[s] = A.data[dA + 5]! + (B.data[dB + 5]! - A.data[dA + 5]!) * t
           out.ids[s] = idA
           out.asleep[s] = A.flags[fA]!

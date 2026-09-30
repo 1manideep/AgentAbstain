@@ -207,7 +207,7 @@ const EpochsCard = memo(function EpochsCard() {
     const applied = new Map<string, EpochBlock>()
     for (const e of series.epochs) {
       const key = `${e.kind}@${e.day}`
-      if (e.phase === 'expire') {
+      if (e.phase === 'ended' || e.phase === 'expire') {
         const b = applied.get(key) ?? [...applied.values()].reverse().find((x) => x.kind === e.kind && x.state === 'active')
         if (b) {
           b.endDay = e.day
