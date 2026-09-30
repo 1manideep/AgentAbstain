@@ -59,32 +59,24 @@ def restore(cfg: EntropyConfig, tier: TierConfig, budget: float) -> float:
     return min(tier.entropy_budget_max, budget + cfg.restore_on_sleep * tier.entropy_budget_max)
 
 
+NOISE_ACTIONS = ("move", "forage", "talk", "idle", "sleep", "read_chronicle", "nudge_weather")
+
+
 def _random_action(available: list[str], obs_world_size: float, rng: random.Random, targets: dict[str, list[str]]) -> Action:
-    kinds = [a for a in available if a in ACTION_TYPES] or ["idle"]
+    """Noise never moves money and never touches the sandbox (DESIGN §8)."""
+    kinds = [a for a in available if a in ACTION_TYPES and a in NOISE_ACTIONS] or ["idle"]
     kind = rng.choice(kinds)
     half = obs_world_size / 2.0
     if kind == "move":
         return Action(type="move", x=rng.uniform(-half, half), y=rng.uniform(-half, half))
-    if kind in ("talk", "share_note", "transfer"):
+    if kind == "talk":
         agents = targets.get("agents", [])
         if not agents:
             return Action.idle()
         t = rng.choice(agents)
-        if kind == "talk":
-            return Action(type="talk", target=t, text=" ".join(rng.choice(["the", "void", "again", "again", "hungry", "node", "why"]) for _ in range(8)))
-        if kind == "transfer":
-            return Action(type="transfer", target=t, amount_usd=round(rng.uniform(0.01, 0.10), 2))
-        return Action(type="share_note", target=t)
+        return Action(type="talk", target=t, text=" ".join(rng.choice(["the", "void", "again", "again", "hungry", "node", "why"]) for _ in range(8)))
     if kind == "nudge_weather":
         return Action(type="nudge_weather", delta=rng.uniform(-0.1, 0.1))
-    if kind == "use_gadget":
-        gadgets = targets.get("gadgets", [])
-        return Action(type="use_gadget", target=rng.choice(gadgets), params={"x": rng.random()}) if gadgets else Action.idle()
-    if kind in ("apply_task",):
-        tasks = targets.get("tasks", [])
-        return Action(type="apply_task", target=rng.choice(tasks), text="me me me") if tasks else Action.idle()
-    if kind in ("propose_gadget", "create_offspring"):
-        return Action.idle()  # too expensive to trigger by noise; noise never spends big
     return Action(type=kind)  # forage, read_chronicle, sleep, idle
 
 

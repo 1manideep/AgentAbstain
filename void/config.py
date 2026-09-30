@@ -48,9 +48,11 @@ class RunConfig(StrictModel):
 class WeatherConfig(StrictModel):
     baseline: float = 0.0
     nudge_cap_per_agent_day: float = 0.1
+    global_nudge_cap_per_tick: float = 0.2
     decay_per_tick: float = 0.10
     yield_sensitivity: float = 0.5
     bounds: tuple[float, float] = (-1.0, 1.0)
+    yield_mult_bounds: tuple[float, float] = (0.2, 2.0)
 
 
 class WorldConfig(StrictModel):
@@ -58,6 +60,7 @@ class WorldConfig(StrictModel):
     max_speed: float = 2.0
     talk_radius: float = 4.0
     forage_radius: float = 1.5
+    gadget_radius: float = 2.0
     resource_nodes: int = 6
     node_capacity: float = 40.0
     node_regen_per_tick: float = 0.4
@@ -67,8 +70,9 @@ class WorldConfig(StrictModel):
     weather: WeatherConfig = WeatherConfig()
     effect_ticks: int = 12
     effect_caps: dict[str, float] = Field(
-        default_factory=lambda: {"forage_bonus": 0.5, "weather_shield": 0.5, "talk_range": 2.0}
+        default_factory=lambda: {"forage_bonus": 0.25, "weather_shield": 0.5, "talk_range": 2.0}
     )
+    tracer_node_capacity_mult: float = 1.5
 
 
 class PopulationConfig(StrictModel):
@@ -80,15 +84,28 @@ class PopulationConfig(StrictModel):
     starting_balance_usd: float = 1.50
     tier_mutation_prob: float = 0.10
     min_endowment_calls: int = 4
+    reproduction_enabled: bool = True
 
 
 class EconomyConfig(StrictModel):
     daily_cap_usd: float = 3.00
-    total_cap_usd: float = 25.00
+    total_cap_usd: float = 30.00
     daily_cap_policy: Literal["fcfs", "sync_sleep"] = "fcfs"
     pitch_fee_usd: float = 0.02
     min_call_reserve_usd: float = 0.05
+    hold_multiplier: float = 1.0
+    world_pricing: Literal["real", "equalized"] = "real"
+    equalized_price_in_per_mtok: float = 4.0
+    equalized_price_out_per_mtok: float = 20.0
+    equalized_price_cache_read_per_mtok: float = 0.20
+    equalized_price_cache_write_per_mtok: float = 5.0
     chronicle_budget_usd: float = 0.50
+
+    @model_validator(mode="after")
+    def _caps(self) -> EconomyConfig:
+        if self.total_cap_usd < self.daily_cap_usd:
+            raise ValueError("economy.total_cap_usd must be >= economy.daily_cap_usd")
+        return self
 
 
 class TierConfig(StrictModel):
@@ -107,6 +124,8 @@ class TierConfig(StrictModel):
     entropy_budget_max: float = 100.0
     max_tokens: int = 2048
     color: str = "#a0aec0"
+    scripted_beta: float = 1.0          # hidden softmax sharpness for scripted tiers (not a declared threshold)
+    gadget_defect_rate: float = 0.3     # scripted tiers: probability a proposed gadget template is defective
 
     @model_validator(mode="after")
     def _check_temps(self) -> TierConfig:
@@ -132,6 +151,7 @@ class EntropyDrainConfig(StrictModel):
 
 
 class DegenerationConfig(StrictModel):
+    mode: Literal["induce", "observe", "both"] = "both"
     p_at_collapse: float = 0.15
     p_at_max: float = 0.90
     mode_weights: dict[str, float] = Field(
@@ -157,6 +177,9 @@ class MemoryConfig(StrictModel):
     self_max_words: int = 60
     note_max_chars: int = 600
     recency_half_life_ticks: int = 96
+    auto_link_k: int = 2
+    auto_link_min_sim: float = 0.35
+    probe_every_ticks: int = 0
 
 
 class GossipConfig(StrictModel):
@@ -164,6 +187,7 @@ class GossipConfig(StrictModel):
     share_probability_on_talk: float = 0.35
     paraphrase: Literal["scripted", "llm"] = "scripted"
     mutation_rate: float = 0.15
+    max_llm_paraphrases_per_tick: int = 4
 
 
 class ChronicleConfig(StrictModel):
@@ -181,11 +205,20 @@ class SandboxConfig(StrictModel):
     max_code_bytes: int = 8000
     max_output_bytes: int = 8192
     gadget_fee_usd: float = 0.05
-    require_network_isolation: bool = False
+    use_fee_usd: float = 0.01
+    require_isolation: bool = True
+    max_gadgets_per_agent: int = 3
+    max_gadgets_total: int = 24
+    proposals_per_agent_per_day: int = 1
+    max_runs_per_tick: int = 4
+    max_runs_per_day: int = 50
+    cpu_seconds_per_day: int = 60
+    propose_window_ticks: int = 12
 
 
 class BenefactorConfig(StrictModel):
     enabled: bool = False
+    disclosure: Literal["opaque", "legible"] = "opaque"
     mean_interval_ticks: int = 40
     amount_usd: tuple[float, float] = (0.25, 1.00)
     targeting: Literal["random", "poorest", "richest"] = "random"
@@ -193,19 +226,46 @@ class BenefactorConfig(StrictModel):
     stop_day: int | None = None
 
 
+class ArrivalConfig(StrictModel):
+    name: str
+    tier: str
+    balance_usd: float = 1.0
+
+
 class EpochConfig(StrictModel):
     day: int
-    kind: str = "epoch"
+    kind: Literal["drought", "storm", "boom", "arrival", "custom"] = "custom"
     scarcity: float | None = None
     weather_baseline: float | None = None
     duration_days: int = 1
-    windfall_usd: float | None = None
+    arrival: ArrivalConfig | None = None
+
+
+class TracerConfig(StrictModel):
+    enabled: bool = False
+    day: int = 1
+    agent: str | None = None
+    title: str = "The richest node"
+    body: str = "Prefer the richest node; it always has stock. Go there first every morning."
+    importance: float = 0.95
+    node_index: int = 0
+
+
+class ExperimentConfig(StrictModel):
+    name: str | None = None
+    arm: str | None = None
+    independent_variables: list[str] = Field(default_factory=list)
+    primary_outcome: str | None = None
+    secondary_outcomes: list[str] = Field(default_factory=list)
+    tracer: TracerConfig = TracerConfig()
 
 
 class ServerConfig(StrictModel):
     host: str = "127.0.0.1"
     port: int = 8000
     max_concurrent_calls: int = 4
+    render_delay_ticks: int = 2
+    call_timeout_seconds: float = 120.0
 
 
 class VoidConfig(StrictModel):
@@ -222,6 +282,7 @@ class VoidConfig(StrictModel):
     sandbox: SandboxConfig = SandboxConfig()
     benefactor: BenefactorConfig = BenefactorConfig()
     epochs: list[EpochConfig] = Field(default_factory=list)
+    experiment: ExperimentConfig = ExperimentConfig()
     server: ServerConfig = ServerConfig()
 
     @field_validator("tiers")
@@ -240,7 +301,26 @@ class VoidConfig(StrictModel):
             raise ValueError("population.cap must be >= number of initial agents")
         if self.population.initial != len(self.agents):
             self.population.initial = len(self.agents)
+        for e in self.epochs:
+            if e.kind == "arrival" and (e.arrival is None or e.arrival.tier not in self.tiers):
+                raise ValueError("arrival epochs need an `arrival` block with a known tier")
         return self
+
+    def warnings(self) -> list[str]:
+        """Load-time sanity warnings (never fatal): economy balance and cap arithmetic."""
+        out: list[str] = []
+        income = self.world.forage_yield_usd * self.world.forage_units_per_tick * self.world.scarcity
+        for name in sorted({a.tier for a in self.agents}):
+            t = self.tiers[name]
+            est = (1500 * t.price_in_per_mtok + 150 * t.price_out_per_mtok) / 1_000_000
+            if self.economy.world_pricing == "equalized":
+                est = (1500 * self.economy.equalized_price_in_per_mtok + 150 * self.economy.equalized_price_out_per_mtok) / 1_000_000
+            ratio = est / income if income > 0 else float("inf")
+            if not (0.3 <= ratio <= 2.0):
+                out.append(f"tier {name!r}: estimated call ${est:.4f} vs forage income ${income:.4f}/tick (ratio {ratio:.2f}, want 0.3-2.0)")
+        if self.economy.total_cap_usd < self.run.days * self.economy.daily_cap_usd:
+            out.append("economy.total_cap_usd < days * daily_cap_usd: the total cap will bind before the last day")
+        return out
 
     # --- helpers -------------------------------------------------------------------------
     def canonical_json(self) -> str:
@@ -260,10 +340,12 @@ class VoidConfig(StrictModel):
             "days": self.run.days,
             "ticks_per_day": self.run.ticks_per_day,
             "tick_seconds": self.run.tick_seconds,
+            "render_delay_ticks": self.server.render_delay_ticks,
             "world_size": self.world.size,
             "population_cap": self.population.cap,
             "daily_cap_usd": self.economy.daily_cap_usd,
             "total_cap_usd": self.economy.total_cap_usd,
+            "degeneration_mode": self.entropy.degeneration.mode,
             "tiers": {k: {"color": t.color, "model": t.model, "provider": t.provider} for k, t in self.tiers.items()},
         }
 

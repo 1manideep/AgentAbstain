@@ -1,5 +1,12 @@
-# Fast deterministic smoke run: 6 scripted agents, 3 days.
+# Fast deterministic smoke run: 6 scripted agents, 3 days. Tuned so bankruptcy is reachable.
 extends: base.yaml
 run:
   name: scripted_smoke
   days: 3
+world:
+  forage_yield_usd: 0.012
+population:
+  starting_balance_usd: 0.60
+  spawn_pool_usd: 4.0
+  replacement_grant_usd: 0.40
+  min_reserve_usd: 0.20

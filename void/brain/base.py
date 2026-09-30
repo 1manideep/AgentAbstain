@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from void.brain.decision import Decision
@@ -43,6 +43,7 @@ class BrainResult:
     request_id: str | None = None
     error: str | None = None
     model: str = ""
+    extras: dict[str, float] = field(default_factory=dict)  # scripted tiers: action_regret, p_chosen
 
     @property
     def ok(self) -> bool:

@@ -8,7 +8,7 @@ from enum import Enum
 
 __all__ = [
     "AgentStatus", "Vec2", "NeighbourView", "NodeView", "GadgetView", "TaskView", "HeardMessage",
-    "RetrievedNote", "Observation", "ActionOutcome", "STRESS_LABELS", "stress_label",
+    "RetrievedNote", "Observation", "ActionOutcome", "STRESS_LABELS", "stress_label", "balance_bucket",
 ]
 
 
@@ -133,6 +133,8 @@ class Observation:
     population: int = 0
     population_cap: int = 0
     active_effects: dict[str, float] = field(default_factory=dict)
+    balance_bucket: str = "comfortable"
+    prompt_tokens: int = 0
 
 
 @dataclass
@@ -140,8 +142,30 @@ class ActionOutcome:
     ok: bool
     action_type: str
     reason: str = ""
+    kind: str = "ok"  # ok | invalid | stale
     effects: dict[str, object] = field(default_factory=dict)
+
+    @classmethod
+    def invalid(cls, action_type: str, reason: str) -> ActionOutcome:
+        return cls(False, action_type, reason, "invalid")
+
+    @classmethod
+    def stale(cls, action_type: str, reason: str) -> ActionOutcome:
+        return cls(False, action_type, reason, "stale")
 
     @property
     def summary(self) -> str:
-        return f"{self.action_type}: {'ok' if self.ok else 'failed'}{' - ' + self.reason if self.reason else ''}"
+        return f"{self.action_type}: {'ok' if self.ok else self.kind}{' - ' + self.reason if self.reason else ''}"
+
+
+def balance_bucket(balance_usd: float, starting_usd: float) -> str:
+    if starting_usd <= 0:
+        return "empty"
+    r = balance_usd / starting_usd
+    if r < 0.1:
+        return "empty"
+    if r < 0.5:
+        return "thin"
+    if r < 1.5:
+        return "comfortable"
+    return "rich"
