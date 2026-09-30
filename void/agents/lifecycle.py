@@ -108,7 +108,8 @@ class Lifecycle:
     def _child_of(self, parent: AgentRecord, name: str, tick: int, day: int, funding: tuple[str, int, str, str], kind: str) -> AgentRecord:
         r = self.rng.stream("mutate", parent.agent_id, tick)
         tier = parent.model_tier
-        others = sorted(t for t in self.cfg.tiers if t != tier)
+        provider = self.cfg.tiers[tier].provider
+        others = sorted(t for t, c in self.cfg.tiers.items() if t != tier and c.provider == provider)
         if others and r.random() < self.cfg.population.tier_mutation_prob:
             tier = r.choice(others)
         parent_self = self.memory.get_self(parent.agent_id)
@@ -118,9 +119,7 @@ class Lifecycle:
         rec = self._insert(rec, tick, funding)
         first = (parent_self.strip().split(".")[0].strip() + ".") if parent_self.strip() else parent.seed.motto
         self._init_vault(rec, tick, f"Child of {parent.name}. {first}")
-        for note in self.memory.top_notes(parent.agent_id, self.cfg.memory.inherit_top_k):
-            if "entity" in note.tags or "self" in note.tags:
-                continue
+        for note in self.memory.top_notes(parent.agent_id, self.cfg.memory.inherit_top_k, exclude_tags=("entity", "self", "probe")):
             origin = note.provenance.origin_note_id or note.note_id
             self.memory.copy_note(note, rec.agent_id, tick, provenance=_prov(
                 channel="inherited", source_agent_id=parent.agent_id, hop=note.provenance.hop, origin_note_id=origin,

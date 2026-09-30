@@ -30,7 +30,7 @@ from typing import Any
 
 import yaml
 
-from void.research.analysis import CONFIG_FILE, connect, end_of_run_outcome, load_metrics, resolve_path
+from void.research.analysis import CONFIG_FILE, DAILY, connect, end_of_run_outcome, load_metrics, resolve_path
 
 __all__ = [
     "ALWAYS_ALLOWED",
@@ -224,20 +224,31 @@ def _memory_degenerate_pair(arms: dict[str, dict[int, Path]], names: list[str], 
 
 
 def _daily_curves(arms: dict[str, dict[int, Path]], names: list[str], seeds: list[int], path: str) -> dict[str, dict[str, float | None]]:
-    """Per arm and day, the mean over seeds of the primary path read off the day's last tick row (or the day row)."""
+    """Per arm and day, the mean over seeds of the primary: a per-day run-level aggregate when the path has one
+    (:data:`DAILY`), else the value on the day's last tick row, else on the day row."""
+    head, _, rest = path.partition(".")
     curves: dict[str, dict[str, float | None]] = {}
     for arm in names:
         per_day: dict[int, list[float]] = {}
         for seed in seeds:
             tick_rows, day_rows = load_metrics(arms[arm][seed])
+            days = sorted({int(r["day"]) for r in tick_rows} | {int(r["day"]) for r in day_rows})
+            if head in DAILY:
+                for day in days:
+                    v = DAILY[head](arms[arm][seed], rest or None, day)
+                    if v is not None:
+                        per_day.setdefault(day, []).append(float(v))
+                continue
             last_of_day: dict[int, dict[str, Any]] = {}
             for row in tick_rows:
                 last_of_day[int(row["day"])] = row
+            found = False
             for day, row in last_of_day.items():
                 v = resolve_path(row, path)
                 if isinstance(v, int | float) and not isinstance(v, bool):
                     per_day.setdefault(day, []).append(float(v))
-            if not per_day:
+                    found = True
+            if not found:
                 for row in day_rows:
                     v = resolve_path(row, path)
                     if isinstance(v, int | float) and not isinstance(v, bool):

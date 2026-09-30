@@ -43,7 +43,7 @@ def test_drought_applies_on_day_two_and_expires_on_day_three(world):
         assert trace[t] == (1, 1.0, 0.0)
     for t in range(TPD + 1, 2 * TPD + 1):
         assert trace[t] == (2, 0.4, -0.6), (t, trace[t])
-    for t in range(2 * TPD + 1, ENQUEUE_TICK + 2):  # until the operator epoch lands
+    for t in range(2 * TPD + 1, ENQUEUE_TICK + 1):  # until the operator epoch lands at ENQUEUE_TICK + 1
         assert trace[t] == (3, 1.0, 0.0), (t, trace[t])
     started = [e for e in run.events("epoch") if e["payload"]["phase"] == "started"]
     ended = [e for e in run.events("epoch") if e["payload"]["phase"] == "ended"]
@@ -108,7 +108,6 @@ def test_epochs_unit_apply_expire_and_snapshot(tmp_path):
     assert ep.schedule(EpochConfig(day=3, kind="boom", scarcity=1.5), 50) == "op1" and ep.scheduled(3)[0]["id"] == "op1"
 
 
-@pytest.mark.xfail(reason="bug: overlapping epochs expire in FIFO order, so the older epoch's restore is overwritten by the newer one's")
 def test_overlapping_epochs_restore_the_original_scarcity(tmp_path):
     cfg, db, ep = _bench(tmp_path)
     ep.apply_and_expire(2, 25)  # drought: 1.0 -> 0.4

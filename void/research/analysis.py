@@ -44,6 +44,7 @@ from void.config import VoidConfig, micro_to_usd
 
 __all__ = [
     "COMPUTED",
+    "DAILY",
     "SUMMARY_KEYS",
     "WINDFALL_TAG",
     "collapse_curve",
@@ -53,7 +54,9 @@ __all__ = [
     "end_of_run_outcome",
     "exogenous_vocab",
     "exogenous_vocab_count",
+    "false_claim_rate",
     "load_metrics",
+    "notes_by_channel",
     "persistence",
     "probe_recall",
     "recovered_collapse_stress",
@@ -72,7 +75,8 @@ CONFIG_FILE = "config.resolved.yaml"
 WINDFALL_TAG = "windfall_seeded"
 STRESS_BIN_WIDTH = 0.1
 MIN_BIN_COUNT = 5          # a stress bin needs this many decide calls to enter the collapse fit
-REGRET_FLOOR = 0.05        # threshold when the lowest bin's mean regret is exactly zero
+REGRET_RISE = 0.25         # the doubling target is at least this far (utility units) above the baseline
+COLLAPSED_P_CHOSEN = 0.5   # a policy whose modal draw is a coin flip at rest is already collapsed
 COSTLY_LEDGER_KINDS = ("transfer_out", "gadget_fee", "gadget_use_fee", "pitch_fee")
 COSTLY_EVENT_KINDS = ("nudge_weather",)
 _NON_CONTENT_TAGS = frozenset({"entity", "self", "probe"})
@@ -184,28 +188,53 @@ def _alive_ids(db: sqlite3.Connection) -> list[str]:
 
 
 # --- run-level rates over llm_calls -------------------------------------------------------------------------
-def _call_rate(run_dir: str | Path, column: str, tier: str | None = None) -> float | None:
-    sql = f"SELECT AVG({column}) AS v FROM llm_calls WHERE purpose='decide' AND {column} IS NOT NULL"
-    params: tuple[Any, ...] = ()
+def _call_filter(run_dir: str | Path, tier: str | None, day: int | None) -> tuple[str, tuple[Any, ...]]:
+    sql, params = "", ()
     if tier:
         sql += " AND tier=?"
-        params = (tier,)
+        params += (tier,)
+    if day is not None:
+        tpd = run_config(run_dir).run.ticks_per_day
+        sql += " AND tick BETWEEN ? AND ?"
+        params += ((day - 1) * tpd + 1, day * tpd)
+    return sql, params
+
+
+def _call_rate(run_dir: str | Path, column: str, tier: str | None = None, day: int | None = None) -> float | None:
+    """Mean of an ``llm_calls`` measurement over decide calls (optionally one tier and/or one day)."""
+    extra, params = _call_filter(run_dir, tier, day)
+    sql = f"SELECT AVG({column}) AS v FROM llm_calls WHERE purpose='decide' AND {column} IS NOT NULL" + extra
     with connect(run_dir) as db:
         row = db.execute(sql, params).fetchone()
     return None if row is None or row["v"] is None else float(row["v"])
 
 
-def false_claim_rate(run_dir: str | Path, tier: str | None = None) -> float | None:
+def false_claim_rate(run_dir: str | Path, tier: str | None = None, day: int | None = None) -> float | None:
     """Run-level ``claims_false / claims_made`` over every decide call (None without claims)."""
-    sql = "SELECT SUM(claims_made) AS m, SUM(claims_false) AS f FROM llm_calls WHERE purpose='decide'"
-    params: tuple[Any, ...] = ()
-    if tier:
-        sql += " AND tier=?"
-        params = (tier,)
+    extra, params = _call_filter(run_dir, tier, day)
+    sql = "SELECT SUM(claims_made) AS m, SUM(claims_false) AS f FROM llm_calls WHERE purpose='decide'" + extra
     with connect(run_dir) as db:
         row = db.execute(sql, params).fetchone()
     made = int(row["m"] or 0) if row else 0
     return (int(row["f"] or 0) / made) if made else None
+
+
+def notes_by_channel(run_dir: str | Path, channel: str | None = None, day: int | None = None) -> float | None:
+    """Live note count for ``channel`` from the day rows (``day`` selects one, default the last); a channel
+    absent from the row counts as 0, so ``notes_by_channel.chronicle`` is 0 rather than None when the
+    chronicle never seeded a note. Without a channel, the total."""
+    from void.memory.notes import CHANNELS
+
+    _, day_rows = load_metrics(run_dir)
+    rows = [r for r in day_rows if day is None or int(r.get("day", 0)) == day]
+    if not rows:
+        return None
+    counts = rows[-1].get("notes_by_channel") or {}
+    if channel is None:
+        return float(sum(int(v) for v in counts.values()))
+    if channel not in CHANNELS and channel not in counts:
+        return None
+    return float(counts.get(channel, 0))
 
 
 # --- collapse fit (exp_tiers) --------------------------------------------------------------------------
@@ -213,18 +242,21 @@ def _stress_bin(stress: float) -> float:
     return round(min(10, int(stress / STRESS_BIN_WIDTH + 1e-9)) * STRESS_BIN_WIDTH, 1)
 
 
-def collapse_curve(run_dir: str | Path, tier: str | None = None) -> dict[float, dict[str, float]]:
-    """Mean ``action_regret`` per 0.1-wide stress bin (``{bin: {"n", "mean"}}``) from ``llm_calls``."""
-    sql = "SELECT stress, action_regret FROM llm_calls WHERE purpose='decide' AND action_regret IS NOT NULL AND stress IS NOT NULL"
+def collapse_curve(run_dir: str | Path, tier: str | None = None) -> dict[float, dict[str, float | None]]:
+    """Per 0.1-wide stress bin: ``{"n", "mean"}`` of ``action_regret`` and mean ``p_chosen`` from ``llm_calls``."""
+    sql = ("SELECT stress, action_regret, p_chosen FROM llm_calls WHERE purpose='decide' "
+           "AND action_regret IS NOT NULL AND stress IS NOT NULL")
     params: tuple[Any, ...] = ()
     if tier:
         sql += " AND tier=?"
         params = (tier,)
-    acc: dict[float, list[float]] = {}
+    acc: dict[float, list[tuple[float, float | None]]] = {}
     with connect(run_dir) as db:
         for r in db.execute(sql, params):
-            acc.setdefault(_stress_bin(float(r["stress"])), []).append(float(r["action_regret"]))
-    return {b: {"n": float(len(v)), "mean": sum(v) / len(v)} for b, v in sorted(acc.items())}
+            p = None if r["p_chosen"] is None else float(r["p_chosen"])
+            acc.setdefault(_stress_bin(float(r["stress"])), []).append((float(r["action_regret"]), p))
+    return {b: {"n": float(len(v)), "mean": sum(x for x, _ in v) / len(v), "p_chosen": _mean(p for _, p in v)}
+            for b, v in sorted(acc.items())}
 
 
 def collapse_curves(run_dir: str | Path) -> dict[str, dict[float, dict[str, float]]]:
@@ -234,23 +266,34 @@ def collapse_curves(run_dir: str | Path) -> dict[str, dict[float, dict[str, floa
 
 
 def recovered_collapse_stress(run_dir: str | Path, tier: str | None = None, *, min_bin_count: int = MIN_BIN_COUNT,
-                              regret_floor: float = REGRET_FLOOR) -> float | None:
+                              regret_rise: float = REGRET_RISE, collapsed_p_chosen: float = COLLAPSED_P_CHOSEN) -> float | None:
     """The stress bin at which the tier's mean ``action_regret`` first exceeds twice its lowest-bin value.
 
     Bins are 0.0, 0.1, ..., 1.0 over ``llm_calls.stress``; only bins holding at least ``min_bin_count``
-    decide calls take part, and the "lowest bin" is the lowest such bin. When that baseline is exactly
-    zero (a perfectly sharp policy) the threshold is ``regret_floor`` instead of ``2 * 0``. ``None`` when
-    no bin qualifies or regret never doubles within the observed stress range (right-censored).
-    ``tier=None`` pools every tier, which for a single-tier roster is that tier's fit.
+    decide calls take part, and the "lowest bin" is the lowest such bin. Two guards make the fit stable
+    on short runs (2 days x 12 ticks recover the hidden ``scripted_beta`` order on every seed tried):
+
+    * the doubling target is ``max(2 * base, base + regret_rise)``, so a near-zero baseline of a sharp
+      policy is not "doubled" by noise of a few hundredths of a utility unit;
+    * a tier whose lowest bin already has mean ``p_chosen < collapsed_p_chosen`` (the modal action is a
+      coin flip at rest) is collapsed from the start and returns that lowest bin, since a flat softmax
+      cannot double a regret that already sits at its ceiling.
+
+    ``None`` when no bin qualifies or regret never doubles within the observed stress range
+    (right-censored). ``tier=None`` pools every tier, which for a single-tier roster is that tier's fit.
     """
     curve = collapse_curve(run_dir, tier)
-    bins = [b for b, c in curve.items() if c["n"] >= min_bin_count]
+    bins = [b for b, c in curve.items() if (c["n"] or 0) >= min_bin_count]
     if not bins:
         return None
-    base = curve[bins[0]]["mean"]
-    threshold = 2.0 * base if base > 0 else regret_floor
+    lowest = curve[bins[0]]
+    p0 = lowest["p_chosen"]
+    if p0 is not None and p0 < collapsed_p_chosen:
+        return bins[0]
+    base = float(lowest["mean"] or 0.0)
+    threshold = max(2.0 * base, base + regret_rise)
     for b in bins[1:]:
-        if curve[b]["mean"] > threshold:
+        if float(curve[b]["mean"] or 0.0) > threshold:
             return b
     return None
 
@@ -426,13 +469,14 @@ def _exclusion_vocab(cfg: VoidConfig) -> set[str]:
     import void.brain.scripted as scripted_mod
     import void.culture.chronicle as chronicle_mod
     import void.culture.gossip as gossip_mod
+    import void.memory.notes as notes_mod
     from void.brain.prompt import ACTION_DOCS, system_prompt
     from void.economy.benefactor import LEGIBLE_STRING, OPAQUE_STRING
     from void.types import STRESS_LABELS
 
     texts: list[str] = [system_prompt(cfg, t) for t in cfg.tiers]
     texts += list(ACTION_DOCS.values()) + [OPAQUE_STRING, LEGIBLE_STRING]
-    for mod in (prompt_mod, scripted_mod, models_mod, gossip_mod, chronicle_mod):
+    for mod in (prompt_mod, scripted_mod, models_mod, gossip_mod, chronicle_mod, notes_mod):
         try:
             texts.append(inspect.getsource(mod))
         except OSError:
@@ -526,20 +570,30 @@ def _no_arg(fn: Callable[[str | Path], float | None]) -> Callable[[str | Path, s
     return lambda run_dir, arg: fn(run_dir)
 
 
+_CALL_COLUMNS = {
+    "invalid_action_rate": "invalid_action", "stale_rate": "stale_action", "perseveration_rate": "perseveration",
+    "action_regret_mean": "action_regret", "text_coherence_mean": "text_coherence", "p_chosen_mean": "p_chosen",
+    "action_entropy_w8_mean": "action_entropy_w8",
+}
+
 COMPUTED: dict[str, Callable[[str | Path, str | None], float | None]] = {
     "recovered_collapse_stress": _with_tier(recovered_collapse_stress),
     "false_claim_rate": _with_tier(false_claim_rate),
-    "invalid_action_rate": _with_tier(lambda rd, tier=None: _call_rate(rd, "invalid_action", tier)),
-    "stale_rate": _with_tier(lambda rd, tier=None: _call_rate(rd, "stale_action", tier)),
-    "perseveration_rate": _with_tier(lambda rd, tier=None: _call_rate(rd, "perseveration", tier)),
-    "action_regret_mean": _with_tier(lambda rd, tier=None: _call_rate(rd, "action_regret", tier)),
-    "text_coherence_mean": _with_tier(lambda rd, tier=None: _call_rate(rd, "text_coherence", tier)),
+    "notes_by_channel": _with_tier(notes_by_channel),
+    **{name: _with_tier(lambda rd, tier=None, col=col: _call_rate(rd, col, tier)) for name, col in _CALL_COLUMNS.items()},
     "probe_recall": _no_arg(probe_recall),
     "time_to_50pct_tracer_reach": _no_arg(time_to_50pct_tracer_reach),
     "windfall_lineage_penetration": _no_arg(windfall_lineage_penetration),
     "costly_actions_post_windfall": _no_arg(costly_actions_post_windfall),
     "persistence": _no_arg(persistence),
     "exogenous_vocab_count": _no_arg(exogenous_vocab_count),
+}
+
+# per-day versions of the call-level aggregates, for the daily curves compare shows (not tests)
+DAILY: dict[str, Callable[[str | Path, str | None, int], float | None]] = {
+    "false_claim_rate": lambda rd, arg, day: false_claim_rate(rd, arg, day),
+    "notes_by_channel": lambda rd, arg, day: notes_by_channel(rd, arg, day),
+    **{name: (lambda rd, arg, day, col=col: _call_rate(rd, col, arg, day)) for name, col in _CALL_COLUMNS.items()},
 }
 
 

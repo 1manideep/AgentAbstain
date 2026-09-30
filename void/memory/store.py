@@ -241,12 +241,13 @@ class MemoryStore:
         rows = self.db.fetchall(sql + " ORDER BY created_tick, note_id", (agent_id,))
         return [self._load(r) for r in rows]
 
-    def top_notes(self, agent_id: str, k: int) -> list[Note]:
-        """The agent's ``k`` most important live notes (ties: newest first, then id)."""
+    def top_notes(self, agent_id: str, k: int, *, exclude_tags: tuple[str, ...] = ()) -> list[Note]:
+        """The agent's ``k`` most important live notes (ties: newest first, then id), optionally skipping tagged stubs."""
+        where = " AND ".join(["agent_id=?", "archived=0"] + ["tags NOT LIKE ?" for _ in exclude_tags])
+        params: list[object] = [agent_id] + [f'%"{t}"%' for t in exclude_tags] + [int(k)]
         rows = self.db.fetchall(
-            f"SELECT {_NOTE_COLUMNS} FROM notes WHERE agent_id=? AND archived=0 "
-            "ORDER BY importance DESC, created_tick DESC, note_id LIMIT ?",
-            (agent_id, int(k)),
+            f"SELECT {_NOTE_COLUMNS} FROM notes WHERE {where} ORDER BY importance DESC, created_tick DESC, note_id LIMIT ?",
+            tuple(params),
         )
         return [self._load(r) for r in rows]
 

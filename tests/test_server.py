@@ -231,3 +231,49 @@ def test_step_only_while_paused(client: TestClient, sim: Simulation) -> None:
     r = client.post("/api/control/pause", headers=auth(sim))
     assert r.status_code == 200 and r.json()["paused"] is True
     assert client.post("/api/control/step", headers=auth(sim)).status_code == 200
+
+
+def test_step_to_the_end_finishes_the_run(client: TestClient, sim: Simulation) -> None:
+    ticks = sim.cfg.run.days * sim.cfg.run.ticks_per_day
+    with client.websocket_connect("/ws") as ws:
+        recv_until(ws, lambda m: m["type"] == "chronicle")
+        last = None
+        for _ in range(ticks):
+            r = client.post("/api/control/step", headers=auth(sim))
+            assert r.status_code == 200, r.text
+            last = r.json()
+        assert last is not None and last["tick"] == ticks and last["status"] == "completed"
+        st = recv_until(ws, lambda m: m["type"] == "status" and m["status"] == "completed")
+        assert any(m["type"] == "day" and m["day"] == 1 for m in st)
+        assert st[-1]["paused"] is True
+    assert sim.status == "completed" and sim.clock.tick == ticks
+    assert client.post("/api/control/step", headers=auth(sim)).status_code == 409
+    assert client.post("/api/control/resume", headers=auth(sim)).status_code == 409
+    assert client.post("/api/tasks", json={"title": "late", "reward_usd": 0.1}, headers=auth(sim)).status_code == 409
+    days = client.get("/api/metrics", params={"days": 1}).json()["days"]
+    assert [d["day"] for d in days] == [1] and days[0]["row"]["kind"] == "day"
+    c = client.get("/api/chronicle")
+    assert c.status_code == 200 and c.json()["day"] == 1 and c.json()["markdown"].startswith("# ")
+    assert client.get("/api/chronicle", params={"day": 1}).json()["headline"] == c.json()["headline"]
+    assert client.get("/api/chronicle", params={"day": 7}).status_code == 404
+    assert client.get("/api/state").json()["tick"] == ticks
+
+
+def test_static_spa_and_traversal_guard(sim: Simulation, tmp_path: Path) -> None:
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>void</title>")
+    (dist / "assets" / "app.js").write_text("console.log('void')")
+    (tmp_path / "secret.txt").write_text("nope")
+    app = create_app(sim, static_dir=dist, host="127.0.0.1", port=8000)
+    with TestClient(app) as c:
+        r = c.get("/")
+        assert r.status_code == 200 and "<title>void</title>" in r.text and r.headers["content-security-policy"] == CSP
+        assert c.get("/assets/app.js").text == "console.log('void')"
+        fallback = c.get("/agents/ag_123")
+        assert fallback.status_code == 200 and "<title>void</title>" in fallback.text
+        assert fallback.headers["content-security-policy"] == CSP
+        assert c.get("/api/nope").status_code == 404
+        for probe in ("/../secret.txt", "/%2e%2e/secret.txt", "/assets/../../secret.txt"):
+            resp = c.get(probe)
+            assert "nope" not in resp.text, probe

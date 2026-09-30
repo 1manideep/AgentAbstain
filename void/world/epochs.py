@@ -52,17 +52,19 @@ class Epochs:
     # --- apply / expire -----------------------------------------------------------------------------
     def apply_and_expire(self, day: int, tick: int) -> None:
         stack = list(self.db.kv_get("epoch_stack", []) or [])
-        # expire first so a same-day replacement epoch sees the restored baseline
-        remaining = []
-        for e in stack:
-            if int(e["ends_day"]) <= day:
-                if e.get("prev_scarcity") is not None:
-                    self.db.kv_set("scarcity", e["prev_scarcity"])
-                if e.get("prev_weather_baseline") is not None:
-                    self.weather.set_baseline(float(e["prev_weather_baseline"]))
-                self.bus.emit(Event(tick, day, Kind.EPOCH, {"kind": e["kind"], "id": e["id"], "phase": "ended"}))
-            else:
-                remaining.append(e)
+        # expire first so a same-day replacement epoch sees the restored baseline; the value to
+        # restore is whatever the newest still-active epoch set, else the configured baseline
+        remaining = [e for e in stack if int(e["ends_day"]) > day]
+        expired = [e for e in stack if int(e["ends_day"]) <= day]
+        if any(e.get("scarcity") is not None for e in expired):
+            live = next((e["scarcity"] for e in reversed(remaining) if e.get("scarcity") is not None), self.cfg.world.scarcity)
+            self.db.kv_set("scarcity", float(live))
+        if any(e.get("weather_baseline") is not None for e in expired):
+            live_w = next((e["weather_baseline"] for e in reversed(remaining) if e.get("weather_baseline") is not None),
+                          self.cfg.world.weather.baseline)
+            self.weather.set_baseline(float(live_w))
+        for e in expired:
+            self.bus.emit(Event(tick, day, Kind.EPOCH, {"kind": e["kind"], "id": e["id"], "phase": "ended"}))
         stack = remaining
         applied = list(self.db.kv_get("epochs_applied", []) or [])
         for e in self._all():

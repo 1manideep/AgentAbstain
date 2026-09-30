@@ -192,9 +192,10 @@ def test_nudge_weather_allowances_and_global_cap(sim, agents):
     out = apply(sim, b, type="nudge_weather", delta=1.0)  # clamped to the agent allowance, which also fills the global cap
     assert out.ok and last_event(sim, "nudge_weather")["delta"] == pytest.approx(w.nudge_cap_per_agent_day)
     assert sim.kernel.state.global_nudge_this_tick == pytest.approx(w.global_nudge_cap_per_tick)
+    base_c = failures(sim, c)
     out = apply(sim, c, type="nudge_weather", delta=0.05)
-    assert not out.ok and out.kind == "stale" and out.reason == "global_nudge_cap_reached" and failures(sim, c) == 0
-    assert apply(sim, c, type="nudge_weather", delta=None).kind == "invalid" and failures(sim, c) == 1
+    assert not out.ok and out.kind == "stale" and out.reason == "global_nudge_cap_reached" and failures(sim, c) == base_c
+    assert apply(sim, c, type="nudge_weather", delta=None).kind == "invalid" and failures(sim, c) == base_c + 1
     sim.kernel.begin_tick(4, 1)  # the global cap is per tick
     assert apply(sim, c, type="nudge_weather", delta=0.05).ok
     assert sim.weather.value == pytest.approx(start + w.global_nudge_cap_per_tick + 0.05)

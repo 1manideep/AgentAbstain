@@ -1,8 +1,9 @@
 """FastAPI application factory and ``serve`` entry point (DESIGN §15).
 
 ``create_app`` mounts the HTTP API and the ``/ws`` hub, serves the built frontend (``web/dist``)
-with an SPA fallback, starts ``sim.run()`` as a background task on startup and cancels it on
-shutdown. The operator token is printed once at startup.
+with an SPA fallback, starts ``sim.run()`` as a background task on startup (``app.state.sim_task``,
+via :class:`void.server.driver.SimDriver`) and cancels it on shutdown. The operator token is
+printed once at startup.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
@@ -20,74 +20,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from void.config import VoidConfig
 from void.server.api import router as api_router
 from void.server.auth import OriginGuard, SecurityHeaders, allowed_origins
+from void.server.driver import SimDriver
 from void.server.ws import Hub, websocket_endpoint
-from void.sim.loop import Simulation, TickReport
+from void.sim.loop import Simulation
 
-__all__ = ["create_app", "serve", "SimDriver"]
+__all__ = ["create_app", "serve"]
 
 log = logging.getLogger("void.server")
-
-
-class SimDriver:
-    """Owns the background ``sim.run()`` task and keeps ``/api/control/step`` from interleaving with it.
-
-    The Simulation has no tick lock and no "setup finished" signal, so the driver wraps the
-    instance's ``tick``/``setup`` coroutines: every tick (loop or step) runs under one
-    ``asyncio.Lock`` and ``ready`` is set once the sandbox self-test in ``setup()`` has completed.
-    """
-
-    def __init__(self, sim: Simulation) -> None:
-        self.sim = sim
-        self.lock = asyncio.Lock()
-        self.ready = asyncio.Event()
-        self.finished = asyncio.Event()
-        self.error: BaseException | None = None
-        self._tick = sim.tick
-        self._setup = sim.setup
-        sim.tick = self._locked_tick  # type: ignore[method-assign]
-        sim.setup = self._wrapped_setup  # type: ignore[method-assign]
-
-    async def _locked_tick(self) -> TickReport:
-        async with self.lock:
-            return await self._tick()
-
-    async def _wrapped_setup(self) -> dict[str, Any]:
-        try:
-            return await self._setup()
-        finally:
-            self.ready.set()
-
-    async def wait_ready(self, timeout: float = 30.0) -> bool:
-        try:
-            await asyncio.wait_for(self.ready.wait(), timeout)
-            return True
-        except TimeoutError:
-            return False
-
-    async def step(self) -> TickReport:
-        """Exactly one tick (callers check ``sim.is_paused``). Ending the run also releases the loop."""
-        report = await self.sim.tick()
-        if self.sim.status != "running" and self.sim.is_paused:
-            self.sim.resume()  # let run() observe the end, call finish() and return
-        return report
-
-    async def run(self, hub: Hub) -> str:
-        try:
-            status = await self.sim.run()
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:  # keep the server up so the operator can inspect the run
-            self.error = e
-            log.exception("simulation task failed")
-            status = self.sim.status
-        finally:
-            self.ready.set()
-            self.finished.set()
-        try:
-            hub.on_run_end()
-        except Exception:
-            log.exception("hub.on_run_end failed")
-        return status
 
 
 def create_app(sim: Simulation, *, static_dir: Path | None = None, host: str | None = None,
@@ -95,12 +34,12 @@ def create_app(sim: Simulation, *, static_dir: Path | None = None, host: str | N
     host = host or sim.cfg.server.host
     port = int(port or sim.cfg.server.port)
     hub = Hub(sim)
-    driver = SimDriver(sim)
+    driver = SimDriver(sim, hub)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         hub.start()
-        app.state.sim_task = asyncio.create_task(driver.run(hub), name="void-sim")
+        app.state.sim_task = asyncio.create_task(driver.run(), name="void-sim")
         print(f"[void] run {sim.run_id} at {sim.run_dir}", flush=True)
         print(f"[void] operator token: {sim.operator_token}", flush=True)
         print(f"[void] http://{host}:{port}/  (paused={sim.is_paused}, tick_seconds={sim.tick_seconds}, status={sim.status})", flush=True)

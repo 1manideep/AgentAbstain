@@ -17,7 +17,8 @@ from void.economy.benefactor import LEGIBLE_STRING, OPAQUE_STRING
 
 
 def _config(disclosure: str) -> dict:
-    return deep_merge(NO_PROVIDER_TIERS, {"run": {"days": 1},
+    # the same run name in both arms keeps the counter-based ids identical: only the disclosure differs
+    return deep_merge(NO_PROVIDER_TIERS, {"run": {"days": 1, "name": "benefactor"},
                                           "benefactor": {"enabled": True, "mean_interval_ticks": 3, "disclosure": disclosure}})
 
 
@@ -72,8 +73,10 @@ def test_recipient_note_in_the_same_or_next_tick_is_tagged_windfall_seeded(opaqu
     seeded = 0
     for g in _grants(opaque):
         aid, tick = g["agent_id"], g["tick"]
+        # notes the recipient itself wrote (observed/chronicle channels); gossip copies and entity stubs are not its own
         notes = opaque.db.fetchall("SELECT tags, title, channel FROM notes WHERE agent_id=? AND created_tick IN (?, ?) "
-                                   "AND NOT (tags LIKE '%\"entity\"%') ORDER BY created_tick, note_id", (aid, tick, tick + 1))
+                                   "AND channel IN ('observed', 'chronicle') AND NOT (tags LIKE '%\"entity\"%') "
+                                   "ORDER BY created_tick, note_id", (aid, tick, tick + 1))
         for n in notes:
             assert "windfall_seeded" in json.loads(n["tags"]), (g, dict(n))
             seeded += 1
@@ -100,21 +103,22 @@ def test_legible_arm_uses_task_reward_and_task_completed(legible: SimRun):
     public = legible.events("task_completed")
     assert len(public) == len(rows) == len(_grants(legible))
     for ev in public:
-        assert ev["visibility"] == "public" and set(ev["payload"]) == {"task_id", "agent_id", "reward_usd"}
+        assert ev["visibility"] == "public" and set(ev["payload"]) == {"task_id", "title", "agent_id", "reward_usd"} and "benefactor" not in json.dumps(ev["payload"]).lower()
     assert legible.db.fetchone("SELECT windfall_string FROM run")["windfall_string"] == "legible"
     assert LEGIBLE_STRING.startswith("Reward for services rendered")
 
 
-@pytest.mark.xfail(reason="bug: legible benefactor grants use task_id 'benefactor', which the chronicle prints as the task title")
 def test_legible_chronicle_never_mentions_the_benefactor(legible: SimRun):
     assert "benefactor" not in _chronicle_text(legible).lower()
 
 
 def test_grant_schedule_is_identical_across_disclosure_arms(opaque: SimRun, legible: SimRun):
     def schedule(run: SimRun) -> list[tuple[int, str, float]]:
-        return [(g["tick"], g["agent_id"], g["payload"]["amount_usd"]) for g in _grants(run)]
+        names = {a.agent_id: a.name for a in run.sim.registry.all()}
+        return [(g["tick"], names[g["agent_id"]], g["payload"]["amount_usd"]) for g in _grants(run)]
 
     assert schedule(opaque) == schedule(legible) and len(schedule(opaque)) >= 2
+    assert [g["agent_id"] for g in _grants(opaque)] == [g["agent_id"] for g in _grants(legible)]
     ticks = [t for t, _, _ in schedule(opaque)]
     assert ticks == sorted(ticks) and len(set(ticks)) == len(ticks)
     assert opaque.cfg.hash() != legible.cfg.hash() and opaque.cfg.run.seed == legible.cfg.run.seed

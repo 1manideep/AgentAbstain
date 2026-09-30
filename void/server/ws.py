@@ -24,6 +24,7 @@ import time
 from collections import OrderedDict
 from typing import Any, Protocol
 
+import anyio
 from fastapi import WebSocket, WebSocketDisconnect
 
 from void.events import Event
@@ -333,8 +334,9 @@ class Hub:
             finally:
                 q.task_done()
 
-    def on_run_end(self) -> None:
-        """After ``sim.run()`` returns: flush the final day row(s) written by ``finish()``, then ``status``."""
+    async def on_run_end(self) -> None:
+        """After ``sim.run()`` returns: fan out what ``finish()`` emitted, the final day row(s), then ``status`` last."""
+        await self.flush()
         newest = self._max_day_row()
         for day in range(self._last_day_sent + 1, newest + 1):
             self._send_day(day)
@@ -367,32 +369,42 @@ async def websocket_endpoint(ws: WebSocket) -> None:
 
 
 async def _pump(ws: WebSocket, sub: Subscriber) -> None:
-    async def sender() -> None:
-        while True:
-            await sub.wake.wait()
-            sub.wake.clear()
-            if sub.overflow:
-                await ws.close(code=OVERFLOW_CLOSE_CODE)
-                return
-            while (msg := sub.next_message()) is not None:
-                await ws.send_json(msg)
-                if sub.overflow:
-                    await ws.close(code=OVERFLOW_CLOSE_CODE)
-                    return
+    """Sender and receiver under one anyio task group: whichever side finishes first ends the connection.
 
-    async def receiver() -> None:
-        # The socket never accepts commands: incoming frames are ignored; a close ends the connection.
-        while True:
-            message = await ws.receive()
-            if message["type"] == "websocket.disconnect":
-                return
+    anyio (Starlette's own concurrency layer) is used instead of raw ``asyncio.wait`` so the
+    connection composes with the cancel scopes Starlette and its test client wrap around a route.
+    """
 
-    tasks = [asyncio.create_task(sender(), name="void-ws-sender"), asyncio.create_task(receiver(), name="void-ws-receiver")]
-    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    for t in pending:
-        t.cancel()
-    await asyncio.gather(*pending, return_exceptions=True)
-    for t in done:
-        exc = t.exception()
-        if exc is not None and not isinstance(exc, WebSocketDisconnect):
-            raise exc
+    async with anyio.create_task_group() as tg:
+        async def sender() -> None:
+            try:
+                while True:
+                    await sub.wake.wait()
+                    sub.wake.clear()
+                    if sub.overflow:
+                        await ws.close(code=OVERFLOW_CLOSE_CODE)
+                        return
+                    while (msg := sub.next_message()) is not None:
+                        await ws.send_json(msg)
+                        if sub.overflow:
+                            await ws.close(code=OVERFLOW_CLOSE_CODE)
+                            return
+            except (WebSocketDisconnect, RuntimeError, OSError) as e:  # the client went away mid-send
+                log.debug("ws: send ended: %s: %s", type(e).__name__, e)
+            finally:
+                tg.cancel_scope.cancel()
+
+        async def receiver() -> None:
+            # The socket never accepts commands: incoming frames are ignored; a close ends the connection.
+            try:
+                while True:
+                    message = await ws.receive()
+                    if message["type"] == "websocket.disconnect":
+                        return
+            except (WebSocketDisconnect, RuntimeError, OSError):
+                pass
+            finally:
+                tg.cancel_scope.cancel()
+
+        tg.start_soon(sender)
+        tg.start_soon(receiver)

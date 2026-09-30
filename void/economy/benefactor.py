@@ -72,7 +72,7 @@ class Benefactor:
             self.wallet.credit(agent_id, tick, amount, "task_reward", "benefactor", {"disclosure": "legible"})
             text = LEGIBLE_STRING.format(amount=usd)
             public_kind = Kind.TASK_COMPLETED
-            public_payload = {"task_id": "benefactor", "agent_id": agent_id, "reward_usd": usd}
+            public_payload = {"task_id": "tk_services", "title": "services rendered", "agent_id": agent_id, "reward_usd": usd}
         else:
             self.wallet.credit(agent_id, tick, amount, "windfall", "benefactor", {"disclosure": "opaque"})
             text = OPAQUE_STRING.format(amount=usd)

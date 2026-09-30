@@ -183,7 +183,7 @@ async def record_feed(cfg: VoidConfig, run_dir: Path, ticks: int, *, seed: int |
             out.extend(sub.drain())
         if sim.status != "running":
             await sim.finish()
-            hub.on_run_end()
+            await hub.on_run_end()
         else:
             sim.metrics.close()
         await hub.flush()

@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, model_validator
 from void.config import micro_to_usd
 from void.events import OPERATOR, Event, Kind
 from void.server.auth import is_same_origin_fetch, require_operator
+from void.server.driver import RunEnded
 
 __all__ = ["router", "MAX_LIMIT"]
 
@@ -396,16 +397,17 @@ async def control_resume(request: Request) -> dict[str, Any]:
 
 @router.post("/control/step", dependencies=operator)
 async def control_step(request: Request) -> dict[str, Any]:
-    sim, hub = _sim(request), _hub(request)
+    sim = _sim(request)
     _require_running(sim)
     if not sim.is_paused:
         raise HTTPException(status_code=409, detail="step is only valid while paused")
     driver = request.app.state.driver
     if not await driver.wait_ready(timeout=30.0):
         raise HTTPException(status_code=503, detail="simulation is still starting")
-    report = await driver.step()
-    if report.status != "running":
-        hub.broadcast_status()
+    try:
+        report = await driver.step()
+    except RunEnded as e:
+        raise HTTPException(status_code=409, detail=f"run is {e}") from None
     return {"tick": int(report.tick), "day": int(report.day), "status": report.status, "calls": report.calls,
             "deaths": list(report.deaths), "births": list(report.births)}
 

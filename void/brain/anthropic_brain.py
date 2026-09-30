@@ -90,6 +90,8 @@ class AnthropicBrain:
                 return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"api_{e.status_code}: {e.message}")
             except anthropic.APIConnectionError as e:
                 return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"connection: {e}")
+            except Exception as e:  # e.g. no credentials resolvable: nothing was billed, nothing is metered
+                return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"client: {type(e).__name__}: {e}"[:300])
         latency = int((time.perf_counter() - t0) * 1000)
         usage = self._usage(resp)
         stop = str(getattr(resp, "stop_reason", "") or "")
