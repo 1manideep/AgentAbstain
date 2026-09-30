@@ -34,7 +34,7 @@ class AnthropicBrain:
         self.tier = tier
         self.cfg = cfg
         self.tcfg: TierConfig = cfg.tiers[tier]
-        self.client = client or anthropic.AsyncAnthropic()
+        self.client = client or anthropic.AsyncAnthropic(timeout=cfg.server.call_timeout_seconds, max_retries=1)
         self.semaphore = semaphore or asyncio.Semaphore(cfg.server.max_concurrent_calls)
         self._system = [{"type": "text", "text": system_prompt(cfg, tier), "cache_control": {"type": "ephemeral"}}]
         self._schema = strict_json_schema()
@@ -68,22 +68,43 @@ class AnthropicBrain:
 
     @staticmethod
     def _usage(resp: Any) -> Usage:
+        """Usage from the response; with refusal fallbacks every billed attempt is listed (usage.iterations)."""
         u = getattr(resp, "usage", None)
         if u is None:
             return Usage()
-        return Usage(
-            input_tokens=int(getattr(u, "input_tokens", 0) or 0),
-            output_tokens=int(getattr(u, "output_tokens", 0) or 0),
-            cache_read_tokens=int(getattr(u, "cache_read_input_tokens", 0) or 0),
-            cache_write_tokens=int(getattr(u, "cache_creation_input_tokens", 0) or 0),
+
+        def one(obj: Any) -> Usage:
+            return Usage(
+                input_tokens=int(getattr(obj, "input_tokens", 0) or 0),
+                output_tokens=int(getattr(obj, "output_tokens", 0) or 0),
+                cache_read_tokens=int(getattr(obj, "cache_read_input_tokens", 0) or 0),
+                cache_write_tokens=int(getattr(obj, "cache_creation_input_tokens", 0) or 0),
+            )
+
+        iterations = getattr(u, "iterations", None) or []
+        attempts: list[tuple[str, Usage]] = []
+        for it in iterations:
+            if getattr(it, "type", "") in ("message", "fallback_message"):
+                attempts.append((str(getattr(it, "model", "") or ""), one(it)))
+        if not attempts:
+            top = one(u)
+            top.attempts = [(str(getattr(resp, "model", "") or ""), one(u))]
+            return top
+        total = Usage(
+            input_tokens=sum(a.input_tokens for _, a in attempts), output_tokens=sum(a.output_tokens for _, a in attempts),
+            cache_read_tokens=sum(a.cache_read_tokens for _, a in attempts), cache_write_tokens=sum(a.cache_write_tokens for _, a in attempts),
         )
+        total.attempts = attempts
+        return total
 
     async def decide(self, obs: Observation, sampling: Sampling) -> BrainResult:
         req = self._request(obs, sampling)
         t0 = time.perf_counter()
         async with self.semaphore:
             try:
-                resp = await self._call(req)
+                resp = await asyncio.wait_for(self._call(req), timeout=self.cfg.server.call_timeout_seconds)
+            except (TimeoutError, anthropic.APITimeoutError) as e:
+                return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"timeout: {e}"[:300])
             except anthropic.RateLimitError as e:
                 return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"rate_limit: {e}")
             except anthropic.APIStatusError as e:

@@ -114,12 +114,12 @@ class GadgetGate:
         ok, why = self.can_propose(agent_id, recent_failure=recent_failure)
         if not ok:
             return GateOutcome(False, "availability", why)
-        proposals = self.db.kv_get("sandbox_proposals_today", {}) or {}
-        proposals[agent_id] = int(proposals.get(agent_id, 0)) + 1
-        self.db.kv_set("sandbox_proposals_today", proposals)
         fee = usd_to_micro(self.cfg.sandbox.gadget_fee_usd)
         if not self.wallet.transfer(agent_id, "house", tick, fee, "gadget_fee", "gadget_fee", ref=f"propose:{name}"):
             return GateOutcome(False, "fee", "cannot_afford_fee")
+        proposals = self.db.kv_get("sandbox_proposals_today", {}) or {}
+        proposals[agent_id] = int(proposals.get(agent_id, 0)) + 1
+        self.db.kv_set("sandbox_proposals_today", proposals)
         gid = self.ids.new("gd")
         name = sanitize_text(name, single_line=True, max_len=20)
         purpose = sanitize_text(purpose, single_line=True, max_len=120)
@@ -146,8 +146,8 @@ class GadgetGate:
         seed = self.rng.stream("gadget", gid).randrange(1 << 30)
         run_tests = self.cfg.sandbox.gate_enabled
         result = await self.sandbox.verify(code, tests, seed, run_tests=run_tests)
-        self._account_run(result.cpu_seconds)
-        verification.update({"sandbox_stage": result.stage, "elapsed_ms": result.elapsed_ms, "run_tests": run_tests})
+        self._account_run(float(self.cfg.sandbox.cpu_seconds))  # a fixed charge per run keeps budgets machine-independent
+        verification.update({"sandbox_stage": result.stage, "run_tests": run_tests})
         if not result.ok:
             return reject(result.stage if result.stage in ("tests", "timeout", "killed", "exception", "contract", "protocol", "unavailable") else "sandbox",
                           result.error or result.stage)
@@ -182,18 +182,20 @@ class GadgetGate:
         last = self.registry.last_use_tick(gadget_id, agent_id)
         if last is not None and tick - last < self.cfg.world.effect_ticks:
             return UseOutcome(False, "cooldown")
-        fee = usd_to_micro(self.cfg.sandbox.use_fee_usd)
-        if fee and not self.wallet.transfer(agent_id, "house", tick, fee, "gadget_use_fee", "gadget_use_fee", ref=f"use:{gadget_id}"):
-            return UseOutcome(False, "cannot_afford_fee")
         try:
             code, _ = self.registry.load_code(rec)
         except (TamperedGadget, OSError):
+            # quarantine before any fee: a tampered gadget is never used or charged for again
             self.registry.record_use(gadget_id, agent_id, tick, False, None, rec.effect.get("value"), "tampered")
+            self.db.execute("UPDATE gadgets SET status='tampered' WHERE gadget_id=?", (gadget_id,))
             self.bus.emit(Event(tick, day, "gadget_tampered", {"gadget_id": gadget_id, "agent_id": agent_id}, agent_id, visibility="operator"))
             return UseOutcome(False, "gadget_tampered")
+        fee = usd_to_micro(self.cfg.sandbox.use_fee_usd)
+        if fee and not self.wallet.transfer(agent_id, "house", tick, fee, "gadget_use_fee", "gadget_use_fee", ref=f"use:{gadget_id}"):
+            return UseOutcome(False, "cannot_afford_fee")
         seed = self.rng.stream("gadget", gadget_id, tick, agent_id).randrange(1 << 30)
         result = await self.sandbox.run(code, params, seed)
-        self._account_run(result.cpu_seconds)
+        self._account_run(float(self.cfg.sandbox.cpu_seconds))
         expected = float(rec.effect.get("value", 0.0))
         kind = str(rec.effect.get("kind"))
         cap = self.cfg.world.effect_caps.get(kind, 0.0)

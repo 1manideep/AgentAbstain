@@ -86,8 +86,16 @@ class Kernel:
         self.state.day = day
         self.state.global_nudge_this_tick = 0.0
 
+    INBOX_MAX = 32
+
     def hear(self, listener_id: str, msg: HeardMessage) -> None:
-        self.state.inbox.setdefault(listener_id, []).append(msg)
+        box = self.state.inbox.setdefault(listener_id, [])
+        box.append(msg)
+        if len(box) > self.INBOX_MAX:
+            del box[: len(box) - self.INBOX_MAX]
+
+    def peek_inbox(self, agent_id: str) -> list[HeardMessage]:
+        return list(self.state.inbox.get(agent_id, []))
 
     def drain_inbox(self, agent_id: str) -> list[HeardMessage]:
         msgs = self.state.inbox.pop(agent_id, [])
@@ -128,10 +136,9 @@ class Kernel:
             return None
         rec = self.registry.get(target)
         if rec is None:
-            # allow addressing by name (case-insensitive) as a convenience
-            for a in self.registry.alive():
-                if a.name.lower() == target.lower():
-                    return a
+            # allow addressing by name (case-insensitive) only when the name is unambiguous
+            matches = [a for a in self.registry.alive() if a.name.lower() == target.lower()]
+            return matches[0] if len(matches) == 1 else None
         return rec
 
     # --- availability ------------------------------------------------------------------------------------
@@ -142,7 +149,9 @@ class Kernel:
             out.append("forage")
         neighbours = self.neighbours_of(agent)
         if any(not n.asleep for n in neighbours):
-            out += ["talk", "share_note", "transfer"]
+            out += ["talk", "transfer"]
+            if self.gossip is not None and self.cfg.gossip.enabled:
+                out.append("share_note")
         if not agent.asleep:
             out.append("sleep")
         if self.chronicle_reader is not None and self.chronicle_reader() is not None:
@@ -223,8 +232,12 @@ class Kernel:
             if outcome.kind == "invalid":
                 self._note_failure(agent.agent_id)
         self.state.last_result[agent.agent_id] = outcome.summary + (f"\n{outcome.effects['text']}" if "text" in outcome.effects else "")
-        self.registry.update(agent.agent_id, last_action=json.dumps(action.model_dump(exclude_none=True), sort_keys=True)[:2000],
-                             last_action_ok=outcome.ok)
+        compact = action.model_dump(exclude_none=True)
+        for k in ("code", "tests"):
+            if k in compact:
+                compact[k] = str(compact[k])[:400]
+        self.registry.update(agent.agent_id, last_action=json.dumps(compact, sort_keys=True),
+                             last_action_ok=outcome.ok or outcome.kind == "stale")
         return outcome
 
     # --- handlers -----------------------------------------------------------------------------------------------

@@ -81,7 +81,7 @@ def test_meter_charges_actual_and_routes_overrun_to_house(world):
     w.gate("ag_0", hold2)
     m2 = w.meter("ag_0", t, Usage(input_tokens=1_000_000), 4, "c2", hold2)
     assert m2.balance_after == 0 and m2.overrun == 4_000_000 - 1_494_000
-    assert w.balance("house") == 5_000_000 - m2.overrun
+    assert w.balance("house") == 6_000_000 - m2.overrun  # seeded $1 house + $5 credited
     assert w.ledger_sum(kind="overrun") == -m2.overrun
     # unknown usage charges the hold and marks it estimated
     w.gate("ag_1", hold)

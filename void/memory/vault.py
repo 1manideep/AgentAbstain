@@ -107,7 +107,10 @@ class Vault:
         dest_root.mkdir(parents=True, exist_ok=True)
         dest = dest_root / self.agent_id
         if dest.exists():
-            raise FileExistsError(f"vault destination already exists: {dest}")
+            if self.dir.exists() and self.dir.resolve() != dest.resolve():
+                raise FileExistsError(f"vault destination already exists: {dest}")
+            self.root = dest_root  # already moved (e.g. by an earlier attempt): idempotent
+            return dest
         if self.dir.exists():
             shutil.move(str(self.dir), str(dest))
         else:

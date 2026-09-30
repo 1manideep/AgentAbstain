@@ -48,6 +48,12 @@ _EPOCH_PHRASES = {
     "boom": "a boom began",
     "arrival": "a stranger arrived",
 }
+_EPOCH_END_PHRASES = {
+    "drought": "the drought lifted",
+    "storm": "the storm passed",
+    "boom": "the boom ended",
+    "arrival": "the stranger settled in",
+}
 _ITEM_NUM_RE = re.compile(r"-(\d+)$")
 
 
@@ -130,6 +136,7 @@ class _DayBuilder:
         self.windfall_count = 0
         self.weather: list[tuple[float, str]] = []
         self.epochs: list[tuple[int, dict[str, Any]]] = []
+        self.epochs_ended: list[tuple[int, dict[str, Any]]] = []
         self.verified: list[tuple[int, dict[str, Any]]] = []
         self.rejected: list[tuple[int, dict[str, Any]]] = []
         self.posted: list[tuple[int, dict[str, Any]]] = []
@@ -162,7 +169,10 @@ class _DayBuilder:
         elif kind == Kind.WEATHER:
             self.weather.append((_num(p.get("value")), _clean(p.get("label"), default="unsettled")))
         elif kind == Kind.EPOCH:
-            self.epochs.append((seq, p))
+            if str(p.get("phase") or "started") == "ended":
+                self.epochs_ended.append((seq, p))
+            else:
+                self.epochs.append((seq, p))
         elif kind == Kind.GADGET_VERIFIED:
             self.verified.append((seq, p))
         elif kind == Kind.GADGET_REJECTED:
@@ -244,6 +254,9 @@ class _DayBuilder:
         for _, p in self.epochs[:1]:
             kind = _clean(p.get("kind"), default="custom")
             facts.append(_EPOCH_PHRASES.get(kind, "the world shifted"))
+        for _, p in self.epochs_ended[:1]:
+            kind = _clean(p.get("kind"), default="custom")
+            facts.append(_EPOCH_END_PHRASES.get(kind, "the world settled"))
         if self.births:
             names = [self.name(p.get("agent_id"), p.get("name")) for _, p in self.births]
             if len(names) == 1:
@@ -338,6 +351,10 @@ class _DayBuilder:
             if days is not None:
                 details.append(_count(days, "day"))
             text = f"A {kind} epoch began" + (f" ({', '.join(details)})" if details else "") + "."
+            self._line("Weather and land", "epoch", text, seq)
+        for seq, p in self.epochs_ended:
+            kind = _clean(p.get("kind"), default="custom")
+            text = f"The {kind} epoch ended."
             self._line("Weather and land", "epoch", text, seq)
 
     def _works(self) -> None:

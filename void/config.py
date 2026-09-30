@@ -100,6 +100,7 @@ class EconomyConfig(StrictModel):
     equalized_price_cache_read_per_mtok: float = 0.20
     equalized_price_cache_write_per_mtok: float = 5.0
     chronicle_budget_usd: float = 0.50
+    house_budget_usd: float = 1.00
 
     @model_validator(mode="after")
     def _caps(self) -> EconomyConfig:

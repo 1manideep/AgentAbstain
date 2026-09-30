@@ -12,9 +12,9 @@ from __future__ import annotations
 import copy
 import math
 import re
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, BeforeValidator, Field, WithJsonSchema, field_validator
 
 __all__ = ["ActionType", "ACTION_TYPES", "Claim", "MemoryOp", "Action", "Decision", "strict_json_schema",
            "NAME_RE", "sanitize_text"]
@@ -44,6 +44,30 @@ def sanitize_text(text: str, *, single_line: bool = False, max_len: int | None =
     if max_len is not None:
         out = out[:max_len]
     return out
+
+
+PARAMS_SCHEMA = {
+    "anyOf": [
+        {"type": "array", "items": {"type": "object", "properties": {"key": {"type": "string"}, "value": {"type": "number"}},
+                                    "required": ["key", "value"], "additionalProperties": False}},
+        {"type": "null"},
+    ],
+    "description": "gadget parameters as a list of {key, value} pairs (snake_case keys, numeric values)",
+}
+
+
+def _coerce_params(v: Any) -> Any:
+    """Accept the API's list of {key, value} pairs or an internal dict; store a dict."""
+    if v is None or isinstance(v, dict):
+        return v
+    if isinstance(v, list):
+        out: dict[str, Any] = {}
+        for item in v:
+            if not isinstance(item, dict) or "key" not in item or "value" not in item:
+                raise ValueError("params items must be objects with key and value")
+            out[str(item["key"])] = item["value"]
+        return out
+    raise ValueError("params must be a list of {key, value} pairs")
 
 
 class Claim(BaseModel):
@@ -83,7 +107,7 @@ class Action(BaseModel):
     name: str | None = Field(default=None, max_length=MAX_NAME_CHARS)
     code: str | None = Field(default=None, max_length=MAX_CODE_CHARS)
     tests: str | None = Field(default=None, max_length=MAX_CODE_CHARS)
-    params: dict[str, float] | None = None
+    params: Annotated[dict[str, float] | None, BeforeValidator(_coerce_params), WithJsonSchema(PARAMS_SCHEMA)] = None
     claims: list[Claim] = Field(default_factory=list, max_length=4)
 
     @field_validator("name")
@@ -139,13 +163,13 @@ def _strictify(schema: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(node, dict):
             return node
         node = {k: v for k, v in node.items() if k not in drop}
-        if node.get("type") == "object" and "properties" in node:
+        if node.get("type") == "object":
+            if "properties" not in node:
+                raise ValueError("open-ended object (map) fields are not representable in a strict schema")
             props = {k: walk(v) for k, v in node["properties"].items()}
             node["properties"] = props
             node["required"] = list(props.keys())
             node["additionalProperties"] = False
-        elif "additionalProperties" in node and isinstance(node["additionalProperties"], dict):
-            node["additionalProperties"] = walk(node["additionalProperties"])
         for key in ("anyOf", "oneOf", "allOf"):
             if key in node:
                 node[key] = [walk(n) for n in node[key]]

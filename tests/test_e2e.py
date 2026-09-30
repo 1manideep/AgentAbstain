@@ -80,7 +80,8 @@ def _money_conserved(run: SimRun) -> None:
     m = run.sim.wallet.money_snapshot()
     initial_pool = usd_to_micro(run.cfg.population.spawn_pool_usd)
     initial_chronicle = usd_to_micro(run.cfg.economy.chronicle_budget_usd)
-    rhs = m["agents"] + (m["spawn_pool"] - initial_pool) + m["house"] + (m["chronicle"] - initial_chronicle)
+    initial_house = usd_to_micro(run.cfg.economy.house_budget_usd)
+    rhs = m["agents"] + (m["spawn_pool"] - initial_pool) + (m["house"] - initial_house) + (m["chronicle"] - initial_chronicle) - m["house_debt"]
     assert _ledger_sum(run) == rhs, f"ledger {_ledger_sum(run)} != agents+pool+house+chronicle deltas {rhs}"
 
 

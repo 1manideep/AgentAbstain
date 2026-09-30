@@ -44,7 +44,7 @@ __all__ = [
 
 GOSSIP_PARAPHRASE_DOWNGRADED = "gossip_paraphrase_downgraded"
 GOSSIP_TAG = "gossip"
-EXCLUDED_TAGS = frozenset({"self", "entity"})
+EXCLUDED_TAGS = frozenset({"self", "entity", "probe"})
 LENGTH_TOLERANCE = 0.30
 
 Paraphraser = Callable[[str, str, int], Awaitable[str | None]]
@@ -334,6 +334,9 @@ class Gossip:
 
             origin_id = note.provenance.origin_note_id or note.note_id
             origin = note if origin_id == note.note_id else self.memory.get_note(origin_id)
+            if origin is None:  # synthetic origin id ('tracer', 'chronicle:day_n'): the lineage root is the oldest descendant
+                lineage = self.memory.descendants_of(origin_id)
+                origin = lineage[0] if lineage else None
             origin_generation = note.provenance.origin_generation
             if origin_generation is None:
                 origin_generation = int(speaker.generation)

@@ -220,7 +220,7 @@ class Action(BaseModel):
     target ≤ 80; x, y ∈ [-1e4, 1e4] finite; text ≤ 280; note_title ≤ 60
     amount_usd ∈ [1e-6, 1000] finite; delta ∈ [-1, 1] finite
     name: ^[A-Za-z][A-Za-z0-9 _'-]{0,19}$ ; code, tests ≤ 8000 chars
-    params: ≤ 8 keys matching ^[a-z_]{1,16}$, finite values in [-1e6, 1e6]
+    params: sent by the model as a list of {key, value} pairs (a closed schema the API accepts); stored as a dict of ≤ 8 keys matching ^[a-z_]{1,16}$ with finite values in [-1e6, 1e6]
     claims: list[Claim] ≤ 4 (talk / apply_task only)
 class Decision(BaseModel): thought ≤ 600; memory_ops ≤ 2; action
 ```
@@ -258,7 +258,7 @@ Memory ops: `remember` on windfalls, transfers, gossip, notable forages (always 
 Synthetic usage: `input = tokens(system) + tokens(rendered obs)`, system portion billed as `cache_read` after the agent's first call; `output = tokens(decision json)`. The scripted tier is priced like the frontier tier so the economy is exercised.
 
 ### 7.3 AnthropicBrain
-As built: `client.messages.create` (or `client.beta.messages.create` with `betas=["server-side-fallback-2026-07-01"], fallbacks="default"` when `refusal_fallbacks`), `output_config={"format": {"type": "json_schema", "schema": ...}, "effort": tier.effort}`, cache-controlled system block, `extra_body={"temperature": api_t}` only when `supports_temperature`. `api_temperature = min(1, T_eff / max_temperature)`. Stop reasons handled: `refusal` → `decision=None`; `max_tokens` → parse attempt; parse failures recorded. Served `response.model` and `request_id` stored per call.
+As built: `client.messages.create` (or `client.beta.messages.create` with `betas=["server-side-fallback-2026-07-01"], fallbacks="default"` when `refusal_fallbacks`), `output_config={"format": {"type": "json_schema", "schema": ...}, "effort": tier.effort}`, cache-controlled system block, `extra_body={"temperature": api_t}` only when `supports_temperature`. `api_temperature = min(1, T_eff / max_temperature)`. Stop reasons handled: `refusal` → `decision=None`; `max_tokens` → parse attempt; parse failures recorded. Served `response.model` and `request_id` stored per call. Every call is bounded by `server.call_timeout_seconds` (client timeout, one retry, and an `asyncio.wait_for` around the request); timeouts are metered as the hold under the `timeout:` error class. When a refusal fallback served the response, every billed attempt in `usage.iterations` is priced at its own model's rates.
 
 ### 7.4 Kernel validation **[v2]**
 `Kernel.validate(agent, action)` reads **live** state only. Preconditions that earlier agents in the same tick can invalidate (population cap, node stock, task status, target alive+awake+in range, balance) are re-checked in `apply`. Outcome kinds: `ok`, `invalid` (never valid; adds `failed_action` drain), `stale` (valid against the observation; no drain). Invalid or stale actions are applied as `idle` with a reason in `last_action_result`.
@@ -301,8 +301,9 @@ In `observe` mode the operator never runs; stress remains prompt-visible and rea
 - `gate(agent, tier, hold)`: passes only if `balance ≥ hold`, `spend_total + reserved_total + hold ≤ total_cap`, `spend_today + reserved_today + hold ≤ daily_cap`; on pass the hold is added to the in-memory reserved counters. Reasons: `ok | insufficient | daily_cap | total_cap`.
 - `meter(agent, tier, usage, hold, purpose, ...)`: releases the hold, computes `real_cost` (from usage) and `world_cost` (real, or equalized), debits `world_cost` from the agent (rounded up), adds `real_cost` to `spend_today`/`spend_total`. If `world_cost > balance` (only possible on a provider quirk since the hold bounded it) the difference is debited from the `house` wallet with ledger kind `overrun`, so every dollar has a row and the CHECK constraint holds. The metering transaction commits immediately (it is the real-money record), independent of the tick transaction.
 - `charged_call(payer, tier, hold, purpose, coro)` is the single choke point for any LLM call (decide, gossip paraphrase, chronicle). A test greps that `messages.create` appears only in `anthropic_brain.py`.
-- Neither `gate` nor `meter` changes agent status. Bankruptcy is decided once, at `lifecycle.resolve` (§13).
-- Kernel wallets: `spawn_pool`, `house`, `chronicle` (seeded from `chronicle_budget_usd`; its real spend counts toward the caps).
+- Neither `gate` nor `meter` changes agent status. Bankruptcy is decided once, at `lifecycle.resolve` (§13); a gate denied for the agent's own balance (`insufficient`) flags the agent for that decision, so no agent can sit alive but unable to ever call.
+- Kernel wallets: `spawn_pool`, `house` (seeded from `house_budget_usd`; absorbs overruns and collects fees), `chronicle` (seeded from `chronicle_budget_usd`; its real spend counts toward the caps). An overrun the house cannot cover is booked as `overrun_unfunded` against a `house_debt` counter, so ledger sums still equal the world cost charged. Meter refuses to run inside an open transaction.
+- Rewards, approvals and manual grants are refused for agents that are not alive; a dying agent's pending applications are rejected and its assignments reopened.
 - `transfer`: target alive and awake, not self, `balance_after ≥ min_reserve` (the reserve applies to every voluntary outflow: transfers, endowments, fees).
 
 ### 9.2 Pricing
@@ -362,7 +363,8 @@ Gate pipeline (`gate.propose`):
 4. **runner**: `unshare -Urmpfn --kill-child sh launcher.sh <work> <newroot> -- /usr/bin/python3 -S -B -s -P /work/runner_stub.py <seed> <mode> <params>`; the launcher builds an allow-list root on a tmpfs (read-only binds of `/usr` and `/etc`, the usual `/bin`/`/lib` symlinks, `/proc`, a private `/tmp`, `/dev/null`, and the work dir at `/work`), enters it with `pivot_root`, and execs the *system* Python with `env={PYTHONHASHSEED: "0", PYTHONDONTWRITEBYTECODE: "1", PATH}`; `preexec_fn` sets RLIMIT_CPU/AS/FSIZE(1 MB)/NOFILE(16)/NPROC(8)/CORE(0); run via `asyncio.create_subprocess_exec` under `asyncio.wait_for(timeout_seconds)` and a global concurrency of 1; the stub seeds `random`, installs curated builtins (no `__import__`, `eval`, `exec`, `open`, `getattr`, `setattr`, `delattr`, `globals`, `locals`, `vars`, `type`), redirects stdout/stderr to files, executes the gadget and tests, and writes `/work/result.json`; the kernel parses only `result.json` (≤ 8 KB, strict schema). At startup the runner self-tests; if the self-test fails and `require_isolation` is true, all gadget actions fail with `sandbox_unavailable`;
 5. `describe()` validation: shape ∈ {cube, sphere, pyramid, cylinder, torus}; color `^#[0-9a-f]{6}$`; scale ∈ [0.3, 3]; label `^[A-Za-z0-9][A-Za-z0-9 _'-]{0,23}$`; effect kind ∈ caps table, value clamped to `[0, cap]`; effect kind and value frozen at verification;
 6. `gate_enabled: false` skips step 4's test execution only (records `verified_without_tests=1`);
-7. verified gadgets are placed on a 0.8-unit ring around the proposer (`rng("gadget_place", gadget_id)`), `code_hash`/`test_hash` stored; **every `use_gadget` re-hashes the stored code and refuses on mismatch** (`gadget_tampered`), runs `run(params)` in the sandbox, clamps the returned value to `[0, min(describe_value, cap)]`, and applies a non-stacking max-wins effect for `effect_ticks`; one use per gadget per agent per `effect_ticks`; `use_fee_usd` charged; distance ≤ `gadget_radius`; any agent may use any verified gadget; gadgets persist after the owner dies and are not inherited.
+7. the daily sandbox budget is charged a fixed `cpu_seconds` per run (never measured time, so budgets are machine-independent); a gadget whose stored code no longer matches its verified hash is quarantined as `tampered` before any fee is charged; a proposal that cannot pay its fee does not consume the daily quota;
+8. verified gadgets are placed on a 0.8-unit ring around the proposer (`rng("gadget_place", gadget_id)`), `code_hash`/`test_hash` stored; **every `use_gadget` re-hashes the stored code and refuses on mismatch** (`gadget_tampered`), runs `run(params)` in the sandbox, clamps the returned value to `[0, min(describe_value, cap)]`, and applies a non-stacking max-wins effect for `effect_ticks`; one use per gadget per agent per `effect_ticks`; `use_fee_usd` charged; distance ≤ `gadget_radius`; any agent may use any verified gadget; gadgets persist after the owner dies and are not inherited.
 
 Effects: `forage_bonus` multiplies the user's own forage yield; `weather_shield` reduces the user's weather drain term; `talk_range` adds to the user's talk radius.
 
@@ -373,7 +375,7 @@ Effects: `forage_bonus` multiplies the user's own forage yield; `weather_shield`
 Single end-of-tick evaluation in `lifecycle.resolve()`, in tick order:
 1. births requested by `create_offspring` this tick were applied inside `kernel.apply` (population counter incremented immediately);
 2. for each alive agent with `balance < hold_min(tier)` (or flagged by a metering overrun): `bankrupt(a)` → estate to `spawn_pool` (`estate_out`/`estate_in`), status `bankrupt`, `died_tick`, event `death {cause: gate|overrun}`; then `spawn_replacement` if `population < cap` and `spawn_pool ≥ replacement_grant`: parent chosen with weight `balance + 1000 µ$` among alive agents via `rng("replace", tick, agent)`, child funded by `spawn_grant` from the pool (no parent debit), event `birth {kind: replacement}`; refusals emit `replacement_skipped {reason: cap|pool_empty}`; if no alive agent exists the child is a fresh generation-0 agent from the roster template;
-3. archive: vault → graveyard, paths rewritten, status `archived`.
+3. archive: after the tick commits, vault → graveyard, paths rewritten, status `archived` (a crash in between leaves a recoverable `bankrupt` row, never an alive one with a moved vault). Offspring cannot take a living agent's name; replacement names are made unique; a name that matches several living agents is not a valid target.
 
 `create_offspring` preconditions: `reproduction_enabled`, population < cap, `balance − endowment ≥ min_reserve`, `endowment ≥ min_call_reserve × min_endowment_calls`. Child: tier mutated with `tier_mutation_prob`, seed mutated (traits ± N(0, 0.1); motto from the parent's self summary), position beside parent, remaining weather allowance inherited, top-K notes copied with `channel=inherited`, `self.md` = "Child of <parent>. <first sentence of parent self>".
 
@@ -396,13 +398,19 @@ tick():
   gated = []; for a in order: hold = wallet.hold(tier, obs_tokens); g = wallet.gate(a, tier, hold)
       if g.ok: gated.append(a) else: emit gate_denied; if daily_cap: sleep(a) (fcfs) ...
   if sync_sleep and not headroom: sleep_all
+  for a in gated: kernel.drain_inbox(a)                  # only agents that get a call consume their inbox
   results = await gather(brain(a).decide(obs[a], sampling[a]) for a in gated, return_exceptions=True)
   for a in gated (in order): wallet.meter(...)          # per-call transaction, commits immediately
-  with db.tx():                                          # the tick transaction
+  with db.tx():                                          # transaction 1: decisions applied
      for a in order: decision = result or idle; corrupt if induced; measure; memory.apply_ops; kernel.apply
-     gossip.flush(); lifecycle.resolve(); metrics.record(); snapshot.publish(); clock.save()
+  gossip.flush()                                         # outside any transaction: a paid paraphrase meters itself immediately
+  with db.tx():                                          # transaction 2: world bookkeeping
+     lifecycle.resolve(); probes; metrics.record(); snapshot.publish(); clock.save(); clear tick marker; persist volatile state
+  lifecycle.archive_pending()                            # vault moves to the graveyard only after the commit
   end-of-run checks
 ```
+
+A `tick_in_progress` marker is written before any side effect and cleared with the second transaction; on resume a marker ahead of the clock, or a metered call or ledger row ahead of the clock, marks the run `inconsistent`. Resume also refuses a config hash or seed that differs from the run table. Kernel inbox, last results, failure windows, action histories, probes and scripted-brain bookkeeping are persisted as `world_kv.volatile` inside the second transaction and restored on resume, so a stopped and resumed run is byte-identical to an uninterrupted one (`tests/test_resume.py`). An unexpected exception inside a tick re-syncs the clock and id counter from the database and marks the run `failed`.
 
 ### 14.1 Operator command queue **[v2]**
 HTTP handlers only enqueue (`control_commands`, in-memory queue) and return `{cmd_id, will_apply_at_tick}`. `pause`/`resume`/`step`/`speed` toggle loop-level flags checked between ticks. `step` is valid only while paused and runs exactly one tick.

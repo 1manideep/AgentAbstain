@@ -50,7 +50,7 @@ class ObservationBuilder:
         return micro_to_usd(sum(int(r["world_cost"]) for r in rows) / len(rows))
 
     def _heard(self, agent_id: str) -> list[HeardMessage]:
-        msgs = self.kernel.drain_inbox(agent_id)
+        msgs = self.kernel.peek_inbox(agent_id)
         msgs = list(reversed(msgs))[:HEARD_MAX]  # newest first
         out, used = [], 0
         for m in msgs:

@@ -40,6 +40,16 @@ class TaskBoard:
     def rev(self) -> int:
         return int(self.db.kv_get("tasks_rev", 0))
 
+    def _is_alive(self, agent_id: str) -> bool:
+        return self.db.fetchone("SELECT 1 FROM agents WHERE agent_id=? AND status='alive'", (agent_id,)) is not None
+
+    def drop_agent(self, agent_id: str) -> None:
+        """A dead agent's pending applications are rejected and its assignments reopened."""
+        changed = self.db.execute("UPDATE task_applications SET status='rejected' WHERE agent_id=? AND status='pending'", (agent_id,)).rowcount
+        changed += self.db.execute("UPDATE tasks SET status='open', assigned_agent_id=NULL WHERE assigned_agent_id=? AND status='assigned'", (agent_id,)).rowcount
+        if changed:
+            self._bump()
+
     def post(self, title: str, description: str, reward_usd: float, tick: int, day: int) -> str:
         tid = self.ids.new("tk")
         title = sanitize_text(title, single_line=True, max_len=80)
@@ -78,6 +88,8 @@ class TaskBoard:
             return False, "not_found"
         if task["status"] != "open" or app["status"] != "pending":
             return False, "not_open"
+        if not self._is_alive(app["agent_id"]):
+            return False, "agent_dead"
         with self.db.tx():
             self.db.execute("UPDATE task_applications SET status='approved' WHERE application_id=?", (application_id,))
             self.db.execute("UPDATE task_applications SET status='rejected' WHERE task_id=? AND application_id<>? AND status='pending'", (task_id, application_id))
@@ -93,6 +105,8 @@ class TaskBoard:
         if task["status"] != "assigned" or not task["assigned_agent_id"]:
             return False, "not_assigned"
         agent = task["assigned_agent_id"]
+        if not self._is_alive(agent):
+            return False, "agent_dead"
         with self.db.tx():
             self.db.execute("UPDATE tasks SET status='completed', completed_tick=? WHERE task_id=?", (tick, task_id))
             self.wallet.credit(agent, tick, int(task["reward"]), "task_reward", task_id)

@@ -29,7 +29,7 @@ ACTION_DOCS = {
     "apply_task": "apply for task `target` with pitch `text`; applying costs a fee whether or not you win; list factual claims in `claims`",
     "nudge_weather": "push the weather by `delta` (bounded, decays back; you have a small daily allowance)",
     "propose_gadget": "propose a gadget: `name`, `text` (purpose), `code` (python module with describe() and run(params)), `tests` (assert-based). Costs a fee. Verified gadgets appear in the world.",
-    "use_gadget": "run gadget `target` with numeric `params`; effects are small and temporary",
+    "use_gadget": "run gadget `target` with `params` given as a list of {key, value} pairs (snake_case keys, numbers); effects are small and temporary",
     "create_offspring": "spend `amount_usd` as an endowment to create a child agent named `name` who inherits your outlook and a few memories",
     "sleep": "end your day now to stop spending; you wake tomorrow. One-way.",
     "idle": "do nothing this tick",

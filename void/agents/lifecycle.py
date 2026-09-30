@@ -41,7 +41,8 @@ class Lifecycle:
         self.vault_root = Path(vault_root)
         self.graveyard_root = Path(graveyard_root)
         self.population = registry.count_alive()
-        self.pending_bankrupt: dict[str, str] = {}  # agent_id -> cause flagged during the tick (overrun)
+        self.pending_bankrupt: dict[str, str] = {}  # agent_id -> cause flagged during the tick (overrun, gate)
+        self.pending_archive: list[str] = []  # bankrupt rows whose vault moves to the graveyard after the tick commits
 
     # --- helpers ---------------------------------------------------------------------------------
     def _spawn_position(self, near: Vec2 | None, key: str) -> Vec2:
@@ -80,6 +81,19 @@ class Lifecycle:
     def _init_vault(self, rec: AgentRecord, tick: int, summary: str) -> None:
         self.memory.vault_for(rec.agent_id).ensure()
         self.memory.revise_self(rec.agent_id, tick, summary)
+
+    def _unique_name(self, base: str) -> str:
+        """A name no living agent holds (case-insensitive), within the 20-character limit."""
+        taken = {a.name.lower() for a in self.registry.alive()}
+        if base.lower() not in taken:
+            return base[:20]
+        n = 2
+        while True:
+            suffix = f"-{n}"
+            cand = base[: 20 - len(suffix)] + suffix
+            if cand.lower() not in taken:
+                return cand
+            n += 1
 
     # --- spawns ------------------------------------------------------------------------------------
     def spawn_initial(self, tick: int) -> list[AgentRecord]:
@@ -136,6 +150,8 @@ class Lifecycle:
         p = self.cfg.population
         if not p.reproduction_enabled:
             return ActionOutcome.invalid("create_offspring", "reproduction_disabled")
+        if any(a.name.lower() == name.lower() for a in self.registry.alive()):
+            return ActionOutcome.invalid("create_offspring", "name_taken")
         if self.population >= p.cap:
             return ActionOutcome.stale("create_offspring", "population_cap")
         min_endow = hold_min * p.min_endowment_calls
@@ -161,12 +177,12 @@ class Lifecycle:
             r = self.rng.stream("replace", tick, dead.agent_id)
             weights = [a.balance + 1000 for a in alive]
             parent = r.choices(alive, weights=weights, k=1)[0]
-            name = f"{parent.name[:14]}-{parent.generation + 1}"
+            name = self._unique_name(f"{parent.name[:14]}-{parent.generation + 1}")
             child = self._child_of(parent, name, tick, day, ("spawn_pool", grant, "spawn_grant", "spawn_grant"), "replacement")
         else:
             spec = self.cfg.agents[self.rng.stream("replace", tick).randrange(len(self.cfg.agents))]
             seed = PersonalitySeed.generate(self.rng.stream("seed", "fresh", tick), spec.personality)
-            rec = self._new_record(f"{spec.name[:14]}-new", spec.tier, 0, seed, self._spawn_position(None, f"fresh:{tick}"), tick, 0, None)
+            rec = self._new_record(self._unique_name(f"{spec.name[:14]}-new"), spec.tier, 0, seed, self._spawn_position(None, f"fresh:{tick}"), tick, 0, None)
             child = self._insert(rec, tick, ("spawn_pool", grant, "spawn_grant", "spawn_grant"))
             self._init_vault(child, tick, f"I am {child.name}. {seed.motto} The void was empty when I arrived.")
             self.bus.emit(Event(tick, day, Kind.BIRTH, {"agent_id": child.agent_id, "name": child.name, "tier": child.model_tier, "generation": 0,
@@ -181,14 +197,30 @@ class Lifecycle:
             if estate > 0:
                 self.wallet.transfer(agent.agent_id, "spawn_pool", tick, estate, "estate_out", "estate_in", ref="death", keep_reserve=False)
             self.registry.update(agent.agent_id, status=AgentStatus.BANKRUPT, died_tick=tick, asleep=True)
+            # a dead agent's board entries are withdrawn so rewards can never reach it
+            changed = self.db.execute("UPDATE task_applications SET status='rejected' WHERE agent_id=? AND status='pending'", (agent.agent_id,)).rowcount
+            changed += self.db.execute("UPDATE tasks SET status='open', assigned_agent_id=NULL WHERE assigned_agent_id=? AND status='assigned'", (agent.agent_id,)).rowcount
+            if changed:
+                self.db.kv_set("tasks_rev", int(self.db.kv_get("tasks_rev", 0)) + 1)
         self.population -= 1
         replacement = self.spawn_replacement(agent, tick, day)
         self.bus.emit(Event(tick, day, Kind.DEATH, {"agent_id": agent.agent_id, "name": agent.name, "tier": agent.model_tier,
                                                   "generation": agent.generation, "cause": cause, "estate_usd": micro_to_usd(estate),
                                                   "replacement_id": replacement.agent_id if replacement else None}, agent.agent_id))
-        new_path = self.memory.archive_agent(agent.agent_id, self.graveyard_root)
-        self.registry.update(agent.agent_id, status=AgentStatus.ARCHIVED, memory_path=str(new_path))
+        self.pending_archive.append(agent.agent_id)  # filesystem move happens after the tick commits
         return replacement
+
+    def archive_pending(self) -> list[str]:
+        """Move bankrupt agents' vaults to the graveyard; called outside the tick transaction."""
+        done: list[str] = []
+        for aid in list(self.pending_archive):
+            rec = self.registry.get(aid)
+            if rec is not None and rec.status == AgentStatus.BANKRUPT:
+                new_path = self.memory.archive_agent(aid, self.graveyard_root)
+                self.registry.update(aid, status=AgentStatus.ARCHIVED, memory_path=str(new_path))
+                done.append(aid)
+            self.pending_archive.remove(aid)
+        return done
 
     def resolve(self, tick: int, day: int, order: list[str], hold_min_for: dict[str, int]) -> dict[str, list[str]]:
         """End-of-tick: bankrupt every alive agent that cannot afford its next call, in tick order."""

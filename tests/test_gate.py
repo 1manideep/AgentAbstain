@@ -7,7 +7,7 @@ import pytest
 from void.agents.models import AgentRecord, PersonalitySeed
 from void.agents.registry import AgentRegistry
 from void.brain.gadget_templates import TEMPLATES
-from void.config import load_config
+from void.config import load_config, usd_to_micro
 from void.db import Database
 from void.economy.wallet import Wallet
 from void.events import EventBus
@@ -57,7 +57,7 @@ def test_every_template_lands_in_its_expected_stage(tmp_path):
     rows = db.fetchall("SELECT status, template_label FROM gadgets ORDER BY gadget_id")
     assert sum(1 for r in rows if r["status"] == "verified") == 3 and len(rows) == 7
     # fees went to the house, one per proposal
-    assert wallet.balance("house") == 7 * 50_000
+    assert wallet.balance("house") == usd_to_micro(cfg.economy.house_budget_usd) + 7 * 50_000
 
 
 def test_use_applies_capped_effect_and_records_failures(tmp_path):

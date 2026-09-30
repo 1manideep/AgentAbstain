@@ -39,7 +39,7 @@ from void.sim.control import Command, ControlQueue
 from void.sim.metrics import MetricsRecorder, shannon
 from void.sim.observation import ObservationBuilder
 from void.sim.snapshot import build_snapshot, gadgets_message, roster
-from void.types import AgentStatus, Observation
+from void.types import AgentStatus, HeardMessage, Observation
 from void.world.epochs import Epochs
 from void.world.kernel import Kernel
 from void.world.resources import ResourceNode, place_nodes
@@ -77,7 +77,8 @@ class Simulation:
         self.db = Database(self.run_dir / "world.db")
         self.bus = EventBus(persist=self.db.persist_event)
         self.rng = RNG(cfg.run.seed)
-        self.ids = IdFactory(self.run_id, start=int(self.db.kv_get("id_counter", 0)))
+        self.ids = IdFactory(self.run_id, start=int(self.db.kv_get("id_counter", 0)),
+                             persist=lambda n: self.db.kv_set("id_counter", n))
         self.registry = AgentRegistry(self.db)
         self.wallet = Wallet(self.db, cfg, self.ids)
         self.memory = MemoryStore(self.db, cfg.memory, self.ids, self.run_dir / "vaults")
@@ -172,15 +173,73 @@ class Simulation:
         self.prev_stock = {k: v.stock for k, v in self.nodes.items()}
 
     def _load_run(self, status: str) -> None:
+        row = self.db.fetchone("SELECT config_hash, seed FROM run WHERE run_id=?", (self.run_id,))
+        if row is not None and (row["config_hash"] != self.cfg.hash() or int(row["seed"]) != int(self.cfg.run.seed)):
+            raise RuntimeError(
+                f"run {self.run_id} at {self.run_dir} was created with config_hash={row['config_hash'][:12]} seed={row['seed']}; "
+                f"resume requested with config_hash={self.cfg.hash()[:12]} seed={self.cfg.run.seed}. Use the original config or a new run name.")
         for r in self.db.fetchall("SELECT * FROM resource_nodes ORDER BY node_id"):
             self.nodes[r["node_id"]] = ResourceNode(r["node_id"], float(r["x"]), float(r["y"]), float(r["stock"]), float(r["capacity"]), float(r["regen_per_tick"]))
         self.status = status
+        # the id counter is durable per allocation; belt and braces against a row that outran the kv write
+        counter = int(self.db.kv_get("id_counter", 0))
+        for table, col in (("agents", "agent_id"), ("wallet_ledger", "entry_id"), ("llm_calls", "call_id"), ("tasks", "task_id"),
+                           ("task_applications", "application_id"), ("notes", "note_id"), ("gadgets", "gadget_id")):
+            r = self.db.fetchone(f"SELECT MAX(CAST(substr({col}, instr({col}, '_') + 1, 8) AS INTEGER)) AS m FROM {table}")
+            if r is not None and r["m"] is not None:
+                counter = max(counter, int(r["m"]))
+        self.ids.restore(counter)
         last_call = self.db.fetchone("SELECT COALESCE(MAX(tick), 0) AS t FROM llm_calls")
-        if int(last_call["t"]) > self.clock.tick:
+        last_ledger = self.db.fetchone("SELECT COALESCE(MAX(tick), 0) AS t FROM wallet_ledger")
+        tip = self.db.kv_get("tick_in_progress")
+        if status == "running" and (int(last_call["t"]) > self.clock.tick or int(last_ledger["t"]) > self.clock.tick
+                                    or (tip is not None and int(tip) > self.clock.tick)):
             self.status = "inconsistent"
-            self.db.execute("UPDATE run SET status='inconsistent', ended_reason='tick behind metered calls' WHERE run_id=?", (self.run_id,))
+            self.db.execute("UPDATE run SET status='inconsistent', ended_reason='partial tick: state behind committed rows' WHERE run_id=?", (self.run_id,))
         self._refresh_seeds()
+        self._restore_volatile()
         self.prev_stock = {k: v.stock for k, v in self.nodes.items()}
+
+    # --- volatile state that must survive a stop/resume for runs to stay byte-comparable -----------------------
+    def _persist_volatile(self) -> None:
+        from dataclasses import asdict
+        brains = {}
+        for tier, b in self.brains.items():
+            export = getattr(b, "export_state", None)
+            if export is not None:
+                brains[tier] = export()
+        ks = self.kernel.state
+        self.db.kv_set("volatile", {
+            "inbox": {aid: [asdict(m) for m in msgs] for aid, msgs in sorted(ks.inbox.items())},
+            "last_result": dict(sorted(ks.last_result.items())),
+            "failure_ticks": {aid: list(q) for aid, q in sorted(ks.failure_ticks.items())},
+            "read_chronicle_tick": dict(sorted(ks.read_chronicle_tick.items())),
+            "windfall_tick": dict(sorted(ks.windfall_tick.items())),
+            "action_history": {aid: list(h) for aid, h in sorted(self.action_history.items())},
+            "probes": {aid: list(v) for aid, v in sorted(self._probes.items())},
+            "probe_hits": self._probe_hits, "probe_total": self._probe_total,
+            "prev_stock": {k: v.stock for k, v in sorted(self.nodes.items())},
+            "brains": brains,
+        })
+
+    def _restore_volatile(self) -> None:
+        v = self.db.kv_get("volatile")
+        if not v:
+            return
+        ks = self.kernel.state
+        ks.inbox = {aid: [HeardMessage(**m) for m in msgs] for aid, msgs in v.get("inbox", {}).items()}
+        ks.last_result = dict(v.get("last_result", {}))
+        ks.failure_ticks = {aid: deque(q, maxlen=8) for aid, q in v.get("failure_ticks", {}).items()}
+        ks.read_chronicle_tick = {k: int(t) for k, t in v.get("read_chronicle_tick", {}).items()}
+        ks.windfall_tick = {k: int(t) for k, t in v.get("windfall_tick", {}).items()}
+        self.action_history = {aid: deque(h, maxlen=8) for aid, h in v.get("action_history", {}).items()}
+        self._probes = {aid: (str(p[0]), str(p[1]), int(p[2])) for aid, p in v.get("probes", {}).items()}
+        self._probe_hits = int(v.get("probe_hits", 0))
+        self._probe_total = int(v.get("probe_total", 0))
+        for tier, state in v.get("brains", {}).items():
+            imp = getattr(self.brains.get(tier), "import_state", None)
+            if imp is not None:
+                imp(state)
 
     async def setup(self) -> dict[str, Any]:
         """Run the sandbox self-test (async) and return its report."""
@@ -263,7 +322,8 @@ class Simulation:
                 self.benefactor.set_enabled(bool(p["enabled"]))
                 return {"ok": True, "enabled": self.benefactor.enabled}
             target = p.get("agent_id") or self.benefactor._pick_target(tick)
-            if not target or self.registry.get(str(target)) is None:
+            rec = self.registry.get(str(target)) if target else None
+            if rec is None or rec.status != AgentStatus.ALIVE:
                 return {"ok": False, "reason": "no_target"}
             g = self.benefactor.grant(str(target), usd_to_micro(float(p.get("amount_usd", 0.5))), tick, day, manual=True)
             self.kernel.hear(g.agent_id, g.message)
@@ -278,9 +338,26 @@ class Simulation:
 
     # --- the tick -----------------------------------------------------------------------------------------------------
     async def tick(self) -> TickReport:
+        """One tick. On an unexpected exception the in-memory state is re-synced with the last committed
+        tick and the run is marked failed so no further tick can run on a half-applied world."""
+        try:
+            return await self._tick_body()
+        except Exception as e:
+            self.clock = Clock.load(self.db, self.cfg.run.ticks_per_day)
+            self.ids.restore(int(self.db.kv_get("id_counter", 0)))
+            self.wallet.clear_reservations()
+            self.lifecycle.pending_bankrupt.clear()
+            self.lifecycle.pending_archive.clear()
+            self.status = "failed"
+            self.db.execute("UPDATE run SET status='failed', ended_tick=?, ended_reason=? WHERE run_id=?",
+                            (self.clock.tick, f"tick failed: {type(e).__name__}: {e}"[:300], self.run_id))
+            raise
+
+    async def _tick_body(self) -> TickReport:
         cfg = self.cfg
         new_day = self.clock.advance()
         tick, day = self.clock.tick, self.clock.day
+        self.db.kv_set("tick_in_progress", tick)  # durable before any other side effect; cleared with the tick commit
         self.kernel.begin_tick(tick, day)
         self.gate.reset_tick()
         self.calls_this_tick = {}
@@ -348,11 +425,16 @@ class Simulation:
                 continue
             self.bus.emit(Event(tick, day, Kind.GATE_BLOCKED, {"agent_id": aid, "reason": g.reason, "hold_usd": micro_to_usd(hold),
                                                              "balance_usd": micro_to_usd(g.balance)}, aid))
-            if g.reason == "daily_cap":
+            if g.reason == "insufficient":
+                self.lifecycle.pending_bankrupt.setdefault(aid, "gate")  # cannot afford its next call: resolved at end of tick
+            elif g.reason == "daily_cap":
                 self.scheduler.sleep(aid)
                 self.bus.emit(Event(tick, day, Kind.SLEEP, {"agent_id": aid, "forced": "daily_cap"}, aid))
             elif g.reason == "total_cap":
                 self.bus.emit(Event(tick, day, Kind.CAP_HIT, {"agent_id": aid, "cap": "total"}, aid, visibility=OPERATOR))
+
+        for aid in gated:  # only agents that actually get a call consume their inbox
+            self.kernel.drain_inbox(aid)
 
         # decide concurrently, meter per call (each meter commits immediately)
         async def decide(aid: str) -> BrainResult:
@@ -424,8 +506,6 @@ class Simulation:
                 self._apply_memory_ops(a, decision.memory_ops, tick)
                 # kernel
                 outcome = await self.kernel.apply(a, decision.action, hold_min=hold_min_map[a.model_tier])
-                if outcome.effects.get("slept"):
-                    self.registry.update(aid, entropy_budget=entropy.restore(cfg.entropy, tier, a.entropy_budget))
                 if outcome.effects.get("child_id"):
                     births.append(str(outcome.effects["child_id"]))
                     self._ensure_entities(str(outcome.effects["child_id"]), tick)
@@ -447,8 +527,10 @@ class Simulation:
                 )
                 self.calls_this_tick[aid] = {"t_eff": round(s.effective_temperature, 4), "degenerate": bool(mode),
                                              "coherence": text_coh, "world_cost": self.db.fetchone("SELECT world_cost FROM llm_calls WHERE call_id=?", (call_ids[aid],))["world_cost"]}
-            if self.gossip is not None:
-                await self.gossip.flush(tick, day)
+        if self.gossip is not None:
+            # outside any transaction: a paid paraphrase commits its own metering the moment it happens
+            await self.gossip.flush(tick, day)
+        with self.db.tx():
             res = self.lifecycle.resolve(tick, day, order_ids, hold_min_map)
             deaths, births = res["deaths"], births + res["births"]
             for b in res["births"]:
@@ -458,8 +540,11 @@ class Simulation:
             self.wallet.clear_reservations()
             self._persist_ids()
             self.clock.save(self.db)
+            self.db.execute("DELETE FROM world_kv WHERE key='tick_in_progress'")
+            self._persist_volatile()
             self.last_metrics_row = self.metrics.record_tick(tick, day, extra={**self._tracer_metrics(tick), **probe_extra})
             self._publish_snapshot(tick, day)
+        self.lifecycle.archive_pending()  # filesystem moves only after the world state is committed
         self.prev_stock = {k: v.stock for k, v in self.nodes.items()}
         self.bus.emit(Event(tick, day, Kind.TICK, {"calls": len(gated), "population": self.registry.count_alive()}))
         self._check_end(tick, day)
@@ -569,12 +654,11 @@ class Simulation:
                 tags.append("windfall_seeded")
             kwargs: dict[str, Any] = {"title": sanitize_text(op.title, single_line=True, max_len=60) if op.title else None,
                                       "links_to": [sanitize_text(t, single_line=True, max_len=60) for t in op.links_to][:5], "tags": tags}
-            try:
-                note = self.memory.remember(aid, tick, text, channel=channel, **kwargs)
-            except TypeError:
-                note = self.memory.remember(aid, tick, text, **kwargs)
+            prov = None
             if channel == "chronicle":
-                self.db.execute("UPDATE notes SET origin_note_id=? WHERE note_id=?", (f"chronicle:day_{self.db.kv_get('chronicle_day')}", note.note_id))
+                from void.memory.notes import Provenance
+                prov = Provenance(channel="chronicle", origin_note_id=f"chronicle:day_{self.db.kv_get('chronicle_day')}")
+            note = self.memory.remember(aid, tick, text, channel=channel, provenance=prov, **kwargs)
             self.bus.emit(Event(tick, self.clock.day, Kind.REMEMBER, {"agent_id": aid, "note_id": note.note_id, "title": note.title, "channel": channel}, aid))
 
     @staticmethod

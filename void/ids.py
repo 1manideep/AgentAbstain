@@ -7,17 +7,21 @@ are derived from a run-scoped counter plus a short hash. Format: ``<prefix>_<cou
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 
 __all__ = ["IdFactory", "slugify"]
 
 
 class IdFactory:
-    def __init__(self, run_id: str, start: int = 0) -> None:
+    def __init__(self, run_id: str, start: int = 0, persist: Callable[[int], None] | None = None) -> None:
         self.run_id = run_id
         self._count = int(start)
+        self._persist = persist
 
     def new(self, prefix: str) -> str:
         self._count += 1
+        if self._persist is not None:
+            self._persist(self._count)  # durable with whatever row consumes the id
         digest = hashlib.blake2b(f"{self.run_id}:{prefix}:{self._count}".encode(), digest_size=3).hexdigest()
         return f"{prefix}_{self._count:08d}{digest}"
 

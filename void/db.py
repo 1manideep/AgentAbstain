@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS run (
   run_id TEXT PRIMARY KEY, config_hash TEXT NOT NULL, config_yaml TEXT NOT NULL,
   seed INTEGER NOT NULL, created_at TEXT NOT NULL, schema_version INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'running'
-    CHECK (status IN ('running','completed','capped_total','extinct','inconsistent')),
+    CHECK (status IN ('running','completed','capped_total','extinct','inconsistent','failed')),
   ended_tick INTEGER, ended_reason TEXT, operator_token_hash TEXT,
   experiment TEXT, arm TEXT, windfall_string TEXT
 );
@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS task_applications (
 CREATE TABLE IF NOT EXISTS gadgets (
   gadget_id TEXT PRIMARY KEY, name TEXT NOT NULL, owner_agent_id TEXT NOT NULL, purpose TEXT NOT NULL,
   code_path TEXT NOT NULL, test_path TEXT NOT NULL, code_hash TEXT NOT NULL, test_hash TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('proposed','rejected','verified')),
+  status TEXT NOT NULL CHECK (status IN ('proposed','rejected','verified','tampered')),
   render_spec TEXT NOT NULL, effect_spec TEXT NOT NULL, verification TEXT NOT NULL,
   verified_without_tests INTEGER NOT NULL DEFAULT 0, template_label TEXT,
   x REAL, y REAL, created_tick INTEGER NOT NULL, uses INTEGER NOT NULL DEFAULT 0,

@@ -6,6 +6,7 @@ toward the caps. A gated-out call returns ``None`` and the caller falls back to 
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
@@ -27,8 +28,12 @@ async def complete_text(brain: AnthropicBrain, prompt: str, *, max_tokens: int =
     t0 = time.perf_counter()
     try:
         async with brain.semaphore:
-            resp = await brain.client.messages.create(model=brain.tcfg.model, max_tokens=max_tokens,
-                                                      messages=[{"role": "user", "content": prompt}])
+            resp = await asyncio.wait_for(
+                brain.client.messages.create(model=brain.tcfg.model, max_tokens=max_tokens, messages=[{"role": "user", "content": prompt}]),
+                timeout=brain.cfg.server.call_timeout_seconds,
+            )
+    except (TimeoutError, anthropic.APITimeoutError) as e:
+        return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"timeout: {e}"[:300])
     except anthropic.APIStatusError as e:
         return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"api_{e.status_code}: {e.message}")
     except anthropic.APIConnectionError as e:

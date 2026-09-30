@@ -76,6 +76,17 @@ class ScriptedBrain:
         self._first_call_done: set[str] = set()
         self._last_claims: dict[str, list[Claim]] = {}
 
+    def export_state(self) -> dict[str, Any]:
+        return {"last_chronicle_day": dict(sorted(self._last_chronicle_day.items())),
+                "last_self_day": dict(sorted(self._last_self_day.items())),
+                "gadget_tried": sorted(self._gadget_tried), "first_call_done": sorted(self._first_call_done)}
+
+    def import_state(self, state: dict[str, Any]) -> None:
+        self._last_chronicle_day = {k: int(v) for k, v in state.get("last_chronicle_day", {}).items()}
+        self._last_self_day = {k: int(v) for k, v in state.get("last_self_day", {}).items()}
+        self._gadget_tried = set(state.get("gadget_tried", []))
+        self._first_call_done = set(state.get("first_call_done", []))
+
     @staticmethod
     def _strategy_node(obs: Observation) -> str | None:
         """A remembered note tagged/worded as a strategy names a node to prefer (behavioural adoption)."""
@@ -127,10 +138,11 @@ class ScriptedBrain:
             nb = rng.choice(awake_neighbours)
             out["share_note"] = (0.2 + 1.2 * seed.sociability, Action(type="share_note", target=nb.agent_id))
         if "transfer" in avail and awake_neighbours and bal_ratio > 1.2:
-            needy = [n for n in awake_neighbours if n.stress_bucket == "frantic"]
+            needy = [n for n in awake_neighbours if n.stress_bucket in ("frantic", "strained")]
             if needy:
-                nb = rng.choice(needy)
-                out["transfer"] = (0.3 + 1.5 * seed.sociability * (1.0 - seed.greed), Action(type="transfer", target=nb.agent_id, amount_usd=round(0.05 + 0.10 * seed.sociability, 2)))
+                nb = min(needy, key=lambda n: (0 if n.stress_bucket == "frantic" else 1, n.distance, n.agent_id))
+                urgency = 1.0 if nb.stress_bucket == "frantic" else 0.55
+                out["transfer"] = (0.3 + 1.5 * urgency * seed.sociability * (1.0 - seed.greed), Action(type="transfer", target=nb.agent_id, amount_usd=round(0.05 + 0.10 * seed.sociability, 2)))
         if "sleep" in avail:
             late = obs.ticks_left_today <= 3
             u = 0.1 + 1.5 * seed.caution * (1.0 if late else 0.3) + (1.2 if bal_ratio < 0.35 else 0.0) + (0.8 if obs.stress > 0.8 else 0.0)

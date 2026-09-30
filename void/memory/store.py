@@ -76,6 +76,14 @@ _NOTE_COLUMNS = (
 )
 
 
+def _clean_title(title: str) -> str:
+    """Strip characters that would make ``[[title]]`` unparseable ('[', ']', '|', '#')."""
+    import re as _re
+
+    cleaned = " ".join(_re.sub(r"[\[\]|#]", " ", title).split())
+    return cleaned or DEFAULT_TITLE
+
+
 class MemoryStore:
     def __init__(
         self,
@@ -127,7 +135,7 @@ class MemoryStore:
             note = Note(
                 note_id=self.ids.new("note"),
                 agent_id=agent_id,
-                title=self._unique_title(agent_id, (title or "").strip() or self._derive_title(text)),
+                title=self._unique_title(agent_id, _clean_title((title or "").strip() or self._derive_title(text))),
                 body=body,
                 created_tick=int(tick),
                 importance=float(importance),
@@ -545,9 +553,9 @@ class MemoryStore:
         target.body = new_body
         target.links = parse_wikilinks(new_body)
         self.vault_for(target.agent_id).write_note(target)
-        self.db.execute(
-            "INSERT OR IGNORE INTO note_links(from_note_id, to_title) VALUES(?,?)", (target.note_id, added[0])
-        )
+        # the index only ever holds links the file itself expresses
+        for link in target.links:
+            self.db.execute("INSERT OR IGNORE INTO note_links(from_note_id, to_title) VALUES(?,?)", (target.note_id, link))
         return True
 
     def _unique_title(self, agent_id: str, title: str) -> str:

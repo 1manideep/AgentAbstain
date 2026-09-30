@@ -14,6 +14,7 @@ from void.events import Event, EventBus
 from void.ids import IdFactory
 from void.types import AgentStatus, Vec2
 
+HOUSE0 = 1_000_000  # economy.house_budget_usd default
 FEE = usd_to_micro(0.02)
 RESERVE = usd_to_micro(0.50)
 
@@ -45,7 +46,7 @@ def test_post_apply_and_duplicate(board):
     long_pitch = "I will \x00do it <fast>. " + "x" * 400
     res = tb.apply("ag_0", tid, long_pitch, tick=2, day=1)
     assert res.ok and res.application_id and res.application_id.startswith("ap_")
-    assert wallet.balance("ag_0") == 1_500_000 - FEE and wallet.balance("house") == FEE
+    assert wallet.balance("ag_0") == 1_500_000 - FEE and wallet.balance("house") == HOUSE0 + FEE
     assert wallet.ledger_sum(kind="pitch_fee", wallet_id="ag_0") == -FEE and wallet.ledger_sum(kind="pitch_fee", wallet_id="house") == FEE
     row = db.fetchone("SELECT pitch, fee, status FROM task_applications WHERE application_id=?", (res.application_id,))
     assert len(row["pitch"]) == 280 and row["pitch"].startswith("I will do it ＜fast＞. ") and "\x00" not in row["pitch"]
@@ -64,14 +65,14 @@ def test_approve_rejects_others_keeps_fees_and_complete_pays(board):
     tid = tb.post("Build a horn", "", 0.50, tick=1, day=1)
     a0 = tb.apply("ag_0", tid, "me", 2, 1).application_id
     a1 = tb.apply("ag_1", tid, "no, me", 2, 1).application_id
-    assert wallet.balance("house") == 2 * FEE
+    assert wallet.balance("house") == HOUSE0 + 2 * FEE
     assert tb.approve(tid, "ap_missing", 3, 1) == (False, "not_found")
     assert tb.approve(tid, a1, 3, 1) == (True, "ok")
     statuses = {r["application_id"]: r["status"] for r in db.fetchall("SELECT application_id, status FROM task_applications")}
     assert statuses == {a0: "rejected", a1: "approved"}
     task = db.fetchone("SELECT status, assigned_agent_id FROM tasks WHERE task_id=?", (tid,))
     assert task["status"] == "assigned" and task["assigned_agent_id"] == "ag_1" and tb.open_ids() == []
-    assert wallet.balance("house") == 2 * FEE and wallet.balance("ag_0") == 1_500_000 - FEE  # fees are never refunded
+    assert wallet.balance("house") == HOUSE0 + 2 * FEE and wallet.balance("ag_0") == 1_500_000 - FEE  # fees are never refunded
     assert events[-1].kind == "task_assigned" and events[-1].payload["application_id"] == a1
     assert tb.approve(tid, a0, 4, 1) == (False, "not_open")
     assert tb.apply("ag_0", tid, "late", 4, 1).reason == "task_not_open"
@@ -94,7 +95,7 @@ def test_cancel_and_view_for(board):
     assert tb.cancel(tid, 3, 1) == (True, "ok")
     assert db.fetchone("SELECT status FROM tasks WHERE task_id=?", (tid,))["status"] == "cancelled"
     assert db.fetchone("SELECT status FROM task_applications WHERE task_id=?", (tid,))["status"] == "rejected"
-    assert tb.cancel(tid, 3, 1) == (False, "not_cancellable") and wallet.balance("house") == FEE
+    assert tb.cancel(tid, 3, 1) == (False, "not_cancellable") and wallet.balance("house") == HOUSE0 + FEE
     assert tb.view_for("ag_0") == []  # cancelled tasks are not shown
     open1 = tb.post("Open one", "", 0.20, 4, 1)
     open2 = tb.post("Open two", "", 0.25, 4, 1)

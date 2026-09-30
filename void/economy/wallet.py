@@ -75,7 +75,8 @@ class Wallet:
         self._reserved_total = 0
         for key, initial in (("spend_today", 0), ("spend_total", 0),
                              ("spawn_pool", usd_to_micro(cfg.population.spawn_pool_usd)),
-                             ("house", 0), ("chronicle", usd_to_micro(cfg.economy.chronicle_budget_usd))):
+                             ("house", usd_to_micro(cfg.economy.house_budget_usd)),
+                             ("chronicle", usd_to_micro(cfg.economy.chronicle_budget_usd)), ("house_debt", 0)):
             if db.kv_get(key) is None:
                 db.kv_set(key, initial)
 
@@ -194,18 +195,23 @@ class Wallet:
     def meter(self, wallet_id: str, tier: TierConfig, usage: Usage | None, tick: int, ref: str, hold: int,
               *, purpose: str = "decide") -> MeterResult:
         """Charge a finished call. ``usage=None`` means unknown: the hold is charged as an estimate."""
+        if self.db._depth != 0:
+            raise RuntimeError("Wallet.meter must run outside a transaction so the real-money record commits immediately")
         self.release(hold)
         estimated = usage is None
         if usage is None:
             real = world = hold
         else:
-            real = real_cost_micro(usage, tier)
-            world = world_cost_micro(usage, tier, self.cfg.economy)
+            real = real_cost_micro(usage, tier, self.cfg.tiers)
+            world = world_cost_micro(usage, tier, self.cfg.economy, self.cfg.tiers)
         kind = {"decide": "llm_call", "gossip": "gossip_call", "chronicle": "chronicle_call"}.get(purpose, "llm_call")
         payload = {"real_cost": real, "world_cost": world, "estimated": int(estimated)}
         if usage is not None:
             payload.update({"in": usage.input_tokens, "out": usage.output_tokens,
                             "cr": usage.cache_read_tokens, "cw": usage.cache_write_tokens})
+            if len(usage.attempts) > 1 or (usage.attempts and usage.attempts[0][0] not in ("", tier.model)):
+                payload["attempts"] = [{"model": m, "in": a.input_tokens, "out": a.output_tokens, "cr": a.cache_read_tokens,
+                                        "cw": a.cache_write_tokens} for m, a in usage.attempts]
         with self.db.tx():
             bal = self.balance(wallet_id)
             charged = min(world, bal)
@@ -219,9 +225,15 @@ class Wallet:
                     self._set_balance("house", house - overrun)
                     self._ledger("house", tick, -overrun, house - overrun, "overrun", ref, {"agent": wallet_id})
                 else:
-                    # the house is empty: record the liability so the books still balance
-                    self._set_balance("house", 0)
-                    self._ledger("house", tick, -house, 0, "overrun", ref, {"agent": wallet_id, "unfunded": overrun - house})
+                    # the house cannot cover it: drain the house and book the remainder as kernel debt,
+                    # a first-class ledger amount so ledger sums still equal the world cost charged
+                    if house > 0:
+                        self._set_balance("house", 0)
+                        self._ledger("house", tick, -house, 0, "overrun", ref, {"agent": wallet_id})
+                    unfunded = overrun - house
+                    debt = int(self.db.kv_get("house_debt", 0)) + unfunded
+                    self.db.kv_set("house_debt", debt)
+                    self._ledger("house", tick, -unfunded, -debt, "overrun_unfunded", ref, {"agent": wallet_id})
             self.db.kv_set("spend_today", self.spend_today + real)
             self.db.kv_set("spend_total", self.spend_total + real)
         return MeterResult(real_cost=real, world_cost=world, balance_after=new_bal, overrun=overrun, estimated=estimated)
@@ -257,7 +269,8 @@ class Wallet:
     def money_snapshot(self) -> dict[str, int]:
         agents = int(self.db.fetchone("SELECT COALESCE(SUM(balance),0) AS s FROM agents")["s"])
         return {"agents": agents, "spawn_pool": self.balance("spawn_pool"), "house": self.balance("house"),
-                "chronicle": self.balance("chronicle"), "spend_today": self.spend_today, "spend_total": self.spend_total}
+                "house_debt": int(self.db.kv_get("house_debt", 0)), "chronicle": self.balance("chronicle"),
+                "spend_today": self.spend_today, "spend_total": self.spend_total}
 
     def totals(self) -> dict[str, int]:
         return {"spend_today": self.spend_today, "spend_total": self.spend_total, "spawn_pool": self.spawn_pool,
