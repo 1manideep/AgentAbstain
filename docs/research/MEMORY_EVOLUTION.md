@@ -48,7 +48,7 @@
 
 **What we would test** (section 4): eight hypotheses, from "does self-directed memory help at equal compute" to "do policy files become a persistence channel for injected instructions".
 
-**Cost and time.** About **$1.6k** on the cheap tier for the full programme, about **$2.5k** with one replication on a second model family, about **$3.2k** with a 30% contingency. About **26 weeks**, assuming Claude implements and you spend 15 to 20 hours a week on decisions, review, practice coding and analysis `[assumption]`, with a go/no-go gate at week 8 (Figure 9).
+**Cost and time.** Do not commit the full budget up front. Nothing is paid before the first gate except a small live smoke test (about $20). The pilot that decides whether to continue costs about **$70**. The **minimum credible paper** (E1, a two-arm E2, the transplant test E5, and a second-family replication) costs about **$650**. The full programme is about **$1.6k** on cheap tiers, **$2.5k** with a second-family replication, **$3.2k** with contingency, and is released only if the earlier results justify it (section 10.4). Elapsed time: about 26 weeks for the full plan, assuming Claude implements and you spend 15 to 20 hours a week on decisions, review, practice coding and analysis `[assumption]`. The *thin slice* below cuts the time to the first decision from 8 weeks to about 4.
 
 **The five things that could sink it** (section 8 has all of them):
 1. Someone has already published the ecological-selection version. Mitigation: the systematic review, first.
@@ -633,6 +633,26 @@ Effort is *human-equivalent focused days* `[assumption]`, to compare packages. W
 
 Check, in order: does the fog make memory necessary (amnesic control)? Does the model produce valid commands? Is the maintenance feedback too thin (`F2`)? Is the horizon too short for a policy to pay back its cost? Is the weak tier the problem (`sharp`)? A null after all five is a result about whether agent-authored practice beats a fixed scaffold at equal compute, and it is worth reporting.
 
+### 10.4 Staged spend: what buys what `[proposed]`
+
+The goal is a small number of credible, honestly reported results and public artifacts, not volume. The build is the same size whatever the budget, so the saving is in *when* money is released and *what* is built before the first gate.
+
+**The thin slice (before G1, about 4 weeks elapsed).** Build only what the first decision needs: fog and claim feedback (WP2); the six commands, written *through the store* so provenance cannot be forged and the manifest and reindex hardening can wait until files are editable outside the store (WP3); the policy file (WP4); the maintenance step (WP5); prompt logging (the cheap part of WP0); the amnesic switch; and a minimal audit exam with three question types. Skip until G1 passes: the control-room views, the MCP wrapper, the real embedder, the research pool and reward arms, the inheritance operators and `share_practice`, and the Parquet polish.
+
+| Stage | What is built and run | Cost | Time | Release condition |
+|---|---|---|---|---|
+| **S0** | Literature review (3.6); thin slice; E0 controls on scripted brains | $0 | about 4 weeks | none |
+| **S1** | Live smoke test, 3 seeds; then the E1 pilot at 10 seeds (4 arms) | about $20, then about $70 | about 2 weeks | S0 done and the review found no fatal overlap |
+| **S2, the minimum credible paper** | E1 at 20 seeds ($139); E2 with arms A and B only ($78); E5 transplant ($100); E1 replication on Claude Haiku 4.5 at 10 seeds ($249); 15% exam overhead ($85) | about **$650** | about 8 weeks | **G1 passed** |
+| **S3** | E4 capability ladder ($284); E7 persistence channel ($78); E2 arm C ($39); 15% exam overhead ($60) | about $450 | about 8 weeks | S2 shows an effect worth extending |
+| **S4** | E3 ratchet at 42 days ($465); E8 control levels ($94); replication of E2 on a second family ($417); 15% exam overhead ($146) | about $1,100 | about 8 weeks | S3 positive, or a collaborator or credits fund it |
+
+The stages sum to roughly the full programme in 6.12. Small differences come from seed counts on the replications and from pilot seeds being reused in S2.
+
+**Ways to lower the bill further** (each `[assumption]`, to check): apply for API credits through research-access programmes the model providers run; add a collaborator whose institution has compute or cloud credits; run the replication on a cheaper second family; reduce seeds from 20 to 15 for the primary comparisons (Figure 4: 15 seeds gives 80% power for a large effect with the t-test, but not with the sign test).
+
+**What to expect from S2.** A paper with one clean comparison (does agent-authored memory beat an equal-compute control), a causal test (transplant), a Goodhart test (proxy reward), and a replication on a second family. That is a credible workshop paper. It is a main-track paper only if the effect is large and the writing and framing are strong. If E1 is null, the honest write-up is a negative result, which is worth less as a signal but costs little to produce because most of the work is already done.
+
 ---
 
 ## 11. The industry framing
@@ -671,6 +691,7 @@ Each has my default. Reply with numbers and changes; I will update the document.
 | 12 | Collaborators | add a statistician or a safety researcher for E7 | Yes, one of each if you can |
 | 13 | Time assumption | 15 to 20 hours a week from you | Confirm or correct; the roadmap scales with it |
 | 14 | Review first | do the systematic review (3.6) before building WP3 onward | Yes. Two weeks, and it can kill or reshape the plan cheaply |
+| 15 | Spend release | full budget up front, staged by gates, or staged with the thin slice | Staged with the thin slice (10.4). You commit about $90 before G1 and the rest only if results justify it |
 
 ---
 
