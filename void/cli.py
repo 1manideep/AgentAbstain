@@ -160,8 +160,14 @@ def cmd_schema(args: argparse.Namespace) -> int:
     return 0
 
 
-async def record_feed(cfg: VoidConfig, run_dir: Path, ticks: int, *, seed: int | None = None) -> list[dict[str, Any]]:
-    """Run a real simulation for ``ticks`` ticks through the hub and return the messages a socket would get."""
+async def record_feed(cfg: VoidConfig, run_dir: Path, ticks: int, *, seed: int | None = None,
+                      api_dump: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Run a real simulation for ``ticks`` ticks through the hub and return the messages a socket would get.
+
+    When ``api_dump`` is given it is filled with the /api responses (agents, tree, graveyard, gadgets, tasks)
+    so the frontend's fixture mode can answer detail requests offline.
+    """
+    from void.server.api import build_agent_detail, build_graveyard, build_tree
     from void.server.protocol import parse_message
     from void.server.ws import Hub, Subscriber, SyntheticClock
     from void.sim.loop import Simulation
@@ -188,6 +194,14 @@ async def record_feed(cfg: VoidConfig, run_dir: Path, ticks: int, *, seed: int |
             sim.metrics.close()
         await hub.flush()
         out.extend(sub.drain())
+        if api_dump is not None:
+            api_dump.clear()
+            api_dump.update({
+                "run_id": sim.run_id,
+                "agents": {a.agent_id: build_agent_detail(sim, a.agent_id) for a in sim.registry.all()},
+                "tree": build_tree(sim), "graveyard": build_graveyard(sim),
+                "gadgets": hub.gadgets_message(), "tasks": {"type": "tasks", "rev": sim.taskboard.rev, "items": sim.taskboard.snapshot()},
+            })
     finally:
         await hub.stop()
         sim.db.close()
@@ -206,11 +220,15 @@ def cmd_mock_feed(args: argparse.Namespace) -> int:
     cfg = load_config(_resolve(args.config), _run_overrides(seed=args.seed, days=days, tick_seconds=0.0, name="mock_feed"))
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
+    api_dump: dict[str, Any] = {}
     with tempfile.TemporaryDirectory(prefix="void-mock-feed-") as tmp:
-        messages = asyncio.run(record_feed(cfg, Path(tmp) / "run", ticks))
+        messages = asyncio.run(record_feed(cfg, Path(tmp) / "run", ticks, api_dump=api_dump))
     with out.open("w", encoding="utf-8") as f:
         for m in messages:
             f.write(json.dumps(m, separators=(",", ":"), sort_keys=True) + "\n")
+    api_path = out.with_name("api.json")
+    api_path.write_text(json.dumps(api_dump, separators=(",", ":"), sort_keys=True, default=str), encoding="utf-8")
+    print(f"wrote {api_path} ({len(api_dump.get('agents', {}))} agents)")
     kinds: dict[str, int] = {}
     for m in messages:
         kinds[m["type"]] = kinds.get(m["type"], 0) + 1

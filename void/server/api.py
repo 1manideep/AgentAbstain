@@ -94,12 +94,11 @@ async def state(request: Request) -> dict[str, Any]:
 
 
 # --- agents --------------------------------------------------------------------------------------------------
-@router.get("/agents/{agent_id}")
-async def agent_detail(agent_id: str, request: Request) -> dict[str, Any]:
-    sim = _sim(request)
+def build_agent_detail(sim: Any, agent_id: str) -> dict[str, Any] | None:
+    """The /api/agents/{id} payload; shared by the route and the fixture recorder."""
     rec = sim.registry.get(agent_id)
     if rec is None:
-        raise HTTPException(status_code=404, detail="unknown agent")
+        return None
     db = sim.db
     calls_rows = db.fetchall(
         "SELECT tick, purpose, effective_temperature, text_coherence, world_cost, real_cost, degenerate_induced, "
@@ -126,6 +125,14 @@ async def agent_detail(agent_id: str, request: Request) -> dict[str, Any]:
     notes = [_note_summary(n) for n in sim.memory.list_notes(agent_id, include_archived=True)]
     return {"agent": _agent_record(rec), "self_summary": self_summary, "self_versions": sim.memory.self_history(agent_id),
             "notes": notes, "calls": calls, "balance_series": balance_series, "children": children}
+
+
+@router.get("/agents/{agent_id}")
+async def agent_detail(agent_id: str, request: Request) -> dict[str, Any]:
+    detail = build_agent_detail(_sim(request), agent_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="unknown agent")
+    return detail
 
 
 @router.get("/agents/{agent_id}/notes/{note_id}")
@@ -212,9 +219,8 @@ async def snapshots(request: Request, since_tick: int = Query(default=0, ge=-1),
 
 
 # --- lineage / graveyard / boards --------------------------------------------------------------------------
-@router.get("/tree")
-async def tree(request: Request) -> dict[str, Any]:
-    rows = _sim(request).registry.family_tree()
+def build_tree(sim: Any) -> dict[str, Any]:
+    rows = sim.registry.family_tree()
     nodes: dict[str, dict[str, Any]] = {}
     for r in rows:
         nodes[str(r["agent_id"])] = {
@@ -230,9 +236,13 @@ async def tree(request: Request) -> dict[str, Any]:
     return {"roots": roots, "count": len(rows)}
 
 
-@router.get("/graveyard")
-async def graveyard(request: Request) -> dict[str, Any]:
-    db = _sim(request).db
+@router.get("/tree")
+async def tree(request: Request) -> dict[str, Any]:
+    return build_tree(_sim(request))
+
+
+def build_graveyard(sim: Any) -> dict[str, Any]:
+    db = sim.db
     counts = {r["parent_id"]: int(r["n"]) for r in db.fetchall(
         "SELECT parent_id, COUNT(*) AS n FROM agents WHERE parent_id IS NOT NULL GROUP BY parent_id")}
     causes: dict[str, str | None] = {}
@@ -249,6 +259,11 @@ async def graveyard(request: Request) -> dict[str, Any]:
         "balance_usd": round(micro_to_usd(int(r["balance"] or 0)), 6), "children": counts.get(r["agent_id"], 0),
         "cause": causes.get(str(r["agent_id"])),
     } for r in rows]}
+
+
+@router.get("/graveyard")
+async def graveyard(request: Request) -> dict[str, Any]:
+    return build_graveyard(_sim(request))
 
 
 @router.get("/gadgets")
