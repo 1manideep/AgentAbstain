@@ -1,0 +1,17 @@
+# Live run with real Claude models on two tiers plus scripted controls.
+# Requires ANTHROPIC_API_KEY (or an `ant auth login` profile). Spend is capped by economy.*.
+extends: base.yaml
+run:
+  name: live_two_tier
+  days: 5
+  tick_seconds: 2
+agents:
+  - {name: Ada,   tier: frontier}
+  - {name: Bao,   tier: frontier}
+  - {name: Cyra,  tier: budget}
+  - {name: Dev,   tier: budget}
+  - {name: Enzo,  tier: scripted}
+  - {name: Faye,  tier: scripted}
+economy:
+  daily_cap_usd: 3.00
+  total_cap_usd: 15.00

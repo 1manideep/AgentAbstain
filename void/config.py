@@ -1,0 +1,300 @@
+"""Run configuration: typed, validated, hashable.
+
+A run is a pure function of ``(VoidConfig, seed)``. The resolved config is stored in the
+run's database together with its hash so two runs can be proven comparable.
+
+YAML files may declare ``extends: <relative path>``; the child is deep-merged over the
+parent. Experiment configs use this so that they differ from ``base.yaml`` only in the
+independent variable they test.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any, Literal
+
+import yaml
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+__all__ = ["VoidConfig", "TierConfig", "load_config", "usd_to_micro", "micro_to_usd", "MICRO"]
+
+MICRO = 1_000_000
+
+
+def usd_to_micro(usd: float) -> int:
+    return int(round(usd * MICRO))
+
+
+def micro_to_usd(micro: int) -> float:
+    return micro / MICRO
+
+
+class StrictModel(BaseModel):
+    model_config = {"extra": "forbid"}
+
+
+class RunConfig(StrictModel):
+    name: str = "baseline"
+    seed: int = 42
+    days: int = 10
+    ticks_per_day: int = 24
+    tick_seconds: float = 0.0
+    data_dir: str = "data/runs"
+    snapshot_ring: int = 600
+
+
+class WeatherConfig(StrictModel):
+    baseline: float = 0.0
+    nudge_cap_per_agent_day: float = 0.1
+    decay_per_tick: float = 0.10
+    yield_sensitivity: float = 0.5
+    bounds: tuple[float, float] = (-1.0, 1.0)
+
+
+class WorldConfig(StrictModel):
+    size: float = 60.0
+    max_speed: float = 2.0
+    talk_radius: float = 4.0
+    forage_radius: float = 1.5
+    resource_nodes: int = 6
+    node_capacity: float = 40.0
+    node_regen_per_tick: float = 0.4
+    forage_yield_usd: float = 0.02
+    forage_units_per_tick: float = 1.0
+    scarcity: float = 1.0
+    weather: WeatherConfig = WeatherConfig()
+    effect_ticks: int = 12
+    effect_caps: dict[str, float] = Field(
+        default_factory=lambda: {"forage_bonus": 0.5, "weather_shield": 0.5, "talk_range": 2.0}
+    )
+
+
+class PopulationConfig(StrictModel):
+    initial: int = 6
+    cap: int = 12
+    min_reserve_usd: float = 0.50
+    spawn_pool_usd: float = 5.00
+    replacement_grant_usd: float = 0.75
+    starting_balance_usd: float = 1.50
+    tier_mutation_prob: float = 0.10
+    min_endowment_calls: int = 4
+
+
+class EconomyConfig(StrictModel):
+    daily_cap_usd: float = 3.00
+    total_cap_usd: float = 25.00
+    daily_cap_policy: Literal["fcfs", "sync_sleep"] = "fcfs"
+    pitch_fee_usd: float = 0.02
+    min_call_reserve_usd: float = 0.05
+    chronicle_budget_usd: float = 0.50
+
+
+class TierConfig(StrictModel):
+    provider: Literal["anthropic", "scripted"]
+    model: str
+    price_in_per_mtok: float
+    price_out_per_mtok: float
+    price_cache_read_per_mtok: float = 0.0
+    price_cache_write_per_mtok: float = 0.0
+    supports_temperature: bool = False
+    refusal_fallbacks: bool = True
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "low"
+    architecture: Literal["dense", "moe"] = "dense"
+    collapse_temperature: float = 1.80
+    max_temperature: float = 2.00
+    entropy_budget_max: float = 100.0
+    max_tokens: int = 2048
+    color: str = "#a0aec0"
+
+    @model_validator(mode="after")
+    def _check_temps(self) -> TierConfig:
+        if not (0.0 < self.collapse_temperature <= self.max_temperature):
+            raise ValueError("require 0 < collapse_temperature <= max_temperature")
+        return self
+
+
+class AgentSpec(StrictModel):
+    name: str
+    tier: str
+    personality: dict[str, float] | None = None
+
+
+class EntropyDrainConfig(StrictModel):
+    baseline: float = 1.0
+    low_balance: float = 6.0
+    failed_action: float = 4.0
+    crowding: float = 0.5
+    weather: float = 2.0
+    hunger: float = 3.0
+    hunger_ticks: int = 6
+
+
+class DegenerationConfig(StrictModel):
+    p_at_collapse: float = 0.15
+    p_at_max: float = 0.90
+    mode_weights: dict[str, float] = Field(
+        default_factory=lambda: {"random_action": 0.4, "perseverate": 0.3, "garble": 0.3}
+    )
+
+
+class EntropyConfig(StrictModel):
+    base_temperature: float = 0.7
+    drain: EntropyDrainConfig = EntropyDrainConfig()
+    restore_on_sleep: float = 1.0
+    degeneration: DegenerationConfig = DegenerationConfig()
+
+
+class MemoryConfig(StrictModel):
+    embedding_dim: int = 256
+    entry_k: int = 4
+    hops: int = 2
+    hop_decay: float = 0.6
+    max_retrieved: int = 8
+    mode: Literal["graph", "vector"] = "graph"
+    inherit_top_k: int = 3
+    self_max_words: int = 60
+    note_max_chars: int = 600
+    recency_half_life_ticks: int = 96
+
+
+class GossipConfig(StrictModel):
+    enabled: bool = True
+    share_probability_on_talk: float = 0.35
+    paraphrase: Literal["scripted", "llm"] = "scripted"
+    mutation_rate: float = 0.15
+
+
+class ChronicleConfig(StrictModel):
+    enabled: bool = True
+    writer: Literal["template", "llm"] = "template"
+
+
+class SandboxConfig(StrictModel):
+    enabled: bool = True
+    gate_enabled: bool = True
+    runner: Literal["subprocess", "disabled"] = "subprocess"
+    cpu_seconds: int = 2
+    memory_mb: int = 256
+    timeout_seconds: float = 5.0
+    max_code_bytes: int = 8000
+    max_output_bytes: int = 8192
+    gadget_fee_usd: float = 0.05
+    require_network_isolation: bool = False
+
+
+class BenefactorConfig(StrictModel):
+    enabled: bool = False
+    mean_interval_ticks: int = 40
+    amount_usd: tuple[float, float] = (0.25, 1.00)
+    targeting: Literal["random", "poorest", "richest"] = "random"
+    start_day: int = 1
+    stop_day: int | None = None
+
+
+class EpochConfig(StrictModel):
+    day: int
+    kind: str = "epoch"
+    scarcity: float | None = None
+    weather_baseline: float | None = None
+    duration_days: int = 1
+    windfall_usd: float | None = None
+
+
+class ServerConfig(StrictModel):
+    host: str = "127.0.0.1"
+    port: int = 8000
+    max_concurrent_calls: int = 4
+
+
+class VoidConfig(StrictModel):
+    run: RunConfig = RunConfig()
+    world: WorldConfig = WorldConfig()
+    population: PopulationConfig = PopulationConfig()
+    economy: EconomyConfig = EconomyConfig()
+    tiers: dict[str, TierConfig]
+    agents: list[AgentSpec]
+    entropy: EntropyConfig = EntropyConfig()
+    memory: MemoryConfig = MemoryConfig()
+    gossip: GossipConfig = GossipConfig()
+    chronicle: ChronicleConfig = ChronicleConfig()
+    sandbox: SandboxConfig = SandboxConfig()
+    benefactor: BenefactorConfig = BenefactorConfig()
+    epochs: list[EpochConfig] = Field(default_factory=list)
+    server: ServerConfig = ServerConfig()
+
+    @field_validator("tiers")
+    @classmethod
+    def _non_empty_tiers(cls, v: dict[str, TierConfig]) -> dict[str, TierConfig]:
+        if not v:
+            raise ValueError("at least one tier is required")
+        return v
+
+    @model_validator(mode="after")
+    def _agents_reference_tiers(self) -> VoidConfig:
+        for a in self.agents:
+            if a.tier not in self.tiers:
+                raise ValueError(f"agent {a.name!r} references unknown tier {a.tier!r}")
+        if self.population.cap < len(self.agents):
+            raise ValueError("population.cap must be >= number of initial agents")
+        if self.population.initial != len(self.agents):
+            self.population.initial = len(self.agents)
+        return self
+
+    # --- helpers -------------------------------------------------------------------------
+    def canonical_json(self) -> str:
+        return json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+
+    def hash(self) -> str:
+        return hashlib.sha256(self.canonical_json().encode()).hexdigest()
+
+    def to_yaml(self) -> str:
+        return yaml.safe_dump(self.model_dump(mode="json"), sort_keys=True)
+
+    def public_subset(self) -> dict[str, Any]:
+        """What the renderer is told about the run (no prices, no thresholds)."""
+        return {
+            "name": self.run.name,
+            "seed": self.run.seed,
+            "days": self.run.days,
+            "ticks_per_day": self.run.ticks_per_day,
+            "tick_seconds": self.run.tick_seconds,
+            "world_size": self.world.size,
+            "population_cap": self.population.cap,
+            "daily_cap_usd": self.economy.daily_cap_usd,
+            "total_cap_usd": self.economy.total_cap_usd,
+            "tiers": {k: {"color": t.color, "model": t.model, "provider": t.provider} for k, t in self.tiers.items()},
+        }
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    out = dict(base)
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def _load_yaml_chain(path: Path, seen: tuple[Path, ...] = ()) -> dict[str, Any]:
+    path = path.resolve()
+    if path in seen:
+        raise ValueError(f"config extends cycle at {path}")
+    with path.open() as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} must contain a mapping")
+    parent = data.pop("extends", None)
+    if parent:
+        base = _load_yaml_chain(path.parent / parent, seen + (path,))
+        data = _deep_merge(base, data)
+    return data
+
+
+def load_config(path: str | Path, overrides: dict[str, Any] | None = None) -> VoidConfig:
+    data = _load_yaml_chain(Path(path))
+    if overrides:
+        data = _deep_merge(data, overrides)
+    return VoidConfig.model_validate(data)

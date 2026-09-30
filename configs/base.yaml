@@ -1,0 +1,141 @@
+# Base configuration for The Void. Experiment configs `extends: base.yaml` and change one thing.
+run:
+  name: baseline
+  seed: 42
+  days: 10
+  ticks_per_day: 24
+  tick_seconds: 0
+  data_dir: data/runs
+world:
+  size: 60.0
+  max_speed: 2.0
+  talk_radius: 4.0
+  forage_radius: 1.5
+  resource_nodes: 6
+  node_capacity: 40.0
+  node_regen_per_tick: 0.4
+  forage_yield_usd: 0.02
+  forage_units_per_tick: 1.0
+  scarcity: 1.0
+  weather:
+    baseline: 0.0
+    nudge_cap_per_agent_day: 0.1
+    decay_per_tick: 0.10
+    yield_sensitivity: 0.5
+population:
+  cap: 12
+  min_reserve_usd: 0.50
+  spawn_pool_usd: 5.00
+  replacement_grant_usd: 0.75
+  starting_balance_usd: 1.50
+  tier_mutation_prob: 0.10
+economy:
+  daily_cap_usd: 3.00
+  total_cap_usd: 25.00
+  daily_cap_policy: fcfs
+  pitch_fee_usd: 0.02
+  min_call_reserve_usd: 0.05
+tiers:
+  frontier:
+    provider: anthropic
+    model: claude-opus-5-5
+    price_in_per_mtok: 4.0
+    price_out_per_mtok: 20.0
+    price_cache_read_per_mtok: 0.20
+    price_cache_write_per_mtok: 5.0
+    supports_temperature: false
+    refusal_fallbacks: true
+    effort: low
+    architecture: dense
+    collapse_temperature: 1.80
+    max_temperature: 2.00
+    entropy_budget_max: 100.0
+    max_tokens: 2048
+    color: "#4fd1c5"
+  budget:
+    provider: anthropic
+    model: claude-haiku-4-5
+    price_in_per_mtok: 1.0
+    price_out_per_mtok: 5.0
+    price_cache_read_per_mtok: 0.10
+    price_cache_write_per_mtok: 1.25
+    supports_temperature: true
+    refusal_fallbacks: false
+    effort: null
+    architecture: dense
+    collapse_temperature: 1.78
+    max_temperature: 2.00
+    entropy_budget_max: 80.0
+    max_tokens: 1024
+    color: "#f6ad55"
+  scripted:
+    provider: scripted
+    model: scripted-v1
+    price_in_per_mtok: 1.0
+    price_out_per_mtok: 5.0
+    supports_temperature: true
+    refusal_fallbacks: false
+    effort: null
+    architecture: dense
+    collapse_temperature: 1.80
+    max_temperature: 2.00
+    entropy_budget_max: 100.0
+    max_tokens: 512
+    color: "#a0aec0"
+agents:
+  - {name: Ada,   tier: scripted}
+  - {name: Bao,   tier: scripted}
+  - {name: Cyra,  tier: scripted}
+  - {name: Dev,   tier: scripted}
+  - {name: Enzo,  tier: scripted}
+  - {name: Faye,  tier: scripted}
+entropy:
+  base_temperature: 0.7
+  drain:
+    baseline: 1.0
+    low_balance: 6.0
+    failed_action: 4.0
+    crowding: 0.5
+    weather: 2.0
+    hunger: 3.0
+    hunger_ticks: 6
+  restore_on_sleep: 1.0
+  degeneration:
+    p_at_collapse: 0.15
+    p_at_max: 0.90
+memory:
+  embedding_dim: 256
+  entry_k: 4
+  hops: 2
+  hop_decay: 0.6
+  max_retrieved: 8
+  mode: graph
+  inherit_top_k: 3
+  self_max_words: 60
+gossip:
+  enabled: true
+  share_probability_on_talk: 0.35
+  paraphrase: scripted
+  mutation_rate: 0.15
+chronicle:
+  enabled: true
+  writer: template
+sandbox:
+  enabled: true
+  gate_enabled: true
+  runner: subprocess
+  cpu_seconds: 2
+  memory_mb: 256
+  timeout_seconds: 5
+  max_code_bytes: 8000
+  gadget_fee_usd: 0.05
+benefactor:
+  enabled: false
+  mean_interval_ticks: 40
+  amount_usd: [0.25, 1.00]
+  targeting: random
+epochs: []
+server:
+  host: 127.0.0.1
+  port: 8000
+  max_concurrent_calls: 4

@@ -1,0 +1,5 @@
+# Fast deterministic smoke run: 6 scripted agents, 3 days.
+extends: base.yaml
+run:
+  name: scripted_smoke
+  days: 3

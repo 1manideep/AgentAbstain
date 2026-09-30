@@ -463,7 +463,7 @@ At temperatures above `collapse_temperature` the softmax is flat enough that the
 
 - `AsyncAnthropic()` zero-arg client (env credentials).
 - `client.messages.create(model, max_tokens=tier.max_tokens, system=[{text: STABLE_SYSTEM, cache_control: ephemeral}], messages=[{role: user, content: obs.render()}], output_config={"format": {"type": "json_schema", "schema": Decision.strict_json_schema()}, "effort": tier.effort})`.
-- `temperature=Sampling.effective_temperature` mapped into `[0, 1]` and passed **only if** `tier.supports_temperature`. Claude 5.x rejects sampling params; Haiku 4.5 accepts them.
+- Real sampling temperature: the `anthropic` 1.x SDK exposes no `temperature` parameter on `messages.create` (verified against 1.9.0), so when `tier.supports_temperature` is true the brain sends `extra_body={"temperature": min(1.0, T_eff / tier.max_temperature)}`. Claude 5.x rejects sampling params and gets none; Haiku 4.5 accepts them. The mapping and the raw `T_eff` are both stored on the `llm_calls` row.
 - `thinking` omitted (adaptive by default on Opus 5.5; Haiku 4.5 runs without thinking, which is what we want for a cheap tier).
 - Refusal fallbacks: when `tier.refusal_fallbacks` is true (default true for Opus/Sonnet 5.x) the call goes through `client.beta.messages.create(..., betas=["server-side-fallback-2026-07-01"], fallbacks="default")`. On a `BadRequestError` naming `fallbacks`, retry once without them and record `fallbacks_unsupported` in the call row.
 - Stop reasons: `refusal` -> `decision=None`, event `brain_refusal`; `max_tokens` -> parse attempt, else `None`; JSON that fails Pydantic -> `None`, error recorded.
