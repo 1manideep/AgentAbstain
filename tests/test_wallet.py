@@ -123,7 +123,9 @@ def test_charged_call_settles_even_when_brain_raises(world):
 
 def test_negative_balance_is_impossible_at_db_level(world):
     cfg, db, w = world
-    with pytest.raises(Exception):
+    import sqlite3
+
+    with pytest.raises(sqlite3.IntegrityError):
         db.execute("UPDATE agents SET balance=-1 WHERE agent_id='ag_0'")
     assert w.balance("ag_0") == 1_500_000
     snap = w.money_snapshot()

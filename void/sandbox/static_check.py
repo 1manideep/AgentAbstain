@@ -44,7 +44,7 @@ DENIED_NAMES = frozenset({
     "delattr", "type", "super", "memoryview", "breakpoint", "input", "help", "exit", "quit", "__builtins__",
     "__loader__", "__spec__", "__file__", "__name__", "__class__", "__subclasses__", "__dict__", "__globals__",
     "__code__", "__closure__", "__mro__", "__bases__", "__base__", "__reduce__", "__reduce_ex__", "__getattribute__",
-    "__setattr__", "__delattr__", "__import__", "builtins", "sys", "os", "subprocess", "importlib", "socket",
+    "__setattr__", "__delattr__", "builtins", "sys", "os", "subprocess", "importlib", "socket",
     "ctypes", "pickle", "marshal", "shutil", "pathlib", "io", "signal", "threading", "multiprocessing",
     "classmethod", "staticmethod", "property", "object", "bytearray", "bytes", "id", "hash", "iter", "next",
     "callable", "isinstance", "issubclass", "hasattr",

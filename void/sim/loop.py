@@ -5,14 +5,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import math
 import os
 import secrets
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from void.agents.lifecycle import Lifecycle
 from void.agents.models import AgentRecord, PersonalitySeed
@@ -39,7 +39,7 @@ from void.sim.control import Command, ControlQueue
 from void.sim.metrics import MetricsRecorder, shannon
 from void.sim.observation import ObservationBuilder
 from void.sim.snapshot import build_snapshot, gadgets_message, roster
-from void.types import AgentStatus, HeardMessage, Observation, Vec2
+from void.types import AgentStatus, Observation
 from void.world.epochs import Epochs
 from void.world.kernel import Kernel
 from void.world.resources import ResourceNode, place_nodes
@@ -108,6 +108,13 @@ class Simulation:
         self.metrics = MetricsRecorder(cfg, self.db, self.registry, self.run_id, self.run_dir / "metrics.jsonl")
         self.seed_of: dict[str, PersonalitySeed] = {}
         self.brains: dict[str, Brain] = build_brains(cfg, self.rng, self.seed_of, client=client)
+        # LLM writers are opt-in and always routed through the wallet choke point
+        if cfg.gossip.paraphrase == "llm" and self.gossip is not None:
+            from void.brain.utility_calls import make_paraphraser
+            self.gossip.paraphraser = make_paraphraser(self)
+        if cfg.chronicle.writer == "llm" and self.chronicle is not None:
+            from void.brain.utility_calls import make_chronicle_writer
+            self.chronicle.llm_writer = make_chronicle_writer(self)
         self.system_tokens = {t: estimate_tokens(system_prompt(cfg, t)) for t in cfg.tiers}
         self.snapshot_listeners: list[Callable[[dict[str, Any]], None]] = []
         self.status = "running"
@@ -122,6 +129,9 @@ class Simulation:
         self.last_metrics_row: dict[str, Any] | None = None
         self._tracer_planted = bool(self.db.kv_get("tracer_planted", False))
         self._last_day_row: dict[str, Any] | None = None
+        self._probes: dict[str, tuple[str, str, int]] = {}  # agent_id -> (probe_note_id, query, planted_tick)
+        self._probe_hits = 0
+        self._probe_total = 0
         existing = self.db.fetchone("SELECT run_id, status FROM run WHERE run_id=?", (self.run_id,))
         if existing is None:
             self._create_run()
@@ -442,10 +452,11 @@ class Simulation:
             for b in res["births"]:
                 self._ensure_entities(b, tick)
             self._persist_nodes()
+            probe_extra = self._probe_step(tick)
             self.wallet.clear_reservations()
             self._persist_ids()
             self.clock.save(self.db)
-            self.last_metrics_row = self.metrics.record_tick(tick, day, extra=self._tracer_metrics(tick))
+            self.last_metrics_row = self.metrics.record_tick(tick, day, extra={**self._tracer_metrics(tick), **probe_extra})
             self._publish_snapshot(tick, day)
         self.prev_stock = {k: v.stock for k, v in self.nodes.items()}
         self.bus.emit(Event(tick, day, Kind.TICK, {"calls": len(gated), "population": self.registry.count_alive()}))
@@ -510,6 +521,31 @@ class Simulation:
                                     "FROM events WHERE kind='forage' AND tick>? GROUP BY agent_id", (node, tick - self.cfg.run.ticks_per_day))
             adopters = sum(1 for r in rows if r["n"] and r["hit"] / r["n"] >= 0.5)
         return {"tracer_reach": len([a for a in alive if a.agent_id in held]), "tracer_reach_by_channel": by_channel, "tracer_adopters": adopters}
+
+    def _probe_step(self, tick: int) -> dict[str, Any]:
+        """Retrieval-quality probe (DESIGN §10): plant a note two hops from an anchor, check it is recalled next time."""
+        every = self.cfg.memory.probe_every_ticks
+        plant = getattr(self.memory, "plant_probe", None)
+        check = getattr(self.memory, "check_probe", None)
+        if every <= 0 or plant is None or check is None:
+            return {}
+        # evaluate probes planted at least one tick ago
+        for aid, (pid, query, planted) in list(self._probes.items()):
+            if tick - planted >= 1:
+                rec = self.registry.get(aid)
+                if rec is not None and rec.status == AgentStatus.ALIVE:
+                    self._probe_total += 1
+                    self._probe_hits += int(bool(check(aid, pid, query, tick)))
+                del self._probes[aid]
+        if tick % every == 0:
+            for a in self.registry.alive():
+                if a.agent_id in self._probes:
+                    continue
+                res = plant(a.agent_id, tick)
+                if res is not None:
+                    self._probes[a.agent_id] = (res[0], res[1], tick)
+        return {"probe_hits": self._probe_hits, "probe_total": self._probe_total,
+                "probe_recall": round(self._probe_hits / self._probe_total, 4) if self._probe_total else None}
 
     def _apply_memory_ops(self, a: AgentRecord, ops: list[MemoryOp], tick: int) -> None:
         aid = a.agent_id

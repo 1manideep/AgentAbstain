@@ -150,11 +150,11 @@ class SubprocessSandbox:
         try:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=self.cfg.timeout_seconds)
             rc: int | None = proc.returncode
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             try:
                 await asyncio.wait_for(proc.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
             out, rc = b"", None
         elapsed = int((time.perf_counter() - t0) * 1000)

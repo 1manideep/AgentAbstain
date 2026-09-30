@@ -13,9 +13,8 @@ from __future__ import annotations
 import json
 import math
 import random
-from typing import Any
-
 import re
+from typing import Any
 
 from void.agents.models import PersonalitySeed
 from void.brain.base import BrainResult, Sampling, Usage

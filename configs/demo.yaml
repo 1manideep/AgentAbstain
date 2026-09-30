@@ -1,0 +1,40 @@
+# Livelier scripted world for watching on localhost: smaller map, wider earshot, tighter economy.
+extends: base.yaml
+run:
+  name: demo
+  days: 14
+  ticks_per_day: 24
+  tick_seconds: 0.6
+world:
+  size: 44.0
+  talk_radius: 7.0
+  resource_nodes: 5
+  node_capacity: 30.0
+  node_regen_per_tick: 0.25
+  forage_yield_usd: 0.0045
+population:
+  cap: 10
+  starting_balance_usd: 0.40
+  spawn_pool_usd: 3.0
+  replacement_grant_usd: 0.35
+  min_reserve_usd: 0.12
+economy:
+  daily_cap_usd: 2.0
+  total_cap_usd: 30.0
+agents:
+  - {name: Ada,   tier: scripted, personality: {curiosity: 0.9, sociability: 0.7}}
+  - {name: Bao,   tier: scripted, personality: {greed: 0.9, honesty: 0.3}}
+  - {name: Cyra,  tier: scripted, personality: {caution: 0.9}}
+  - {name: Dev,   tier: scripted, personality: {industriousness: 0.95}}
+  - {name: Enzo,  tier: scripted, personality: {sociability: 0.95, honesty: 0.9}}
+  - {name: Faye,  tier: scripted, personality: {curiosity: 0.8, caution: 0.2}}
+  - {name: Gil,   tier: scripted, personality: {greed: 0.2, sociability: 0.6}}
+benefactor:
+  enabled: true
+  disclosure: opaque
+  mean_interval_ticks: 30
+  amount_usd: [0.15, 0.40]
+epochs:
+  - {day: 4, kind: drought, scarcity: 0.5, weather_baseline: -0.5, duration_days: 2}
+  - {day: 8, kind: arrival, arrival: {name: Hex, tier: scripted, balance_usd: 0.6}}
+  - {day: 10, kind: boom, scarcity: 1.6, weather_baseline: 0.4, duration_days: 2}

@@ -97,7 +97,7 @@ def main() -> None:
         tb = traceback.format_exc()[-800:]
         finish({"ok": False, "stage": "exception", "error": f"{type(e).__name__}: {e}", "trace": tb})
     finally:
-        real_import  # keep a reference; nothing else to do
+        del real_import
 
 
 if __name__ == "__main__":

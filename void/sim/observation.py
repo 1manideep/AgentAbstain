@@ -13,7 +13,16 @@ from void.economy.scheduler import Clock
 from void.economy.taskboard import TaskBoard
 from void.memory.store import MemoryStore
 from void.sandbox.registry import GadgetRegistry
-from void.types import GadgetView, HeardMessage, NeighbourView, NodeView, Observation, Vec2, balance_bucket, stress_label
+from void.types import (
+    GadgetView,
+    HeardMessage,
+    NeighbourView,
+    NodeView,
+    Observation,
+    Vec2,
+    balance_bucket,
+    stress_label,
+)
 from void.world.kernel import Kernel
 from void.world.resources import ResourceNode
 

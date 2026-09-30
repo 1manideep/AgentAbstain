@@ -155,7 +155,7 @@ async def test_write_day_writes_file_items_kv_and_event(tmp_path: Path) -> None:
     ev = w.kinds(Kind.CHRONICLE)
     assert len(ev) == 1 and ev[0].tick == 48 and ev[0].day == 1 and ev[0].seq is not None
     assert ev[0].payload["headline"] == doc.headline and ev[0].payload["item_count"] == len(doc.items)
-    assert ev[0].payload["path"] == str(path) and ev[0].payload["day"] == 1
+    assert ev[0].payload["path"] == f"chronicle/{path.name}" and ev[0].payload["day"] == 1
 
     # Rewriting the same day replaces its items and bumps the revision.
     again = await w.chronicle.write_day(1, tick=49)

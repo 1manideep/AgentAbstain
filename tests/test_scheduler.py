@@ -30,5 +30,6 @@ def test_scheduler_wake_sleep(tmp_path):
     s.begin_day()
     assert s.awake_ids() == ["ag_0", "ag_1"] and reg.get("ag_0").weather_nudge_used == 0.0
     c = Clock(ticks_per_day=3)
-    c.advance(); c.save(db)
+    c.advance()
+    c.save(db)
     assert Clock.load(db, 3).tick == 1

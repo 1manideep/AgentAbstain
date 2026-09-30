@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Iterable
+from collections.abc import Iterable
 
 from void.agents.models import AgentRecord, PersonalitySeed
 from void.db import Database

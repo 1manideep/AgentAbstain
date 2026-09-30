@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 __all__ = [
     "AgentStatus", "Vec2", "NeighbourView", "NodeView", "GadgetView", "TaskView", "HeardMessage",
@@ -12,7 +12,7 @@ __all__ = [
 ]
 
 
-class AgentStatus(str, Enum):
+class AgentStatus(StrEnum):
     ALIVE = "alive"
     BANKRUPT = "bankrupt"
     ARCHIVED = "archived"

@@ -2,8 +2,6 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-import pytest
-
 from void.agents.models import PersonalitySeed
 from void.brain.anthropic_brain import AnthropicBrain
 from void.brain.base import Sampling
