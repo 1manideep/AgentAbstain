@@ -98,21 +98,20 @@ export const AgentPanel = memo(function AgentPanel() {
   const statsRev = useStore((s) => s.statsRev)
   const agentStats = useStore((s) => s.agentStats)
   const { select, follow, followId } = useStore(useShallow((s) => ({ select: s.select, follow: s.follow, followId: s.followAgentId })))
-  const [detail, setDetail] = useState<AgentDetail | null>(null)
-  const [err, setErr] = useState<string | null>(null)
+  const [loaded, setLoaded] = useState<{ id: string; detail: AgentDetail | null; err: string | null } | null>(null)
+  const detail = loaded && loaded.id === id ? loaded.detail : null
+  const err = loaded && loaded.id === id ? loaded.err : null
 
   useEffect(() => {
-    setDetail(null)
-    setErr(null)
     if (!id) return
     let cancelled = false
     const load = () => {
       apiGet<AgentDetail>(`/api/agents/${encodeURIComponent(id)}`)
         .then((d) => {
-          if (!cancelled) setDetail(d)
+          if (!cancelled) setLoaded({ id, detail: d, err: null })
         })
         .catch((e: unknown) => {
-          if (!cancelled) setErr(e instanceof Error ? e.message : String(e))
+          if (!cancelled) setLoaded({ id, detail: null, err: e instanceof Error ? e.message : String(e) })
         })
     }
     load()

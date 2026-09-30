@@ -554,9 +554,34 @@ export interface AgentDetail {
   children?: string[]
 }
 
+/** POST command acknowledgement (HTTP 202): the command is applied at the next tick boundary (§14.1). */
 export interface CommandAck {
-  cmd_id: string
+  cmd_id: number
   will_apply_at_tick: number
+}
+
+/** GET /api/metrics?days=1 — daily aggregate rows. */
+export interface MetricsDaysResponse {
+  days: Array<{ type?: 'day'; day: number; row: DayRow }>
+}
+
+/** GET /api/graveyard */
+export interface GraveyardAgent {
+  id: string
+  name: string
+  tier: string
+  generation: number
+  parent_id: string | null
+  born_tick: number
+  died_tick: number | null
+  cause: string | null
+  balance_usd?: number
+  /** Number of children (the server reports a count). */
+  children: number
+}
+
+export interface GraveyardResponse {
+  agents: GraveyardAgent[]
 }
 
 // POST bodies (§15)

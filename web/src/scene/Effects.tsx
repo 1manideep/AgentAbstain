@@ -33,6 +33,7 @@ export const FONT_URL = '/fonts/InstrumentSans-Regular.ttf'
 const BUBBLE_MS = 4000
 const FADE_MS = 300
 const MAX_BUBBLES = 8
+const MAX_PER_AGENT = 2
 const MAX_ARCS = 16
 const ARC_SEGS = 20
 const ARC_MS = 1300
@@ -266,9 +267,22 @@ export function Effects() {
       if (isEventKind(e, 'talk')) {
         const p = agentPos(e.payload.speaker_id, out)
         if (!p.ok) return
-        const lane = bubbleState.list.filter((b) => b.agentId === e.payload.speaker_id).length
         const text = String(e.payload.text ?? '').slice(0, 280)
-        bubbleState.list.push({ key: bubbleState.nextKey++, agentId: e.payload.speaker_id, text, born: now, lane, group: null, troika: null })
+        const mine = bubbleState.list.filter((b) => b.agentId === e.payload.speaker_id)
+        // The same line repeated (scripted brains do this): refresh the bubble instead of stacking a twin.
+        const twin = mine.find((b) => b.text === text)
+        if (twin) {
+          twin.born = now
+          return
+        }
+        // At most two bubbles per speaker; the oldest makes room.
+        while (mine.length >= MAX_PER_AGENT) {
+          const oldest = mine.shift()!
+          const i = bubbleState.list.indexOf(oldest)
+          if (i >= 0) bubbleState.list.splice(i, 1)
+        }
+        for (let i = 0; i < mine.length; i++) mine[i]!.lane = i + 1
+        bubbleState.list.push({ key: bubbleState.nextKey++, agentId: e.payload.speaker_id, text, born: now, lane: 0, group: null, troika: null })
         while (bubbleState.list.length > MAX_BUBBLES) bubbleState.list.shift()
         dirtyBubbles = true
         return
@@ -340,7 +354,7 @@ export function Effects() {
         const p = agentPos(b.agentId, out)
         if (b.group) {
           b.group.visible = p.ok
-          if (p.ok) b.group.position.set(p.x, 2.35 + b.lane * 1.3 + Math.min(1, age / 600) * 0.2, p.z)
+          if (p.ok) b.group.position.set(p.x, 2.35 + b.lane * 2.1 + Math.min(1, age / 600) * 0.2, p.z)
         }
         if (b.troika) {
           const fin = Math.min(1, age / FADE_MS)

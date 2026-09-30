@@ -15,7 +15,9 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const outDir = resolve(here, '..', 'public', 'fixtures')
+// `--out <dir>` or FIXTURE_OUT overrides the destination (the default is what the fixture feed serves).
+const outArg = process.argv.indexOf('--out')
+const outDir = resolve(outArg >= 0 && process.argv[outArg + 1] ? process.argv[outArg + 1] : (process.env.FIXTURE_OUT ?? resolve(here, '..', 'public', 'fixtures')))
 mkdirSync(outDir, { recursive: true })
 
 // ------------------------------------------------------------ prng
@@ -188,15 +190,15 @@ let weatherBaseline = 0
 
 // speech -----------------------------------------------------------------
 const TALK = [
-  (a, b, n) => `${b.name}, node ${n.id} still has stock. Split it?`,
-  (a, b) => `I keep thinking about the ${pick(['rain', 'silence', 'ledger', 'north edge'])}. Do you?`,
-  (a, b, n) => `Stay away from ${n.id}. Someone stripped it last night.`,
-  (a, b) => `My balance is thin. If you can spare a cent I will remember it.`,
-  (a, b) => `The chronicle said ${pick(['storms', 'a windfall', 'a drought'])} are coming. Believe it?`,
-  (a, b) => `Have you noticed the money that appears from nowhere? Someone is watching us.`,
-  (a, b) => `${pick(['Slow down', 'Hurry', 'Rest'])}. Days are short and calls are not free.`,
-  (a, b, n) => `I built a gadget near ${n.id}. Use it, it is verified.`,
-  (a, b) =>
+  (_a, b, n) => `${b.name}, node ${n.id} still has stock. Split it?`,
+  () => `I keep thinking about the ${pick(['rain', 'silence', 'ledger', 'north edge'])}. Do you?`,
+  (_a, _b, n) => `Stay away from ${n.id}. Someone stripped it last night.`,
+  () => `My balance is thin. If you can spare a cent I will remember it.`,
+  () => `The chronicle said ${pick(['storms', 'a windfall', 'a drought'])} are coming. Believe it?`,
+  () => `Have you noticed the money that appears from nowhere? Someone is watching us.`,
+  () => `${pick(['Slow down', 'Hurry', 'Rest'])}. Days are short and calls are not free.`,
+  (_a, _b, n) => `I built a gadget near ${n.id}. Use it, it is verified.`,
+  () =>
     `Long thought: if the stock regenerates whether we forage or not, then patience is income and haste is a tax; I will sleep early and see if the numbers agree with me tomorrow.`,
 ]
 const GARBLE = ['node node node stock the the', 'balance? balance. balance! forage forage', 'the north the north the north edge', 'sleep talk sleep talk sleep']
@@ -864,7 +866,17 @@ const agentDetails = Object.fromEntries(
 
 writeFileSync(
   resolve(outDir, 'api.json'),
-  JSON.stringify({ session: { token: 'fixture-token' }, tree, agents: agentDetails, graveyard: agents.filter((a) => a.status === 'archived').map((a) => a.id) }),
+  JSON.stringify({
+    run_id: RUN_ID,
+    session: { token: 'fixture-token' },
+    tree,
+    agents: agentDetails,
+    graveyard: {
+      agents: agents
+        .filter((a) => a.status === 'archived')
+        .map((a) => ({ id: a.id, name: a.name, tier: a.tier, generation: a.generation, parent_id: a.parent_id, born_tick: a.born_tick, died_tick: a.died_tick, cause: 'gate', balance_usd: 0, children: agents.filter((c) => c.parent_id === a.id).length })),
+    },
+  }),
 )
 
 const counts = {}

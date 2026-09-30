@@ -3,11 +3,16 @@ import type { EventMsg } from '../protocol'
 export interface EventFilter {
   /** null = every kind. */
   kinds: ReadonlySet<string> | null
+  /** Kinds hidden when `kinds` is null (per-tick heartbeats such as tick/weather/move). */
+  exclude: ReadonlySet<string> | null
   /** null = every agent; otherwise the event's agent_id or a payload participant must match. */
   agentId: string | null
 }
 
-export const EMPTY_FILTER: EventFilter = { kinds: null, agentId: null }
+/** Kinds the server emits every tick for every agent; hidden by the default "story" view. */
+export const HEARTBEAT_KINDS = ['tick', 'weather', 'move', 'idle', 'day_start', 'day_end'] as const
+
+export const EMPTY_FILTER: EventFilter = { kinds: null, exclude: new Set(HEARTBEAT_KINDS), agentId: null }
 
 function participants(e: EventMsg): string[] {
   const p = e.payload as Record<string, unknown>
@@ -21,7 +26,9 @@ function participants(e: EventMsg): string[] {
 }
 
 export function matchesFilter(e: EventMsg, f: EventFilter): boolean {
-  if (f.kinds && !f.kinds.has(e.kind)) return false
+  if (f.kinds) {
+    if (!f.kinds.has(e.kind)) return false
+  } else if (f.exclude && f.exclude.has(e.kind)) return false
   if (f.agentId && !participants(e).includes(f.agentId)) return false
   return true
 }

@@ -21,7 +21,7 @@ import type {
   TasksMsg,
 } from '../protocol'
 import { throttle } from '../util/throttle'
-import { EventRing, type EventFilter } from './events'
+import { EventRing, HEARTBEAT_KINDS, type EventFilter } from './events'
 import type { PlaybackMode, PlaybackSpeed } from './history'
 import { Series } from './series'
 
@@ -124,7 +124,7 @@ export interface VoidState {
   /** Stable ring; read under `eventsRev`. */
   events: EventRing
   eventsRev: number
-  filter: { kinds: string[] | null; agentId: string | null }
+  filter: { kinds: string[] | null; exclude: string[] | null; agentId: string | null }
 
   /** Stable aggregates; read under `seriesRev`. */
   series: Series
@@ -152,7 +152,7 @@ export interface VoidState {
   resetRun: () => void
 
   // ui
-  setFilter: (f: { kinds: string[] | null; agentId: string | null }) => void
+  setFilter: (f: { kinds: string[] | null; exclude: string[] | null; agentId: string | null }) => void
   select: (id: string | null) => void
   hover: (id: string | null) => void
   hoverGadget: (id: string | null) => void
@@ -224,7 +224,7 @@ export const useStore = create<VoidState>()((set, get) => {
     chronicle: null,
     events: ringAcc,
     eventsRev: 0,
-    filter: { kinds: null, agentId: null },
+    filter: { kinds: null, exclude: [...HEARTBEAT_KINDS], agentId: null },
     series: seriesAcc,
     seriesRev: 0,
     selectedAgentId: null,
@@ -380,7 +380,7 @@ export const useStore = create<VoidState>()((set, get) => {
     },
 
     setFilter: (f) => {
-      const ef: EventFilter = { kinds: f.kinds ? new Set(f.kinds) : null, agentId: f.agentId }
+      const ef: EventFilter = { kinds: f.kinds ? new Set(f.kinds) : null, exclude: f.exclude ? new Set(f.exclude) : null, agentId: f.agentId }
       ringAcc.setFilter(ef)
       set({ filter: f, eventsRev: ringAcc.rev })
     },

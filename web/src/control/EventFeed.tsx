@@ -1,7 +1,8 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import type { EventMsg, RosterAgent } from '../protocol'
 import { isEventKind } from '../protocol'
+import { HEARTBEAT_KINDS } from '../state/events'
 import { selectTierColor, useStore } from '../state/store'
 import { fmtUsd } from './charts/chartTheme'
 
@@ -157,6 +158,13 @@ export const EventFeed = memo(function EventFeed() {
   }
 
   const kindSet = useMemo(() => new Set(filter.kinds ?? []), [filter.kinds])
+  const apply = useCallback(
+    (f: { kinds: string[] | null; exclude: string[] | null; agentId: string | null }) => {
+      setFilter(f)
+      setStuck(true) // a filter change resets the view to the bottom
+    },
+    [setFilter],
+  )
   const toggleKind = useCallback(
     (k: string) => {
       const next = new Set(filter.kinds ?? [])
@@ -165,20 +173,20 @@ export const EventFeed = memo(function EventFeed() {
         next.add(k)
       } else if (next.has(k)) next.delete(k)
       else next.add(k)
-      setFilter({ kinds: next.size === 0 ? null : Array.from(next), agentId: filter.agentId })
+      apply({ kinds: next.size === 0 ? null : Array.from(next), exclude: filter.exclude, agentId: filter.agentId })
     },
-    [filter, setFilter],
+    [filter, apply],
   )
-
-  useEffect(() => {
-    // filter change resets the view to the bottom
-    setStuck(true)
-  }, [filter])
+  const storyMode = filter.kinds === null && filter.exclude !== null
+  const allMode = filter.kinds === null && filter.exclude === null
 
   return (
     <div className="feed">
       <div className="feed-filters">
-        <button type="button" className={'chip' + (filter.kinds === null ? ' active' : '')} onClick={() => setFilter({ kinds: null, agentId: filter.agentId })}>
+        <button type="button" className={'chip' + (storyMode ? ' active' : '')} onClick={() => apply({ kinds: null, exclude: [...HEARTBEAT_KINDS], agentId: filter.agentId })} title="everything except per-tick heartbeats">
+          story
+        </button>
+        <button type="button" className={'chip' + (allMode ? ' active' : '')} onClick={() => apply({ kinds: null, exclude: null, agentId: filter.agentId })}>
           all
         </button>
         {FEED_KINDS.map((k) => (
@@ -186,7 +194,7 @@ export const EventFeed = memo(function EventFeed() {
             {k}
           </button>
         ))}
-        <select className="select" value={filter.agentId ?? ''} onChange={(e) => setFilter({ kinds: filter.kinds, agentId: e.currentTarget.value || null })} aria-label="agent filter">
+        <select className="select" value={filter.agentId ?? ''} onChange={(e) => apply({ kinds: filter.kinds, exclude: filter.exclude, agentId: e.currentTarget.value || null })} aria-label="agent filter">
           <option value="">every agent</option>
           {roster.map((a) => (
             <option key={a.id} value={a.id}>

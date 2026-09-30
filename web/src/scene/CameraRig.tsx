@@ -44,7 +44,7 @@ export function CameraRig({ size, runId }: CameraRigProps) {
       camera.position.set(saved.p[0], saved.p[1], saved.p[2])
       c.target.set(saved.t[0], saved.t[1], saved.t[2])
     } else {
-      camera.position.set(0, size * 0.55, size * 0.95)
+      camera.position.set(0, size * 0.5, size * 0.85)
       c.target.set(0, 0, 0)
     }
     c.update()

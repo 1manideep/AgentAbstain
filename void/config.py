@@ -346,7 +346,9 @@ class VoidConfig(StrictModel):
             "daily_cap_usd": self.economy.daily_cap_usd,
             "total_cap_usd": self.economy.total_cap_usd,
             "degeneration_mode": self.entropy.degeneration.mode,
-            "tiers": {k: {"color": t.color, "model": t.model, "provider": t.provider} for k, t in self.tiers.items()},
+            "tiers": {k: {"color": t.color, "model": t.model, "provider": t.provider,
+                          "collapse_temperature": t.collapse_temperature, "max_temperature": t.max_temperature}
+                      for k, t in self.tiers.items()},
         }
 
 

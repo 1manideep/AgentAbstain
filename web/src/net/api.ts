@@ -4,7 +4,10 @@
  * every POST. In fixture mode GETs are served from /fixtures/api.json and POSTs
  * are no-ops that log.
  */
-import type { AgentDetail, CommandAck, SessionResponse, TreeResponse } from '../protocol'
+import type { AgentDetail, CommandAck, GraveyardResponse, NoteRecord, SelfVersion, SessionResponse, TreeResponse } from '../protocol'
+import { history, SLOT_STRIDE } from '../state/history'
+import { useStore } from '../state/store'
+import { treeFromRoster } from '../state/lineage'
 
 export const FIXTURE_MODE = import.meta.env.VITE_FEED === 'fixture'
 const TOKEN_KEY = 'void.operatorToken'
@@ -54,37 +57,88 @@ export class ApiError extends Error {
 // ------------------------------------------------------------ fixture backing
 
 export interface FixtureApi {
+  run_id?: string
   session: SessionResponse
   tree: TreeResponse
   agents: Record<string, AgentDetail>
-  graveyard: string[]
+  graveyard: GraveyardResponse
 }
 
-let fixtureApi: Promise<FixtureApi> | null = null
+let fixtureApi: Promise<FixtureApi | null> | null = null
 
-function loadFixtureApi(): Promise<FixtureApi> {
+/** api.json is written by scripts/gen-fixture.mjs; a genuine `void mock-feed` recording has none, so it is optional. */
+function loadFixtureApi(): Promise<FixtureApi | null> {
   if (!fixtureApi) {
-    fixtureApi = fetch('/fixtures/api.json').then((r) => {
-      if (!r.ok) throw new ApiError(r.status, 'fixture api.json missing (run npm run gen:fixture)')
-      return r.json() as Promise<FixtureApi>
-    })
+    fixtureApi = fetch('/fixtures/api.json')
+      .then((r) => (r.ok ? (r.json() as Promise<FixtureApi>) : null))
+      .catch(() => null)
   }
   return fixtureApi
 }
 
+/** Agent detail assembled from the live stream when api.json does not cover this run. */
+function deriveAgentDetail(id: string): AgentDetail {
+  const s = useStore.getState()
+  const rec = s.rosterById.get(id)
+  if (!rec) throw new ApiError(404, `unknown agent ${id}`)
+  const stat = s.agentStats.get(id)
+  const notes: NoteRecord[] = []
+  const self_versions: SelfVersion[] = []
+  s.events.forEach((e) => {
+    if (e.agent_id !== id) return
+    const p = e.payload as Record<string, unknown>
+    if (e.kind === 'remember' && typeof p.title === 'string') {
+      notes.push({
+        note_id: typeof p.note_id === 'string' ? p.note_id : `${id}-${e.seq}`,
+        title: p.title,
+        body: '(note body is only served by /api/agents/{id}; the feed carries the title)',
+        created_tick: e.tick,
+        channel: typeof p.channel === 'string' ? p.channel : 'observed',
+        hop: typeof p.hop === 'number' ? p.hop : 0,
+        importance: 0,
+        archived: false,
+      })
+    } else if (e.kind === 'revise_self' && typeof p.version === 'number') {
+      self_versions.push({ version: p.version, tick: e.tick, summary: `(version ${p.version} recorded at tick ${e.tick}; text is only served by /api/agents/{id})` })
+    }
+  })
+  const balance_series: Array<{ tick: number; balance_usd: number }> = []
+  const slot = history.agentIndex.get(id)
+  if (slot !== undefined) {
+    const step = Math.max(1, Math.ceil(history.count / 240))
+    for (let i = 0; i < history.count; i += step) {
+      const f = history.frameAt(i)
+      if (slot < f.capacity && f.ids[slot] === id) balance_series.push({ tick: f.tick, balance_usd: f.data[slot * SLOT_STRIDE + 5]! })
+    }
+  }
+  return {
+    agent: { ...rec, balance_usd: stat?.balance ?? 0, stress: stat?.stress ?? 0, x: stat?.x ?? 0, y: stat?.y ?? 0 },
+    self_summary: null,
+    self_versions,
+    notes,
+    calls: [],
+    balance_series,
+    children: s.roster.filter((a) => a.parent_id === id).map((a) => a.id),
+  }
+}
+
 async function fixtureGet<T>(path: string): Promise<T> {
-  const api = await loadFixtureApi()
+  const loaded = await loadFixtureApi()
+  const runId = useStore.getState().runId
+  // api.json belongs to the synthetic fixture; ignore it when a different run is playing.
+  const api = loaded && (!loaded.run_id || !runId || loaded.run_id === runId) ? loaded : null
   const clean = path.replace(/^\/api\//, '').split('?')[0]!
-  if (clean === 'session') return api.session as T
-  if (clean === 'tree') return api.tree as T
-  if (clean === 'graveyard') return api.graveyard as T
+  if (clean === 'session') return (api?.session ?? { token: 'fixture-token' }) as T
+  if (clean === 'tree') return (api?.tree ?? { roots: treeFromRoster(useStore.getState().roster) }) as T
+  if (clean === 'graveyard') return (api?.graveyard ?? { agents: [] }) as T
   const m = /^agents\/([^/]+)$/.exec(clean)
   if (m) {
-    const d = api.agents[decodeURIComponent(m[1]!)]
-    if (!d) throw new ApiError(404, `no fixture detail for agent ${m[1]}`)
-    return d as T
+    const id = decodeURIComponent(m[1]!)
+    return (api?.agents[id] ?? deriveAgentDetail(id)) as T
   }
-  if (clean === 'events' || clean === 'metrics' || clean === 'snapshots') return { events: [], metrics: [], snapshots: [] } as T
+  if (clean === 'events') return { events: [], last_seq: 0 } as T
+  if (clean === 'metrics') return { metrics: [], days: [] } as T
+  if (clean === 'snapshots') return { snapshots: [] } as T
   throw new ApiError(404, `fixture has no ${path}`)
 }
 

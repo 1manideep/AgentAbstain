@@ -35,7 +35,7 @@ export function Scene() {
       frameloop="always"
       dpr={dpr}
       gl={{ antialias: gpuProfile.antialias, powerPreference: 'high-performance', alpha: false, stencil: false }}
-      camera={{ fov: 42, near: 0.5, far: 600, position: [0, size * 0.55, size * 0.95] }}
+      camera={{ fov: 42, near: 0.5, far: 600, position: [0, size * 0.5, size * 0.85] }}
       onPointerMissed={onClickMiss}
       style={{ position: 'absolute', inset: 0 }}
     >

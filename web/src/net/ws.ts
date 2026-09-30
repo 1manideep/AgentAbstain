@@ -4,7 +4,7 @@
  * GET /api/metrics?since_tick= when the client is behind, idempotent event
  * replay by seq (the ring drops seq <= lastSeq), and `conn` state in the store.
  */
-import type { EventMsg, EventsResponse, HelloMsg, MetricsMsg, MetricsResponse, ServerMsg } from '../protocol'
+import type { DayMsg, EventMsg, EventsResponse, HelloMsg, MetricsDaysResponse, MetricsMsg, MetricsResponse, ServerMsg } from '../protocol'
 import { history } from '../state/history'
 import { useStore } from '../state/store'
 import { apiGet, ensureToken, FIXTURE_MODE } from './api'
@@ -141,6 +141,12 @@ export class WsClient {
         for (const row of r.metrics ?? []) ingest({ ...row, type: 'metrics' } as MetricsMsg)
       } catch (err) {
         console.warn('metrics catch-up failed', err)
+      }
+      try {
+        const r = await apiGet<MetricsDaysResponse>('/api/metrics?days=1')
+        for (const d of r.days ?? []) ingest({ type: 'day', day: d.day, row: d.row } as DayMsg)
+      } catch {
+        /* daily rows are optional on catch-up */
       }
     }
   }
