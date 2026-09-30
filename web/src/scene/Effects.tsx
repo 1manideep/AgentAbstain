@@ -1,8 +1,10 @@
 /**
- * Effects layer: speech bubbles and the hover tag (drei <Text> billboards),
- * selection ring, transfer arcs (one LineSegments), particle bursts (one
- * Points) and per-slot flicker/flash timers. Effects are fired from the
- * pendingFx heap when the render clock reaches their tick, never on arrival.
+ * Effects layer: speech bubbles (compact drei <Text> + one instanced rounded
+ * backdrop), the hover tag, selection ring, transfer arcs (one LineSegments),
+ * particle bursts (one Points) and per-slot flicker/flash timers. Effects are
+ * fired from the pendingFx heap when the render clock reaches their tick,
+ * never on arrival. No per-frame allocation: bubbles reuse their objects, the
+ * arc/particle buffers are fixed, and visibility selection is done in place.
  */
 import { Billboard, Text } from '@react-three/drei'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -13,41 +15,65 @@ import {
   Color,
   DynamicDrawUsage,
   Group,
+  InstancedBufferAttribute,
+  InstancedMesh,
   LineBasicMaterial,
   LineSegments,
   Mesh,
   MeshBasicMaterial,
+  Object3D,
   Points,
   RingGeometry,
   ShaderMaterial,
+  Shape,
+  ShapeGeometry,
+  Vector3,
 } from 'three'
 import type { EventMsg } from '../protocol'
 import { isEventKind } from '../protocol'
 import { history } from '../state/history'
 import { useStore } from '../state/store'
+import { BUBBLE_FONT, BUBBLE_LINE_HEIGHT, BUBBLE_WIDTH, clampBubbleText } from './bubbleText'
 import { fxQueue } from './fx'
 import { nodePulse } from './Nodes'
 import { mirror, perSlot, registerSystem, SYS_EFFECTS, type FrameCtx } from './sceneState'
 
 export const FONT_URL = '/fonts/InstrumentSans-Regular.ttf'
-const BUBBLE_MS = 4000
+const BUBBLE_MS = 3000
 const FADE_MS = 300
-const MAX_BUBBLES = 8
-const MAX_PER_AGENT = 2
+const MAX_VISIBLE_BUBBLES = 4
+const BUBBLE_MAX_DIST = 35
+const SPEAK_COOLDOWN_MS = 1500
+const BUBBLE_PAD = 0.14
 const MAX_ARCS = 16
 const ARC_SEGS = 20
 const ARC_MS = 1300
 const MAX_BURSTS = 20
 const PARTICLES = 14
 
+interface TroikaText {
+  fillOpacity: number
+  outlineOpacity: number
+  textRenderInfo?: { blockBounds?: [number, number, number, number] }
+}
+
 interface Bubble {
-  key: number
   agentId: string
   text: string
   born: number
-  lane: number
+  /** bumped when the text changes so the memoised view re-renders */
+  rev: number
   group: Group | null
-  troika: { fillOpacity: number; outlineOpacity: number } | null
+  troika: TroikaText | null
+  /** measured text block size (world units) after troika sync */
+  w: number
+  h: number
+  /** scratch for visibility selection */
+  dist: number
+  x: number
+  y: number
+  z: number
+  ok: boolean
 }
 
 interface Arc {
@@ -96,11 +122,13 @@ function agentPos(id: string, ctx: FrameCtx): { x: number; y: number; z: number;
   return posScratch
 }
 
-const bubbleState = { list: [] as Bubble[], nextKey: 1 }
+const bubbleState = { list: [] as Bubble[], lastSpoke: new Map<string, number>() }
 const arcs: Arc[] = []
 const bursts: Burst[] = []
+const dummy = new Object3D()
+const viewDir = new Vector3()
 
-const BubbleView = memo(function BubbleView({ bubble }: { bubble: Bubble }) {
+const BubbleView = memo(function BubbleView({ bubble, text }: { bubble: Bubble; text: string }) {
   const setGroup = useCallback(
     (g: Group | null) => {
       bubble.group = g
@@ -108,32 +136,34 @@ const BubbleView = memo(function BubbleView({ bubble }: { bubble: Bubble }) {
     [bubble],
   )
   const onSync = useCallback(
-    (t: { fillOpacity: number; outlineOpacity: number }) => {
+    (t: TroikaText) => {
       bubble.troika = t
+      const bb = t.textRenderInfo?.blockBounds
+      if (bb) {
+        bubble.w = bb[2] - bb[0]
+        bubble.h = bb[3] - bb[1]
+      }
     },
     [bubble],
   )
   return (
     <group ref={setGroup} visible={false}>
-      <Billboard follow>
-        <Text
-          font={FONT_URL}
-          fontSize={0.62}
-          maxWidth={10}
-          lineHeight={1.15}
-          textAlign="center"
-          anchorX="center"
-          anchorY="bottom"
-          color="#eef2ff"
-          outlineWidth={0.05}
-          outlineColor="#060911"
-          outlineOpacity={0.95}
-          fillOpacity={0}
-          onSync={onSync}
-        >
-          {bubble.text}
-        </Text>
-      </Billboard>
+      <Text
+        font={FONT_URL}
+        fontSize={BUBBLE_FONT}
+        maxWidth={BUBBLE_WIDTH}
+        lineHeight={BUBBLE_LINE_HEIGHT}
+        textAlign="center"
+        anchorX="center"
+        anchorY="middle"
+        color="#f3f6ff"
+        fillOpacity={0}
+        outlineWidth={0}
+        onSync={onSync}
+        renderOrder={12}
+      >
+        {text}
+      </Text>
     </group>
   )
 })
@@ -178,21 +208,53 @@ const HoverTag = memo(function HoverTag() {
   return (
     <group ref={ref} visible={false}>
       <Billboard follow>
-        <Text
-          font={FONT_URL}
-          fontSize={0.55}
-          anchorX="center"
-          anchorY="bottom"
-          color="#ffffff"
-          outlineWidth={0.045}
-          outlineColor="#060911"
-        >
+        <Text font={FONT_URL} fontSize={0.42} anchorX="center" anchorY="bottom" color="#ffffff" outlineWidth={0.04} outlineColor="#060911">
           {label}
         </Text>
       </Billboard>
     </group>
   )
 })
+
+/** Rounded-rectangle backdrop, one instance per visible bubble, per-instance alpha. */
+function makeBackdrop(capacity: number): { mesh: InstancedMesh; alpha: InstancedBufferAttribute } {
+  const w = 1
+  const h = 1
+  const r = 0.16
+  const shape = new Shape()
+  shape.moveTo(-w / 2 + r, -h / 2)
+  shape.lineTo(w / 2 - r, -h / 2)
+  shape.quadraticCurveTo(w / 2, -h / 2, w / 2, -h / 2 + r)
+  shape.lineTo(w / 2, h / 2 - r)
+  shape.quadraticCurveTo(w / 2, h / 2, w / 2 - r, h / 2)
+  shape.lineTo(-w / 2 + r, h / 2)
+  shape.quadraticCurveTo(-w / 2, h / 2, -w / 2, h / 2 - r)
+  shape.lineTo(-w / 2, -h / 2 + r)
+  shape.quadraticCurveTo(-w / 2, -h / 2, -w / 2 + r, -h / 2)
+  const geom = new ShapeGeometry(shape, 6)
+  const alpha = new InstancedBufferAttribute(new Float32Array(capacity), 1)
+  alpha.setUsage(DynamicDrawUsage)
+  geom.setAttribute('aAlpha', alpha)
+  const mat = new ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    vertexShader: /* glsl */ `
+      attribute float aAlpha; varying float vAlpha;
+      void main() {
+        vAlpha = aAlpha;
+        gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: /* glsl */ `
+      varying float vAlpha;
+      void main() { gl_FragColor = vec4(0.04, 0.06, 0.1, 0.82 * vAlpha); }`,
+  })
+  const mesh = new InstancedMesh(geom, mat, capacity)
+  mesh.instanceMatrix.setUsage(DynamicDrawUsage)
+  mesh.frustumCulled = false
+  mesh.count = 0
+  mesh.renderOrder = 11
+  return { mesh, alpha }
+}
 
 export function Effects() {
   const [bubbles, setBubbles] = useState<Bubble[]>([])
@@ -204,6 +266,8 @@ export function Effects() {
     const m = new MeshBasicMaterial({ color: '#dfe7ff', transparent: true, opacity: 0.85, depthWrite: false })
     return { g, m }
   }, [])
+
+  const backdrop = useMemo(() => makeBackdrop(MAX_VISIBLE_BUBBLES), [])
 
   const arcObj = useMemo(() => {
     const geom = new BufferGeometry()
@@ -256,12 +320,17 @@ export function Effects() {
     return { geom, pos, col, size, points }
   }, [])
 
-  useEffect(() => () => {
-    ring.g.dispose()
-    ring.m.dispose()
-    arcObj.geom.dispose()
-    pointsObj.geom.dispose()
-  }, [ring, arcObj, pointsObj])
+  useEffect(
+    () => () => {
+      ring.g.dispose()
+      ring.m.dispose()
+      backdrop.mesh.geometry.dispose()
+      ;(backdrop.mesh.material as ShaderMaterial).dispose()
+      arcObj.geom.dispose()
+      pointsObj.geom.dispose()
+    },
+    [ring, backdrop, arcObj, pointsObj],
+  )
 
   useEffect(() => {
     let dirtyBubbles = false
@@ -276,25 +345,26 @@ export function Effects() {
     const fire = (e: EventMsg, ctx: FrameCtx) => {
       const { now } = ctx
       if (isEventKind(e, 'talk')) {
-        const p = agentPos(e.payload.speaker_id, ctx)
+        const speaker = e.payload.speaker_id
+        const p = agentPos(speaker, ctx)
         if (!p.ok) return
-        const text = String(e.payload.text ?? '').slice(0, 280)
-        const mine = bubbleState.list.filter((b) => b.agentId === e.payload.speaker_id)
-        // The same line repeated (scripted brains do this): refresh the bubble instead of stacking a twin.
-        const twin = mine.find((b) => b.text === text)
-        if (twin) {
-          twin.born = now
+        // scripted brains repeat themselves every tick: one bubble per speaker, 1.5 s cooldown
+        const last = bubbleState.lastSpoke.get(speaker)
+        if (last !== undefined && now - last < SPEAK_COOLDOWN_MS / 1000) return
+        bubbleState.lastSpoke.set(speaker, now)
+        const text = clampBubbleText(e.payload.text)
+        const mine = bubbleState.list.find((b) => b.agentId === speaker)
+        if (mine) {
+          mine.born = now
+          if (mine.text !== text) {
+            mine.text = text
+            mine.rev++
+            mine.w = mine.h = 0
+            dirtyBubbles = true
+          }
           return
         }
-        // At most two bubbles per speaker; the oldest makes room.
-        while (mine.length >= MAX_PER_AGENT) {
-          const oldest = mine.shift()!
-          const i = bubbleState.list.indexOf(oldest)
-          if (i >= 0) bubbleState.list.splice(i, 1)
-        }
-        for (let i = 0; i < mine.length; i++) mine[i]!.lane = i + 1
-        bubbleState.list.push({ key: bubbleState.nextKey++, agentId: e.payload.speaker_id, text, born: now, lane: 0, group: null, troika: null })
-        while (bubbleState.list.length > MAX_BUBBLES) bubbleState.list.shift()
+        bubbleState.list.push({ agentId: speaker, text, born: now, rev: 0, group: null, troika: null, w: 0, h: 0, dist: 0, x: 0, y: 0, z: 0, ok: false })
         dirtyBubbles = true
         return
       }
@@ -352,38 +422,79 @@ export function Effects() {
     }
 
     const system = (ctx: FrameCtx) => {
-      const { out, now } = ctx
+      const { out, now, camera } = ctx
       fxQueue.drain(out.tick, (e) => fire(e, ctx))
 
-      // bubbles: position over the speaker, stacked, fade in/out
+      // --- bubbles: expire, locate, pick the nearest few within range, position + fade
       const list = bubbleState.list
       for (let i = list.length - 1; i >= 0; i--) {
         const b = list[i]!
-        const age = (now - b.born) * 1000
-        if (age > BUBBLE_MS + FADE_MS) {
+        if ((now - b.born) * 1000 > BUBBLE_MS) {
           list.splice(i, 1)
           dirtyBubbles = true
           continue
         }
         const p = agentPos(b.agentId, ctx)
-        if (b.group) {
-          b.group.visible = p.ok
-          if (p.ok) b.group.position.set(p.x, p.y + 3.1 + b.lane * 2.1 + Math.min(1, age / 600) * 0.2, p.z)
+        b.ok = p.ok
+        if (!p.ok || !camera) {
+          b.dist = Infinity
+          continue
         }
-        if (b.troika) {
+        b.x = p.x
+        b.y = p.y + 2.9
+        b.z = p.z
+        const dx = camera.position.x - b.x
+        const dy = camera.position.y - b.y
+        const dz = camera.position.z - b.z
+        b.dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
+        if (b.dist > BUBBLE_MAX_DIST) b.dist = Infinity
+      }
+      // selection: the MAX_VISIBLE nearest (no allocation: repeated min scan over a tiny list)
+      for (const b of list) if (b.group) b.group.visible = false
+      let shown = 0
+      const alphaArr = backdrop.alpha.array as Float32Array
+      if (camera) {
+        while (shown < MAX_VISIBLE_BUBBLES) {
+          let best: Bubble | null = null
+          for (const b of list) {
+            if (b.dist === Infinity || !b.group || b.group.visible) continue
+            if (!best || b.dist < best.dist) best = b
+          }
+          if (!best) break
+          const b = best
+          const age = (now - b.born) * 1000
           const fin = Math.min(1, age / FADE_MS)
-          const fout = age > BUBBLE_MS ? 1 - (age - BUBBLE_MS) / FADE_MS : 1
+          const fout = age > BUBBLE_MS - FADE_MS ? (BUBBLE_MS - age) / FADE_MS : 1
           const o = Math.max(0, Math.min(fin, fout))
-          b.troika.fillOpacity = o
-          b.troika.outlineOpacity = o * 0.95
+          const g = b.group!
+          g.visible = true
+          g.position.set(b.x, b.y + Math.min(1, age / 600) * 0.12, b.z)
+          g.quaternion.copy(camera.quaternion)
+          if (b.troika) b.troika.fillOpacity = o
+          // backdrop: same billboard, slightly behind the text along the view ray, sized to the measured block
+          viewDir.set(b.x - camera.position.x, g.position.y - camera.position.y, b.z - camera.position.z).normalize()
+          dummy.position.copy(g.position).addScaledVector(viewDir, 0.04)
+          dummy.quaternion.copy(camera.quaternion)
+          const w = (b.w > 0 ? b.w : BUBBLE_WIDTH) + BUBBLE_PAD * 2
+          const h = (b.h > 0 ? b.h : BUBBLE_FONT * BUBBLE_LINE_HEIGHT) + BUBBLE_PAD * 1.6
+          dummy.scale.set(w, h, 1)
+          dummy.updateMatrix()
+          backdrop.mesh.setMatrixAt(shown, dummy.matrix)
+          alphaArr[shown] = o
+          shown++
         }
+      }
+      backdrop.mesh.count = shown
+      if (shown > 0) {
+        backdrop.mesh.instanceMatrix.needsUpdate = true
+        backdrop.alpha.needsUpdate = true
       }
       if (dirtyBubbles) {
         dirtyBubbles = false
         setBubbles(list.slice())
       }
 
-      // selection ring
+      // --- selection ring
       const ringMesh = ringRef.current
       if (ringMesh) {
         const sel = mirror.selectedId
@@ -396,7 +507,7 @@ export function Effects() {
         }
       }
 
-      // transfer arcs
+      // --- transfer arcs
       const ap = arcObj.pos.array as Float32Array
       let v = 0
       for (let i = arcs.length - 1; i >= 0; i--) {
@@ -432,7 +543,7 @@ export function Effects() {
       arcObj.lines.visible = v > 0
       if (v > 0) arcObj.pos.needsUpdate = true
 
-      // particle bursts
+      // --- particle bursts
       const pp = pointsObj.pos.array as Float32Array
       const pc = pointsObj.col.array as Float32Array
       const ps = pointsObj.size.array as Float32Array
@@ -471,13 +582,14 @@ export function Effects() {
       }
     }
     return registerSystem(SYS_EFFECTS, system)
-  }, [arcObj, pointsObj])
+  }, [arcObj, pointsObj, backdrop])
 
   return (
     <group>
       {bubbles.map((b) => (
-        <BubbleView key={b.key} bubble={b} />
+        <BubbleView key={b.agentId} bubble={b} text={b.text} />
       ))}
+      <primitive object={backdrop.mesh} />
       <HoverTag />
       <mesh ref={ringRef} geometry={ring.g} material={ring.m} visible={false} />
       <primitive object={arcObj.lines} />

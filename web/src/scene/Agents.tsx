@@ -60,7 +60,7 @@ export function Agents() {
     g.rotateX(-Math.PI / 2)
     return g
   }, [])
-  const material = useMemo(() => makeInstancedMaterial({ roughness: 0.5, metalness: 0.1, emissiveScale: 1.6 }), [])
+  const material = useMemo(() => makeInstancedMaterial({ roughness: 0.62, metalness: 0.04, emissiveScale: 1.6, rim: true, color: '#efe7da' }), [])
   const haloMat = useMemo(() => makeInstancedMaterial({ roughness: 0.3, metalness: 0.2, emissiveScale: 2.2 }), [])
   const blobMat = useMemo(() => new MeshBasicMaterial({ color: '#000000', transparent: true, opacity: 0.32, depthWrite: false }), [])
   const meshRef = useRef<InstancedMesh>(null)

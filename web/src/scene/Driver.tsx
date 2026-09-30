@@ -24,6 +24,9 @@ declare global {
       history: typeof history
       select: (id: string | null) => void
       scene: import('three').Scene
+      /** effects queue, for smoke tests that inject events */
+      fx: typeof fxQueue
+      camera: () => { x: number; y: number; z: number }
     }
   }
 }
@@ -80,6 +83,8 @@ export function Driver() {
       history,
       select: (id) => useStore.getState().select(id),
       scene,
+      fx: fxQueue,
+      camera: () => ({ x: ctx.camera?.position.x ?? 0, y: ctx.camera?.position.y ?? 0, z: ctx.camera?.position.z ?? 0 }),
     }
     return () => {
       gl.render = origRender
