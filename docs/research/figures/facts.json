@@ -1,0 +1,55 @@
+{
+  "cost_table_usd": {
+    "average": [
+      1.539,
+      1.938,
+      2.337,
+      3.135
+    ],
+    "budget": [
+      5.48,
+      6.95,
+      8.42,
+      11.36
+    ],
+    "frontier": [
+      21.407,
+      27.287,
+      33.167,
+      44.927
+    ],
+    "sharp": [
+      8.622,
+      10.047,
+      11.472,
+      14.321
+    ]
+  },
+  "generations": {
+    "max_final_generation": 5.0,
+    "median_final_generation": 3.0,
+    "runs": 5
+  },
+  "power_seeds_for_80pct": {
+    "Exact sign test|d=0.5": null,
+    "Exact sign test|d=0.8": 25,
+    "Exact sign test|d=1.2": 15,
+    "Exact sign test|d=1.6": 9,
+    "Paired t-test|d=0.5": 34,
+    "Paired t-test|d=0.8": 15,
+    "Paired t-test|d=1.2": 8,
+    "Paired t-test|d=1.6": 6
+  },
+  "vault": {
+    "agent": "Ada-1",
+    "channels": [
+      "chronicle",
+      "gossip",
+      "inherited",
+      "observed"
+    ],
+    "edges": 121,
+    "notes": 56,
+    "unlinked": 5
+  }
+}
