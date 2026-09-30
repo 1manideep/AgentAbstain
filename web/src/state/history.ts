@@ -397,6 +397,45 @@ export class History {
     return s
   }
 
+  /**
+   * Display-only, applied to each frame as it is stored: an agent standing on a node centre (the
+   * kernel forages anywhere within the forage radius and the scripted brain walks to the exact
+   * centre) is placed at the crystal's foot, on a ring of radius NODE_FOOT between the spires and
+   * the stones at a stable per-id angle, so foragers are neither inside the crystal nor stacked on
+   * one another. Blended in polar coordinates over the last NODE_BLEND units of the approach, so
+   * the walk bends around the crystal; frame-to-frame interpolation stays linear and continuous.
+   */
+  private spreadFrame(frame: Frame): void {
+    for (let s = 0; s < frame.capacity; s++) {
+      if (frame.ids[s] === '') continue // the dead are spread too: a corpse inside the crystal is invisible
+      const d = s * SLOT_STRIDE
+      const x = frame.data[d]!
+      const y = frame.data[d + 1]!
+      let best = -1
+      let bd = NODE_BLEND
+      for (let n = 0; n < frame.nodeCapacity; n++) {
+        if (frame.nodeIds[n] === '') continue
+        const nd = n * NODE_STRIDE
+        const dist = Math.hypot(x - frame.nodes[nd]!, y - frame.nodes[nd + 1]!)
+        if (dist < bd) {
+          bd = dist
+          best = n
+        }
+      }
+      if (best < 0) continue
+      const nd = best * NODE_STRIDE
+      const nx = frame.nodes[nd]!
+      const ny = frame.nodes[nd + 1]!
+      const k = smoothstep((NODE_BLEND - bd) / (NODE_BLEND - NODE_CORE))
+      const target = idAngle(frame.ids[s]!)
+      const raw = bd > 0.05 ? Math.atan2(y - ny, x - nx) : target
+      const angle = shortestArc(raw, target, k)
+      const radius = bd + (NODE_FOOT - bd) * k
+      frame.data[d] = nx + radius * Math.cos(angle)
+      frame.data[d + 1] = ny + radius * Math.sin(angle)
+    }
+  }
+
   // ------------------------------------------------------------ ingest
 
   /** Parse a snapshot into a frame and append it. Returns the frame. */
@@ -478,6 +517,7 @@ export class History {
       frame.nodes[d + 3] = n.capacity
       frame.nodes[d + 4] = n.stock_delta
     }
+    this.spreadFrame(frame)
 
     // Lifecycle bookkeeping (births, deaths) against the previous newest frame.
     for (let s = 0; s < cap; s++) {
@@ -767,10 +807,12 @@ export class History {
         continue
       }
 
-      // Missing or non-alive in the newer frame: tombstone.
+      // Missing or non-alive in the newer frame: tombstone. Before the death (age < 0) only the
+      // A→B window that ends in the death frame qualifies (A still alive); otherwise a time before
+      // the occupant was even born would show its corpse standing at its future death spot.
       const died = this.slotDiedVts[s]!
       const age = v - died
-      if (died !== Number.POSITIVE_INFINITY && age < TOMBSTONE_MS && age > -1e9) {
+      if (died !== Number.POSITIVE_INFINITY && age < TOMBSTONE_MS && (age >= 0 || (idA !== '' && stA === STATUS_ALIVE))) {
         if (idA !== '' && idA === idB) {
           out.x[s] = A.data[dA]! + (B.data[dB]! - A.data[dA]!) * t
           out.y[s] = A.data[dA + 1]! + (B.data[dB + 1]! - A.data[dA + 1]!) * t
@@ -853,6 +895,21 @@ export class History {
       out.nodePresent[s] = 1
     }
   }
+}
+
+/** Radius of the ring foragers stand on around a node, where blending starts, and where it is complete. */
+export const NODE_FOOT = 1.7
+export const NODE_BLEND = 3.0
+const NODE_CORE = 0.4
+
+/** Stable angle per agent id (FNV-1a), so an agent always takes the same spot at a node. */
+function idAngle(id: string): number {
+  let h = 0x811c9dc5
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return ((h % 3600) / 3600) * Math.PI * 2
 }
 
 /** The module singleton (§16). Tests construct their own instances. */

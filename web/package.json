@@ -11,6 +11,7 @@
     "gen:fixture": "node scripts/gen-fixture.mjs",
     "screenshot": "node scripts/screenshot.mjs",
     "screenshot:landscape": "node scripts/screenshot-landscape.mjs",
+    "screenshot:humans": "node scripts/screenshot-humans.mjs",
     "lint": "oxlint",
     "preview": "vite preview"
   },

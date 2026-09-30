@@ -10,7 +10,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { RosterAgent, ServerMsg, SnapshotMsg } from '../protocol'
 import { EventRing } from './events'
-import { CLAMP_FACTOR, History, SampleOut } from './history'
+import { CLAMP_FACTOR, History, NODE_FOOT, SampleOut } from './history'
 import { Series } from './series'
 
 const KNOWN = new Set(['hello', 'roster', 'snapshot', 'gadgets', 'tasks', 'chronicle', 'event', 'metrics', 'day', 'status'])
@@ -56,6 +56,7 @@ describe.skipIf(!existsSync(path))('fixture replay', () => {
     const out = new SampleOut(h.capacity, h.nodeCapacity)
     const lastX = new Float32Array(h.capacity).fill(Number.NaN)
     const lastY = new Float32Array(h.capacity).fill(Number.NaN)
+    const lastId = new Array<string>(h.capacity).fill('')
     let maxJump = 0
     let presentSamples = 0
     for (let v = h.oldestVts; v <= h.newestVts; v += 16.7) {
@@ -63,6 +64,7 @@ describe.skipIf(!existsSync(path))('fixture replay', () => {
       for (let s = 0; s < out.count; s++) {
         if (!out.present[s]) {
           lastX[s] = Number.NaN
+          lastId[s] = ''
           continue
         }
         presentSamples++
@@ -70,15 +72,30 @@ describe.skipIf(!existsSync(path))('fixture replay', () => {
         expect(Number.isFinite(out.y[s])).toBe(true)
         expect(out.alpha[s]).toBeGreaterThanOrEqual(0)
         expect(out.scale[s]).toBeGreaterThanOrEqual(0)
-        if (Number.isFinite(lastX[s]!) && !out.dead[s]) {
+        // a slot changing hands (a tombstone replaced by a newborn) is not a teleport: the newborn
+        // scales in at its own position; continuity is asserted per id, not per slot
+        if (Number.isFinite(lastX[s]!) && !out.dead[s] && lastId[s] === out.ids[s]) {
           const d = Math.hypot(out.x[s]! - lastX[s]!, out.y[s]! - lastY[s]!)
           if (d > maxJump) maxJump = d
         }
         lastX[s] = out.x[s]!
         lastY[s] = out.y[s]!
+        lastId[s] = out.ids[s]!
       }
     }
     expect(presentSamples).toBeGreaterThan(0)
+    // display spread: nobody STANDS inside a node crystal (closer than NODE_FOOT - 0.5 to its centre);
+    // a walker may still cut across the stones on its way past, which the kernel's straight paths allow
+    for (let v = h.oldestVts; v <= h.newestVts; v += 250) {
+      h.sample(v, out)
+      for (let s = 0; s < out.count; s++) {
+        if (!out.present[s] || out.dead[s] || Math.hypot(out.vx[s]!, out.vy[s]!) > 0.3) continue
+        for (let n = 0; n < out.nodeCount; n++) {
+          if (!out.nodePresent[n]) continue
+          expect(Math.hypot(out.x[s]! - out.nx[n]!, out.y[s]! - out.ny[n]!)).toBeGreaterThan(NODE_FOOT - 0.5)
+        }
+      }
+    }
     // max_speed is 2 u/tick and the shortest virtual tick is ≥ 200 ms → < 0.2 u per 16.7 ms frame,
     // plus births appear at their position (scale 0) rather than jumping.
     expect(maxJump).toBeLessThan(0.5)

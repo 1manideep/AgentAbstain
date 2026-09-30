@@ -48,7 +48,19 @@ const WealthCard = memo(function WealthCard() {
     out.sort((x, y) => y.balance - x.balance)
     return out
   }, [statsRev, agentStats, rosterById, config])
-  const tiers = useMemo(() => Object.keys(config?.tiers ?? {}).map((name) => ({ name, color: selectTierColor(config, name) })), [config])
+  // legend: only tiers someone in the roster is on, ordered down the capability ladder, then by name
+  const tiers = useMemo(() => {
+    const used = new Set<string>()
+    for (const a of rosterById.values()) used.add(a.tier)
+    const rank = (name: string) => {
+      const r = config?.tiers[name]?.rank
+      return typeof r === 'number' ? r : Number.POSITIVE_INFINITY
+    }
+    return Object.keys(config?.tiers ?? {})
+      .filter((name) => used.size === 0 || used.has(name))
+      .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
+      .map((name) => ({ name, color: selectTierColor(config, name) }))
+  }, [config, rosterById])
   return (
     <Card id="wealth" title="Wealth distribution" meta={<span className="muted small">{rows.length} alive</span>}>
       <WealthChart rows={rows} tiers={tiers} gini={series.gini} selectedId={selectedId} onSelect={select} />

@@ -129,6 +129,18 @@ export function Agents() {
         const degen = !dead && (out.degenerate[s] === 1 || p.degenUntil[s]! > now)
         const walk = !dead && !sleep && vel > 0.05
         const tIdle = walk || sleep || degen || dead ? 0 : 1
+        if (p.colorId[s] !== id) {
+          // the slot changed hands (a tombstone replaced by a newborn): start from the new
+          // occupant's state instead of blending out of the previous one's pose
+          w[b + W_IDLE] = tIdle
+          w[b + W_WALK] = walk ? 1 : 0
+          w[b + W_SLEEP] = sleep ? 1 : 0
+          w[b + W_DEGEN] = degen ? 1 : 0
+          w[b + W_DEAD] = dead ? 1 : 0
+          p.phase[s] = 0
+          p.degenUntil[s] = 0
+          p.flashUntil[s] = 0
+        }
         w[b + W_IDLE]! += (tIdle - w[b + W_IDLE]!) * k
         w[b + W_WALK]! += ((walk ? 1 : 0) - w[b + W_WALK]!) * k
         w[b + W_SLEEP]! += ((sleep ? 1 : 0) - w[b + W_SLEEP]!) * k
@@ -160,7 +172,9 @@ export function Agents() {
         blobs.setMatrixAt(nb, dummy.matrix)
         nb++
 
-        if (rigState.riggedSlots.has(s)) continue // a GLB rig draws this agent
+        // a rig (GLB or procedural human) draws this agent's body; the halo is still ours, so the
+        // capsule instance is kept in the buffer at zero scale to keep instance ids aligned
+        const rigged = rigState.riggedSlots.has(s)
 
         let x = x0
         let z = z0
@@ -179,7 +193,8 @@ export function Agents() {
         const tilt = 0.35 * wx
         dummy.position.set(x, y, z)
         dummy.rotation.set(0, -out.heading[s]!, -lean - tilt, 'YZX')
-        dummy.scale.set(sxz * sc, sy * sc, sxz * sc)
+        if (rigged) dummy.scale.set(0, 0, 0)
+        else dummy.scale.set(sxz * sc, sy * sc, sxz * sc)
         dummy.updateMatrix()
         mesh.setMatrixAt(n, dummy.matrix)
 
@@ -201,7 +216,7 @@ export function Agents() {
         if (p.flashUntil[s]! > now) pulse += (p.flashUntil[s]! - now) * 1.2
         if (id === selected) pulse += 0.12
         pulseArr[n] = pulse
-        fadeArr[n] = alpha * (1 - 0.15 * ws)
+        fadeArr[n] = rigged ? 0 : alpha * (1 - 0.15 * ws)
 
         // tier halo hovering over the head, spinning slowly, dimmed while asleep, gone when dead;
         // on a capability ladder the genius wears a wide bright fast ring and the dunce a small dull slow one

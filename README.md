@@ -10,21 +10,29 @@ The plan is in [`docs/PLAN.md`](docs/PLAN.md); the buildable specification, incl
 |---|---|---|
 | Referee / kernel | `void/world/kernel.py` | The only writer to world state. Validates and applies every action against live state; physics, bounds, caps, claims checking |
 | Wallet / economy | `void/economy/` | Real micro-dollar ledger. Reservation-based gate before each call, metering from provider usage after, daily and total caps, kernel wallets, task board, benefactor |
-| Brains | `void/brain/` | `ScriptedBrain` (utility softmax with real temperature), `AnthropicBrain` (one structured-output Messages call per tick), entropy model, degeneration operator, coherence and claim metrics |
+| Brains | `void/brain/` | `ScriptedBrain` (utility softmax with real temperature), `AnthropicBrain` and `GeminiBrain` (one JSON-schema-constrained call per tick; Gemini takes real temperature over `[0, 2]`), entropy model, degeneration operator, coherence and claim metrics |
 | Memory | `void/memory/` | Per-agent Obsidian-compatible vault of markdown notes with `[[wikilinks]]`, hashing embeddings, graph retrieval, auto-linking, provenance channels, self-node versions, tracer and probe notes |
 | Culture | `void/culture/` | Gossip with per-hop paraphrase drift and provenance; a template (or metered LLM) chronicle |
 | Sandbox | `void/sandbox/` | Verification-gated gadget creation: allow-list static check, then execution in user/mount/pid/net namespaces inside a `pivot_root` allow-list root with rlimits; declarative render specs only |
 | Lifecycle | `void/agents/lifecycle.py` | Offspring with inheritance and mutation, bankruptcy with estate conservation, fitness-weighted replacement, graveyard |
 | Simulation | `void/sim/` | The tick loop, observation builder, operator command queue, snapshots, metrics |
 | Server | `void/server/` | FastAPI + WebSocket hub with per-client outboxes, catch-up endpoints, operator token auth, CSP |
-| Frontend | `web/` | Vite + React + react-three-fiber: instanced agents with time-based interpolation outside React, control room charts, event feed, task board, lineage, self-history diffs |
+| Frontend | `web/` | Vite + React + react-three-fiber: ten procedural human characters (skinned, seven-clip movement set) driven by a time-based history buffer outside React, capability halos, control room charts, event feed, task board, lineage, self-history diffs |
 | Research | `void/research/`, `configs/exp_*.yaml`, `scripts/` | Seeded, paired experiments with declared independent variables and pre-registered outcomes; `compare` refuses incomparable runs |
 
 ## What it looks like
 
-![Live localhost, day 2](web/screenshots/live-landscape-1.png)
+![Live localhost, day 3: the inhabitants at the nodes](web/screenshots/humans-world.png)
 
-The left pane is a seeded low-poly landscape (terrain, lakes, trees, crystal resource nodes, gadgets on pedestals, a sky that follows the world clock) rendered with three.js through react-three-fiber; agents are instanced and interpolated from a time-based history buffer so motion stays smooth while ticks are irregular. The right pane is the control room: spend gauges, event feed, charts, task board, lineage, and the selected agent's self-history and notes.
+The left pane is a seeded low-poly landscape (terrain, lakes, trees, crystal resource nodes, gadgets on pedestals, a sky that follows the world clock) rendered with three.js through react-three-fiber. The inhabitants are ten procedural human characters, one per named agent (build, skin tone, hair, clothes and accessories differ; the tier colour is the emissive trim and the halo above the head, whose size and spin follow the capability rung), skinned to a 19-bone rig with an authored seven-clip movement set: idle, walk, sleep, degenerate, dead, talk and forage. Positions come from a time-based history buffer interpolated outside React, so motion stays smooth while ticks are irregular; agents standing on a node are shown at the crystal's foot. The right pane is the control room: spend gauges, event feed, charts, task board, lineage, and the selected agent's self-history and notes.
+
+![Dev, the genius, foraging](web/screenshots/humans-forage.png)
+
+![The ten characters](web/screenshots/humans-contact.png)
+
+![One character, seven moves](web/screenshots/humans-moves.png)
+
+Gallery: open `#/characters` on a built frontend (`?moves=1&preset=N` for the move strip). Under a software rasteriser the characters fall back to the instanced capsules (`?rig=1` forces them on).
 
 ## Quick start
 

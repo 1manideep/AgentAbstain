@@ -86,6 +86,7 @@ function RiggedAgents({ rig }: { rig: LoadedRig }) {
   }, [rig, group])
 
   useEffect(() => {
+    rigState.glbActive = true // the GLB wins over the procedural characters
     const assigned = new Map<number, Puppet>()
     const system = (ctx: FrameCtx) => {
       const { out, dt, speed } = ctx
@@ -128,7 +129,11 @@ function RiggedAgents({ rig }: { rig: LoadedRig }) {
       }
       free = []
     }
-    return registerSystem(SYS_RIG, system)
+    const unregister = registerSystem(SYS_RIG, system)
+    return () => {
+      unregister()
+      rigState.glbActive = false
+    }
   }, [pool])
 
   useEffect(() => () => rigState.riggedSlots.clear(), [])

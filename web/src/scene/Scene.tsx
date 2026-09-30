@@ -7,6 +7,7 @@ import { CameraRig } from './CameraRig'
 import { Driver } from './Driver'
 import { Effects } from './Effects'
 import { Gadgets } from './Gadgets'
+import { CharacterSystem } from './humans/CharacterSystem'
 import { gpuProfile } from './gpu'
 import { Nodes } from './Nodes'
 import { Post } from './Post'
@@ -50,6 +51,7 @@ export function Scene() {
         <Props />
         <Agents />
         <Rig />
+        <CharacterSystem />
         <Nodes />
         <Gadgets />
         <Suspense fallback={null}>
