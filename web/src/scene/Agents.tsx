@@ -4,7 +4,7 @@ import type { ThreeEvent } from '@react-three/fiber'
 import { history } from '../state/history'
 import { useStore } from '../state/store'
 import { attachInstanceAttributes, makeInstancedMaterial } from './instancedMaterial'
-import { perSlot, registerSystem, slotColor, SYS_AGENTS, type FrameCtx } from './sceneState'
+import { mirror, perSlot, registerSystem, sampled, slotColor, SYS_AGENTS, type FrameCtx } from './sceneState'
 
 const W_IDLE = 0
 const W_WALK = 1
@@ -55,13 +55,12 @@ export function Agents() {
 
   useEffect(() => {
     if (instToSlot.map.length < capacity) instToSlot.map = new Int32Array(capacity)
-    const sel = () => useStore.getState()
     const system = (ctx: FrameCtx) => {
       const { out, dt, now, speed, reducedMotion } = ctx
       const p = perSlot
       const k = 1 - Math.exp(-dt / 0.18)
-      const selected = sel().selectedAgentId
-      const hovered = sel().hoveredAgentId
+      const selected = mirror.selectedId
+      const hovered = mirror.hoveredId
       let n = 0
       const pulseArr = attrs.pulse.array as Float32Array
       const fadeArr = attrs.fade.array as Float32Array
@@ -198,7 +197,6 @@ export function Agents() {
 const WHITE = new Color('#ffffff')
 const ASH = new Color('#3a3f4c')
 
-import { sampled } from './sceneState'
 function sampledIdAt(slot: number): string | null {
   const id = sampled.out.ids[slot]
   return id ? id : null

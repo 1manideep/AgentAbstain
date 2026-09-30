@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import hmac
-from typing import Iterable
+from collections.abc import Iterable
 
 from fastapi import HTTPException, Request
 from starlette.datastructures import Headers, MutableHeaders
