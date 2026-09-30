@@ -207,6 +207,8 @@ class ScriptedBrain:
             if h.kind == "talk" and h.from_name and rng.random() < 0.25 * seed.curiosity:
                 ops.append(MemoryOp(op="remember", title=f"{h.from_name} said something on day {obs.day}", text=f"[[{h.from_name}]] told me: {h.text[:120]}", tags=["people"], links_to=[h.from_name]))
                 break
+        if not ops and obs.last_action_result and obs.last_action_result.startswith("read_chronicle: ok") and obs.chronicle_headline:
+            ops.append(MemoryOp(op="remember", title=f"Chronicle of day {max(1, obs.day - 1)}", text=f"The chronicle said: {obs.chronicle_headline}", tags=["chronicle"]))
         if not ops and obs.last_action_result and obs.last_action_result.startswith("forage: ok") and rng.random() < 0.3 + 0.4 * seed.curiosity:
             near = min(obs.nodes, key=lambda n: n.distance) if obs.nodes else None
             if near is not None:

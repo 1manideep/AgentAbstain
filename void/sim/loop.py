@@ -437,11 +437,13 @@ class Simulation:
                         fn(aid, tgt.name, tick, f"An inhabitant of the void on tier {tgt.model_tier}.")
                 self.db.execute(
                     "UPDATE llm_calls SET corruption_mode=?, text_coherence=?, invalid_action=?, stale_action=?, perseveration=?, "
-                    "action_entropy_w8=?, action_regret=?, p_chosen=?, claims_made=?, claims_false=?, action_type=?, thought=? WHERE call_id=?",
+                    "action_entropy_w8=?, action_regret=?, p_chosen=?, claims_made=?, claims_false=?, action_type=?, thought=?, extras=? WHERE call_id=?",
                     (mode, text_coh, int(outcome.kind == "invalid" or r.decision is None), int(outcome.kind == "stale"), persev,
                      shannon(list(hist)), r.extras.get("action_regret"), r.extras.get("p_chosen"),
                      int(outcome.effects.get("claims_made", 0)), int(outcome.effects.get("claims_false", 0)), decision.action.type,
-                     sanitize_text(decision.thought, max_len=600), call_ids[aid]),
+                     sanitize_text(decision.thought, max_len=600),
+                     json.dumps({"retrieved_titles": [m.title for m in obs[aid].memories], "retrieved_hops": [m.hop for m in obs[aid].memories],
+                                 **{k: v for k, v in r.extras.items()}}, sort_keys=True), call_ids[aid]),
                 )
                 self.calls_this_tick[aid] = {"t_eff": round(s.effective_temperature, 4), "degenerate": bool(mode),
                                              "coherence": text_coh, "world_cost": self.db.fetchone("SELECT world_cost FROM llm_calls WHERE call_id=?", (call_ids[aid],))["world_cost"]}
