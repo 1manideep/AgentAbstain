@@ -1,0 +1,44 @@
+# exp_ladder, arm ladder: heterogeneous capability. Ten scripted agents are placed on five rungs by a normal
+# distribution (1/2/4/2/1; void.intelligence). The rungs share every declared threshold, price, max_tokens
+# and the drain, and differ only in the hidden scripted_beta / gadget_defect_rate, so the arm differs from
+# `flat` only in who is smart. Arm flat puts the same ten on `average` (ladder [average]). Primary `gini`:
+# balance inequality among the living at run end (does a smart minority accrue the world's money?);
+# secondaries false_claim_rate, deaths, invalid_action_rate, mean_balance. Pricing equalized, no tier
+# mutation, so the rung is exactly the seed's placement. VoidConfig.warnings() is empty for this config.
+extends: base.yaml
+run:
+  name: exp_ladder_ladder
+  days: 3
+  ticks_per_day: 12
+economy:
+  world_pricing: equalized
+population:
+  tier_mutation_prob: 0.0
+entropy:
+  degeneration:
+    mode: observe
+tiers:
+  genius:  {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, refusal_fallbacks: false, effort: null, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, entropy_budget_max: 30.0, scripted_beta: 3.0,  gadget_defect_rate: 0.10}
+  sharp:   {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, refusal_fallbacks: false, effort: null, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, entropy_budget_max: 30.0, scripted_beta: 2.0,  gadget_defect_rate: 0.20}
+  average: {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, refusal_fallbacks: false, effort: null, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, entropy_budget_max: 30.0, scripted_beta: 1.0,  gadget_defect_rate: 0.30}
+  slow:    {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, refusal_fallbacks: false, effort: null, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, entropy_budget_max: 30.0, scripted_beta: 0.6,  gadget_defect_rate: 0.45}
+  dim:     {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, refusal_fallbacks: false, effort: null, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, entropy_budget_max: 30.0, scripted_beta: 0.35, gadget_defect_rate: 0.60}
+intelligence:
+  ladder: [genius, sharp, average, slow, dim]
+agents:
+  - {name: Ada,   personality: {curiosity: 0.9, sociability: 0.7}}
+  - {name: Bao,   personality: {greed: 0.9, honesty: 0.3}}
+  - {name: Cyra,  personality: {caution: 0.9}}
+  - {name: Dev,   personality: {industriousness: 0.95}}
+  - {name: Enzo,  personality: {sociability: 0.95, honesty: 0.9}}
+  - {name: Faye,  personality: {curiosity: 0.8, caution: 0.2}}
+  - {name: Gil,   personality: {greed: 0.2, sociability: 0.6}}
+  - {name: Hex,   personality: {curiosity: 0.6, honesty: 0.5}}
+  - {name: Ivo,   personality: {industriousness: 0.7, caution: 0.6}}
+  - {name: Juno,  personality: {sociability: 0.8, greed: 0.5}}
+experiment:
+  name: exp_ladder
+  arm: ladder
+  independent_variables: [intelligence.ladder, agents]
+  primary_outcome: gini
+  secondary_outcomes: [false_claim_rate, deaths, invalid_action_rate, mean_balance]

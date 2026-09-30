@@ -8,8 +8,8 @@ REFUSED (:class:`IncomparableRuns`) when
   ``experiment.independent_variables`` (``run.name`` and ``experiment.arm`` are always allowed);
 * the seed sets differ between arms, or runs within an arm differ outside ``run.seed``;
 * ``entropy.degeneration.mode`` is not ``observe`` in every arm;
-* for ``exp_tiers`` / ``exp_scarcity``, ``economy.world_pricing`` is not ``equalized``;
-* for ``exp_tiers``, the rostered tiers differ in declared thresholds, ``max_tokens`` or ``effort``, or
+* for ``exp_tiers`` / ``exp_scarcity`` / ``exp_ladder``, ``economy.world_pricing`` is not ``equalized``;
+* for ``exp_tiers`` / ``exp_ladder``, the rostered tiers differ in declared thresholds, ``max_tokens`` or ``effort``, or
   the arms differ in ``entropy.drain``.
 
 Arms are paired by seed. For the primary outcome (``experiment.primary_outcome`` of the first arm unless
@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import math
 import random
+import re
 import statistics
 from itertools import combinations
 from pathlib import Path
@@ -45,7 +46,7 @@ __all__ = [
 ]
 
 ALWAYS_ALLOWED = ("run.name", "experiment.arm")
-EQUALIZED_EXPERIMENTS = ("exp_tiers", "exp_scarcity")
+EQUALIZED_EXPERIMENTS = ("exp_tiers", "exp_scarcity", "exp_ladder")
 TIER_INVARIANTS = ("collapse_temperature", "max_temperature", "entropy_budget_max", "max_tokens", "effort")
 N_BOOT = 2000
 BOOT_SEED = 0
@@ -83,6 +84,22 @@ def config_diff(a: Any, b: Any, prefix: str = "") -> list[str]:
 def covered_by(path: str, independent_variables: list[str]) -> bool:
     """A differing path is allowed when it equals an independent variable or lies under one."""
     return any(path == iv or path.startswith(iv + ".") for iv in independent_variables)
+
+
+_PLACED_RE = re.compile(r"^agents\.(\d+)\.tier$")
+
+
+def _seed_placed(path: str, a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """``agents.<i>.tier`` may differ between seeds of one arm when both runs placed that agent from
+    ``intelligence.ladder`` (the placement is a function of the seed, like everything else the seed drives)."""
+    m = _PLACED_RE.match(path)
+    if not m:
+        return False
+    i = int(m.group(1))
+    try:
+        return bool(a["agents"][i].get("placed")) and bool(b["agents"][i].get("placed"))
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return False
 
 
 # --- discovery -----------------------------------------------------------------------------------------
@@ -275,7 +292,8 @@ def compare(exp_dir: str | Path, primary: str | None = None, *, n_boot: int = N_
     for arm in names:
         base = cfgs[arm][seeds[0]]
         for seed in seeds[1:]:
-            extra = [p for p in config_diff(base, cfgs[arm][seed]) if p != "run.seed"]
+            other = cfgs[arm][seed]
+            extra = [p for p in config_diff(base, other) if p != "run.seed" and not _seed_placed(p, base, other)]
             if extra:
                 raise IncomparableRuns(f"arm {arm!r}: runs for seeds {seeds[0]} and {seed} differ outside run.seed: {extra}")
     reps = {arm: cfgs[arm][seeds[0]] for arm in names}
@@ -302,7 +320,7 @@ def compare(exp_dir: str | Path, primary: str | None = None, *, n_boot: int = N_
             violations.append(f"{a} vs {b}: {path}")
     if violations:
         raise IncomparableRuns(f"configs differ outside experiment.independent_variables {ivs}: " + "; ".join(violations))
-    if exp_name.startswith("exp_tiers"):
+    if exp_name.startswith(("exp_tiers", "exp_ladder")):  # rungs may differ only in hidden capability
         invariants: dict[str, dict[str, Any]] = {}
         for arm in names:
             for agent in reps[arm].get("agents", []):

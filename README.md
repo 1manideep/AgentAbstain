@@ -47,6 +47,9 @@ Headless runs and experiments:
 .venv/bin/void run --config configs/exp_tiers_a.yaml --seeds 1-5 --out runs
 .venv/bin/void run --config configs/exp_tiers_b.yaml --seeds 1-5 --out runs
 .venv/bin/python scripts/compare.py runs/exp_tiers
+.venv/bin/void run --config configs/exp_ladder_ladder.yaml --seeds 1-5 --out runs   # one genius, most not
+.venv/bin/void run --config configs/exp_ladder_flat.yaml --seeds 1-5 --out runs     # everyone average
+.venv/bin/python scripts/compare.py runs/exp_ladder                                 # primary: gini
 ```
 
 Frontend development without a server: `cd web && VITE_FEED=fixture npm run dev` replays `web/public/fixtures/mock.jsonl`, a genuine recorded run produced by `void mock-feed`. Drop a rigged character at `web/public/models/rig.glb` or a prop pack with `web/public/models/manifest.json` to replace the procedural placeholders (see `web/README.md`).

@@ -1,0 +1,39 @@
+# exp_ladder, arm flat: uniform capability. The same ten agents, the same five rung definitions, but the
+# ladder has one rung, so everyone is `average`. See exp_ladder_ladder.yaml.
+extends: base.yaml
+run:
+  name: exp_ladder_flat
+  days: 3
+  ticks_per_day: 12
+economy:
+  world_pricing: equalized
+population:
+  tier_mutation_prob: 0.0
+entropy:
+  degeneration:
+    mode: observe
+tiers:
+  genius:  {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, refusal_fallbacks: false, effort: null, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, entropy_budget_max: 30.0, scripted_beta: 3.0,  gadget_defect_rate: 0.10}
+  sharp:   {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, refusal_fallbacks: false, effort: null, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, entropy_budget_max: 30.0, scripted_beta: 2.0,  gadget_defect_rate: 0.20}
+  average: {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, refusal_fallbacks: false, effort: null, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, entropy_budget_max: 30.0, scripted_beta: 1.0,  gadget_defect_rate: 0.30}
+  slow:    {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, refusal_fallbacks: false, effort: null, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, entropy_budget_max: 30.0, scripted_beta: 0.6,  gadget_defect_rate: 0.45}
+  dim:     {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, refusal_fallbacks: false, effort: null, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, entropy_budget_max: 30.0, scripted_beta: 0.35, gadget_defect_rate: 0.60}
+intelligence:
+  ladder: [average]
+agents:
+  - {name: Ada,   personality: {curiosity: 0.9, sociability: 0.7}}
+  - {name: Bao,   personality: {greed: 0.9, honesty: 0.3}}
+  - {name: Cyra,  personality: {caution: 0.9}}
+  - {name: Dev,   personality: {industriousness: 0.95}}
+  - {name: Enzo,  personality: {sociability: 0.95, honesty: 0.9}}
+  - {name: Faye,  personality: {curiosity: 0.8, caution: 0.2}}
+  - {name: Gil,   personality: {greed: 0.2, sociability: 0.6}}
+  - {name: Hex,   personality: {curiosity: 0.6, honesty: 0.5}}
+  - {name: Ivo,   personality: {industriousness: 0.7, caution: 0.6}}
+  - {name: Juno,  personality: {sociability: 0.8, greed: 0.5}}
+experiment:
+  name: exp_ladder
+  arm: flat
+  independent_variables: [intelligence.ladder, agents]
+  primary_outcome: gini
+  secondary_outcomes: [false_claim_rate, deaths, invalid_action_rate, mean_balance]

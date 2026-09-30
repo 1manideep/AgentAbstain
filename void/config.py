@@ -147,6 +147,7 @@ class AgentSpec(StrictModel):
     name: str
     tier: str | None = None             # None: assigned from intelligence.ladder at load time
     personality: dict[str, float] | None = None
+    placed: bool = False                # True when `tier` came from the ladder (a seed-derived value, not a choice)
 
 
 class IntelligenceConfig(StrictModel):
@@ -342,6 +343,7 @@ class VoidConfig(StrictModel):
                             extremes=self.intelligence.extremes)
             for a in unassigned:
                 a.tier = placed[a.name]
+                a.placed = True
         return self
 
     @model_validator(mode="after")

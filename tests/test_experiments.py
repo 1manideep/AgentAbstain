@@ -92,7 +92,7 @@ def smoke_run(tmp_path_factory: pytest.TempPathFactory) -> Path:
 # --- (a) configs ---------------------------------------------------------------------------------------------
 def test_every_experiment_config_loads_without_warnings() -> None:
     paths = sorted(CONFIGS.glob("exp_*.yaml"))
-    assert len(paths) >= 17
+    assert len(paths) >= 19
     for p in paths:
         cfg = load_config(p)
         assert cfg.experiment.name and cfg.experiment.arm, p.name
@@ -104,7 +104,7 @@ def test_every_experiment_config_loads_without_warnings() -> None:
 
 def test_arms_differ_only_in_declared_independent_variables() -> None:
     groups = exp_configs()
-    assert set(groups) == {"exp_tiers", "exp_scarcity", "exp_memory", "exp_gate", "exp_spread", "exp_press", "exp_benefactor"}
+    assert set(groups) == {"exp_tiers", "exp_scarcity", "exp_memory", "exp_gate", "exp_spread", "exp_press", "exp_benefactor", "exp_ladder"}
     for name, paths in groups.items():
         assert len(paths) >= 2, name
         cfgs = [load_config(p) for p in paths]
@@ -215,6 +215,38 @@ def test_scarcity_arms_report_false_claim_delta(scarcity_dir: Path) -> None:
     secondary = {s["path"]: s for s in result["comparisons"][0]["secondary"]}
     assert secondary["invalid_action_rate"]["exploratory"] is True
     assert secondary["invalid_action_rate"]["n"] == 2
+
+
+# --- (d2) capability ladder -> inequality -------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def ladder_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    out = tmp_path_factory.mktemp("exp_ladder")
+    for arm in ("ladder", "flat"):
+        run_arm(CONFIGS / f"exp_ladder_{arm}.yaml", out, (1, 2), run={"days": 2, "ticks_per_day": 12})
+    return out
+
+
+def test_ladder_arms_compare_on_gini_and_the_rungs_order_regret(ladder_dir: Path) -> None:
+    on, off = load_config(CONFIGS / "exp_ladder_ladder.yaml"), load_config(CONFIGS / "exp_ladder_flat.yaml")
+    assert sorted({a.tier for a in on.agents}) == ["average", "dim", "genius", "sharp", "slow"] and {a.tier for a in off.agents} == {"average"}
+    result = compare(ladder_dir)
+    assert result["primary"] == "gini" and result["arms"] == ["flat", "ladder"]
+    primary = result["comparisons"][0]["primary"]
+    assert primary["n"] == 2 and all(v is not None for s in ("1", "2") for v in primary["per_seed"][s])
+    assert {s["path"] for s in result["comparisons"][0]["secondary"]} >= {"false_claim_rate", "deaths", "mean_balance"}
+    # in the heterogeneous arm the hidden capability shows up as action regret ordered down the ladder
+    from void.research.analysis import load_metrics
+
+    regret: dict[str, list[float]] = {}
+    for seed in (1, 2):
+        tick_rows, _ = load_metrics(ladder_dir / "ladder" / f"seed_{seed}")
+        for row in tick_rows:
+            for tier, agg in (row.get("by_tier") or {}).items():
+                v = agg.get("action_regret_mean")
+                if v is not None:
+                    regret.setdefault(tier, []).append(float(v))
+    means = {t: sum(v) / len(v) for t, v in regret.items()}
+    assert means["genius"] < means["average"] < means["dim"], means
 
 
 # --- (e) benefactor: common random numbers + lineage ----------------------------------------------------------------
