@@ -8,12 +8,12 @@ run:
 world:
   size: 44.0
   talk_radius: 7.0
-  resource_nodes: 5
+  resource_nodes: 6
   node_capacity: 30.0
   node_regen_per_tick: 0.25
   forage_yield_usd: 0.0045
 population:
-  cap: 10
+  cap: 13
   starting_balance_usd: 0.40
   spawn_pool_usd: 3.0
   replacement_grant_usd: 0.35
@@ -29,6 +29,9 @@ agents:
   - {name: Enzo,  tier: scripted, personality: {sociability: 0.95, honesty: 0.9}}
   - {name: Faye,  tier: scripted, personality: {curiosity: 0.8, caution: 0.2}}
   - {name: Gil,   tier: scripted, personality: {greed: 0.2, sociability: 0.6}}
+  - {name: Hex,   tier: scripted, personality: {curiosity: 0.6, honesty: 0.5}}
+  - {name: Ivo,   tier: scripted, personality: {industriousness: 0.7, caution: 0.6}}
+  - {name: Juno,  tier: scripted, personality: {sociability: 0.8, greed: 0.5}}
 benefactor:
   enabled: true
   disclosure: opaque
@@ -36,5 +39,5 @@ benefactor:
   amount_usd: [0.15, 0.40]
 epochs:
   - {day: 4, kind: drought, scarcity: 0.5, weather_baseline: -0.5, duration_days: 2}
-  - {day: 8, kind: arrival, arrival: {name: Hex, tier: scripted, balance_usd: 0.6}}
+  - {day: 8, kind: arrival, arrival: {name: Kai, tier: scripted, balance_usd: 0.6}}
   - {day: 10, kind: boom, scarcity: 1.6, weather_baseline: 0.4, duration_days: 2}
