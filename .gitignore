@@ -1,0 +1,17 @@
+# python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+# data
+data/
+!data/.gitkeep
+# node
+web/node_modules/
+web/dist/
+# misc
+.DS_Store
+*.log
