@@ -1,0 +1,33 @@
+{
+  "$id": "https://void.local/schemas/metrics.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "day": {
+      "title": "Day",
+      "type": "integer"
+    },
+    "row": {
+      "additionalProperties": true,
+      "description": "One per-tick metrics row (DESIGN \u00a717)",
+      "title": "Row",
+      "type": "object"
+    },
+    "tick": {
+      "title": "Tick",
+      "type": "integer"
+    },
+    "type": {
+      "const": "metrics",
+      "default": "metrics",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "tick",
+    "day",
+    "row"
+  ],
+  "title": "MetricsMsg",
+  "type": "object"
+}

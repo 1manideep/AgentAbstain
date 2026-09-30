@@ -1,0 +1,38 @@
+{
+  "$id": "https://void.local/schemas/status.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "paused": {
+      "title": "Paused",
+      "type": "boolean"
+    },
+    "status": {
+      "enum": [
+        "running",
+        "completed",
+        "capped_total",
+        "extinct",
+        "inconsistent"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "tick_seconds": {
+      "title": "Tick Seconds",
+      "type": "number"
+    },
+    "type": {
+      "const": "status",
+      "default": "status",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "paused",
+    "tick_seconds",
+    "status"
+  ],
+  "title": "StatusMsg",
+  "type": "object"
+}

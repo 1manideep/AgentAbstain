@@ -1,0 +1,62 @@
+{
+  "$id": "https://void.local/schemas/event.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "agent_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Agent Id"
+    },
+    "day": {
+      "title": "Day",
+      "type": "integer"
+    },
+    "kind": {
+      "title": "Kind",
+      "type": "string"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "seq": {
+      "title": "Seq",
+      "type": "integer"
+    },
+    "tick": {
+      "title": "Tick",
+      "type": "integer"
+    },
+    "type": {
+      "const": "event",
+      "default": "event",
+      "title": "Type",
+      "type": "string"
+    },
+    "visibility": {
+      "default": "public",
+      "enum": [
+        "public",
+        "operator"
+      ],
+      "title": "Visibility",
+      "type": "string"
+    }
+  },
+  "required": [
+    "seq",
+    "tick",
+    "day",
+    "kind"
+  ],
+  "title": "EventMsg",
+  "type": "object"
+}

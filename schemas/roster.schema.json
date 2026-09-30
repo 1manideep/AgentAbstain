@@ -1,0 +1,93 @@
+{
+  "$defs": {
+    "RosterAgent": {
+      "properties": {
+        "born_tick": {
+          "title": "Born Tick",
+          "type": "integer"
+        },
+        "died_tick": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Died Tick"
+        },
+        "generation": {
+          "title": "Generation",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Id"
+        },
+        "status": {
+          "enum": [
+            "alive",
+            "bankrupt",
+            "archived"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "tier": {
+          "title": "Tier",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "tier",
+        "generation",
+        "born_tick",
+        "status"
+      ],
+      "title": "RosterAgent",
+      "type": "object"
+    }
+  },
+  "$id": "https://void.local/schemas/roster.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "agents": {
+      "items": {
+        "$ref": "#/$defs/RosterAgent"
+      },
+      "title": "Agents",
+      "type": "array"
+    },
+    "type": {
+      "const": "roster",
+      "default": "roster",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "agents"
+  ],
+  "title": "Roster",
+  "type": "object"
+}

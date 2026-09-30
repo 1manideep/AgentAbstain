@@ -1,0 +1,112 @@
+{
+  "$defs": {
+    "GadgetItem": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "owner": {
+          "title": "Owner",
+          "type": "string"
+        },
+        "render": {
+          "$ref": "#/$defs/GadgetRender"
+        },
+        "uses": {
+          "default": 0,
+          "title": "Uses",
+          "type": "integer"
+        },
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "owner",
+        "x",
+        "y",
+        "render"
+      ],
+      "title": "GadgetItem",
+      "type": "object"
+    },
+    "GadgetRender": {
+      "additionalProperties": true,
+      "properties": {
+        "color": {
+          "title": "Color",
+          "type": "string"
+        },
+        "height_offset": {
+          "default": 0.0,
+          "title": "Height Offset",
+          "type": "number"
+        },
+        "label": {
+          "default": "",
+          "title": "Label",
+          "type": "string"
+        },
+        "rotation_deg": {
+          "default": 0.0,
+          "title": "Rotation Deg",
+          "type": "number"
+        },
+        "scale": {
+          "default": 1.0,
+          "title": "Scale",
+          "type": "number"
+        },
+        "shape": {
+          "title": "Shape",
+          "type": "string"
+        }
+      },
+      "required": [
+        "shape",
+        "color"
+      ],
+      "title": "GadgetRender",
+      "type": "object"
+    }
+  },
+  "$id": "https://void.local/schemas/gadgets.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/$defs/GadgetItem"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "rev": {
+      "title": "Rev",
+      "type": "integer"
+    },
+    "type": {
+      "const": "gadgets",
+      "default": "gadgets",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "rev",
+    "items"
+  ],
+  "title": "GadgetsMsg",
+  "type": "object"
+}

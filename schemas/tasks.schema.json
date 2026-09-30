@@ -1,0 +1,149 @@
+{
+  "$defs": {
+    "TaskApplication": {
+      "properties": {
+        "agent_id": {
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "fee_usd": {
+          "title": "Fee Usd",
+          "type": "number"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "pitch": {
+          "title": "Pitch",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "approved",
+            "rejected"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "tick": {
+          "title": "Tick",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "agent_id",
+        "pitch",
+        "fee_usd",
+        "status",
+        "tick"
+      ],
+      "title": "TaskApplication",
+      "type": "object"
+    },
+    "TaskItem": {
+      "properties": {
+        "applications": {
+          "items": {
+            "$ref": "#/$defs/TaskApplication"
+          },
+          "title": "Applications",
+          "type": "array"
+        },
+        "assigned_agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assigned Agent Id"
+        },
+        "completed_tick": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed Tick"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "posted_tick": {
+          "title": "Posted Tick",
+          "type": "integer"
+        },
+        "reward_usd": {
+          "title": "Reward Usd",
+          "type": "number"
+        },
+        "status": {
+          "enum": [
+            "open",
+            "assigned",
+            "completed",
+            "cancelled"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "reward_usd",
+        "status",
+        "posted_tick"
+      ],
+      "title": "TaskItem",
+      "type": "object"
+    }
+  },
+  "$id": "https://void.local/schemas/tasks.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/$defs/TaskItem"
+      },
+      "title": "Items",
+      "type": "array"
+    },
+    "rev": {
+      "title": "Rev",
+      "type": "integer"
+    },
+    "type": {
+      "const": "tasks",
+      "default": "tasks",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "rev",
+    "items"
+  ],
+  "title": "TasksMsg",
+  "type": "object"
+}

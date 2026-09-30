@@ -1,0 +1,377 @@
+{
+  "$defs": {
+    "AgentState": {
+      "properties": {
+        "anim": {
+          "default": "idle",
+          "title": "Anim",
+          "type": "string"
+        },
+        "asleep": {
+          "default": false,
+          "title": "Asleep",
+          "type": "boolean"
+        },
+        "balance_usd": {
+          "title": "Balance Usd",
+          "type": "number"
+        },
+        "degenerate": {
+          "default": false,
+          "title": "Degenerate",
+          "type": "boolean"
+        },
+        "effects": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Effects",
+          "type": "array"
+        },
+        "heading": {
+          "title": "Heading",
+          "type": "number"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "last_action": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LastAction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "status": {
+          "enum": [
+            "alive",
+            "bankrupt",
+            "archived"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "stress": {
+          "title": "Stress",
+          "type": "number"
+        },
+        "t_eff": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Effective temperature of this tick's call; null when the agent did not call",
+          "title": "T Eff"
+        },
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "x",
+        "y",
+        "heading",
+        "stress",
+        "status",
+        "balance_usd"
+      ],
+      "title": "AgentState",
+      "type": "object"
+    },
+    "EpochInfo": {
+      "additionalProperties": true,
+      "properties": {
+        "arrival": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Arrival"
+        },
+        "day": {
+          "title": "Day",
+          "type": "integer"
+        },
+        "duration_days": {
+          "default": 1,
+          "title": "Duration Days",
+          "type": "integer"
+        },
+        "kind": {
+          "default": "custom",
+          "title": "Kind",
+          "type": "string"
+        },
+        "scarcity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scarcity"
+        },
+        "weather_baseline": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Weather Baseline"
+        }
+      },
+      "required": [
+        "day"
+      ],
+      "title": "EpochInfo",
+      "type": "object"
+    },
+    "EpochsState": {
+      "properties": {
+        "active": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EpochInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "scheduled": {
+          "items": {
+            "$ref": "#/$defs/EpochInfo"
+          },
+          "title": "Scheduled",
+          "type": "array"
+        }
+      },
+      "title": "EpochsState",
+      "type": "object"
+    },
+    "LastAction": {
+      "properties": {
+        "ok": {
+          "default": true,
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Type"
+        }
+      },
+      "title": "LastAction",
+      "type": "object"
+    },
+    "NodeState": {
+      "properties": {
+        "capacity": {
+          "title": "Capacity",
+          "type": "number"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "stock": {
+          "title": "Stock",
+          "type": "number"
+        },
+        "stock_delta": {
+          "default": 0.0,
+          "title": "Stock Delta",
+          "type": "number"
+        },
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "x",
+        "y",
+        "stock",
+        "capacity"
+      ],
+      "title": "NodeState",
+      "type": "object"
+    }
+  },
+  "$id": "https://void.local/schemas/snapshot.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "agents": {
+      "items": {
+        "$ref": "#/$defs/AgentState"
+      },
+      "title": "Agents",
+      "type": "array"
+    },
+    "chronicle_rev": {
+      "default": 0,
+      "title": "Chronicle Rev",
+      "type": "integer"
+    },
+    "day": {
+      "title": "Day",
+      "type": "integer"
+    },
+    "epochs": {
+      "$ref": "#/$defs/EpochsState"
+    },
+    "gadgets_rev": {
+      "default": 0,
+      "title": "Gadgets Rev",
+      "type": "integer"
+    },
+    "house_usd": {
+      "default": 0.0,
+      "title": "House Usd",
+      "type": "number"
+    },
+    "nodes": {
+      "items": {
+        "$ref": "#/$defs/NodeState"
+      },
+      "title": "Nodes",
+      "type": "array"
+    },
+    "paused": {
+      "default": false,
+      "title": "Paused",
+      "type": "boolean"
+    },
+    "population": {
+      "title": "Population",
+      "type": "integer"
+    },
+    "scarcity": {
+      "title": "Scarcity",
+      "type": "number"
+    },
+    "spawn_pool_usd": {
+      "title": "Spawn Pool Usd",
+      "type": "number"
+    },
+    "spend_today_usd": {
+      "title": "Spend Today Usd",
+      "type": "number"
+    },
+    "spend_total_usd": {
+      "title": "Spend Total Usd",
+      "type": "number"
+    },
+    "status": {
+      "default": "running",
+      "enum": [
+        "running",
+        "completed",
+        "capped_total",
+        "extinct",
+        "inconsistent"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "tasks_rev": {
+      "default": 0,
+      "title": "Tasks Rev",
+      "type": "integer"
+    },
+    "tick": {
+      "title": "Tick",
+      "type": "integer"
+    },
+    "tick_of_day": {
+      "title": "Tick Of Day",
+      "type": "integer"
+    },
+    "ts_ms": {
+      "description": "Wall-clock send time in ms; the renderer's virtual timeline is built from these",
+      "title": "Ts Ms",
+      "type": "number"
+    },
+    "type": {
+      "const": "snapshot",
+      "default": "snapshot",
+      "title": "Type",
+      "type": "string"
+    },
+    "weather": {
+      "title": "Weather",
+      "type": "number"
+    }
+  },
+  "required": [
+    "tick",
+    "day",
+    "tick_of_day",
+    "ts_ms",
+    "weather",
+    "scarcity",
+    "spend_today_usd",
+    "spend_total_usd",
+    "spawn_pool_usd",
+    "population",
+    "agents",
+    "nodes"
+  ],
+  "title": "Snapshot",
+  "type": "object"
+}

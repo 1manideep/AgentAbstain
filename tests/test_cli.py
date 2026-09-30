@@ -38,7 +38,7 @@ def test_mock_feed_records_a_genuine_stream(tmp_path: Path, capsys: pytest.Captu
     assert len(snaps) >= 30
     ts = [s["ts_ms"] for s in snaps]
     assert ts == sorted(ts) and len(set(ts)) == len(ts)
-    gaps = [b - a for a, b in zip(ts, ts[1:], strict=True)]
+    gaps = [b - a for a, b in zip(ts[:-1], ts[1:], strict=True)]
     assert sum(1 for g in gaps if g >= 20_000) == 1 and all(250 <= g <= 1500 for g in gaps if g < 20_000)
     assert [s["tick"] for s in snaps] == list(range(1, len(snaps) + 1))
     metrics = [m for m in lines if m["type"] == "metrics"]

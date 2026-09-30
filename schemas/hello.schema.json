@@ -1,0 +1,171 @@
+{
+  "$defs": {
+    "HelloConfig": {
+      "additionalProperties": true,
+      "description": "``VoidConfig.public_subset()``: what the renderer is told (no prices, no thresholds).",
+      "properties": {
+        "daily_cap_usd": {
+          "title": "Daily Cap Usd",
+          "type": "number"
+        },
+        "days": {
+          "title": "Days",
+          "type": "integer"
+        },
+        "degeneration_mode": {
+          "default": "both",
+          "enum": [
+            "induce",
+            "observe",
+            "both"
+          ],
+          "title": "Degeneration Mode",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "population_cap": {
+          "title": "Population Cap",
+          "type": "integer"
+        },
+        "render_delay_ticks": {
+          "title": "Render Delay Ticks",
+          "type": "integer"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "tick_seconds": {
+          "title": "Tick Seconds",
+          "type": "number"
+        },
+        "ticks_per_day": {
+          "title": "Ticks Per Day",
+          "type": "integer"
+        },
+        "tiers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TierPublic"
+          },
+          "title": "Tiers",
+          "type": "object"
+        },
+        "total_cap_usd": {
+          "title": "Total Cap Usd",
+          "type": "number"
+        },
+        "world_size": {
+          "title": "World Size",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "seed",
+        "days",
+        "ticks_per_day",
+        "tick_seconds",
+        "render_delay_ticks",
+        "world_size",
+        "population_cap",
+        "daily_cap_usd",
+        "total_cap_usd",
+        "tiers"
+      ],
+      "title": "HelloConfig",
+      "type": "object"
+    },
+    "TierPublic": {
+      "properties": {
+        "color": {
+          "title": "Color",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        }
+      },
+      "required": [
+        "color",
+        "model",
+        "provider"
+      ],
+      "title": "TierPublic",
+      "type": "object"
+    }
+  },
+  "$id": "https://void.local/schemas/hello.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "config": {
+      "$ref": "#/$defs/HelloConfig"
+    },
+    "day": {
+      "title": "Day",
+      "type": "integer"
+    },
+    "last_seq": {
+      "description": "Highest events.seq at connect time; catch up with GET /api/events?since_seq=",
+      "title": "Last Seq",
+      "type": "integer"
+    },
+    "paused": {
+      "title": "Paused",
+      "type": "boolean"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "server_ts_ms": {
+      "title": "Server Ts Ms",
+      "type": "number"
+    },
+    "status": {
+      "enum": [
+        "running",
+        "completed",
+        "capped_total",
+        "extinct",
+        "inconsistent"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "tick": {
+      "title": "Tick",
+      "type": "integer"
+    },
+    "tick_seconds": {
+      "title": "Tick Seconds",
+      "type": "number"
+    },
+    "type": {
+      "const": "hello",
+      "default": "hello",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "config",
+    "tick",
+    "day",
+    "last_seq",
+    "paused",
+    "tick_seconds",
+    "server_ts_ms",
+    "status"
+  ],
+  "title": "Hello",
+  "type": "object"
+}

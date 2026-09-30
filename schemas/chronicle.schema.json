@@ -1,0 +1,45 @@
+{
+  "$id": "https://void.local/schemas/chronicle.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "day": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "null until the first day has been written",
+      "title": "Day"
+    },
+    "headline": {
+      "default": "",
+      "title": "Headline",
+      "type": "string"
+    },
+    "markdown": {
+      "default": "",
+      "description": "Rendered as plain text by the client; never converted to HTML",
+      "title": "Markdown",
+      "type": "string"
+    },
+    "rev": {
+      "title": "Rev",
+      "type": "integer"
+    },
+    "type": {
+      "const": "chronicle",
+      "default": "chronicle",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "rev"
+  ],
+  "title": "ChronicleMsg",
+  "type": "object"
+}

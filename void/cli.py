@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import gc
 import json
 import math
 import sys
@@ -111,6 +112,7 @@ async def _run_headless(cfg: VoidConfig, run_dir: Path, *, resume: bool) -> str:
         print(_day_line(sim, sim.clock.day, t0), flush=True)
     print(_summary(sim, status, t0), flush=True)
     sim.db.close()
+    gc.collect()  # release the sandbox's subprocess transports while the loop is still open
     return status
 
 
@@ -189,6 +191,7 @@ async def record_feed(cfg: VoidConfig, run_dir: Path, ticks: int, *, seed: int |
     finally:
         await hub.stop()
         sim.db.close()
+        gc.collect()  # release the sandbox's subprocess transports while the loop is still open
     for m in out:
         parse_message(m)  # the fixture is schema-valid by construction
     return out
