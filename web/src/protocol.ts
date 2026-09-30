@@ -24,6 +24,9 @@ export interface TierConfig {
   color: string
   model: string
   provider: string
+  /** Sent by the server so the T_eff histogram can draw T_c from the start. */
+  collapse_temperature?: number
+  max_temperature?: number
 }
 
 /** `VoidConfig.public_subset()`: what the renderer is told (no prices, no thresholds). */

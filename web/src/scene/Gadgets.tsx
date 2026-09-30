@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo } from 'react'
 import {
   BoxGeometry,
+  BufferAttribute,
   Color,
   ConeGeometry,
   CylinderGeometry,
@@ -11,12 +12,18 @@ import {
   TorusGeometry,
   type BufferGeometry,
 } from 'three'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { nonIndexed } from './geom'
 import type { ThreeEvent } from '@react-three/fiber'
 import { GADGET_SHAPES, type GadgetItem, type GadgetShape } from '../protocol'
 import { useStore } from '../state/store'
+import { attachInstanceAttributes, makeInstancedMaterial } from './instancedMaterial'
+import { heightAt, terrainState } from './terrain'
+import { useTerrainRev } from './useTerrainRev'
 
 const COLOR_RE = /^#[0-9a-f]{6}$/i
 const FALLBACK_COLOR = '#8b93a7'
+const PEDESTAL_H = 0.22
 const dummy = new Object3D()
 const color = new Color()
 
@@ -59,9 +66,41 @@ function geometryFor(shape: GadgetShape): BufferGeometry {
   }
 }
 
+function paint(g: BufferGeometry, hex: string): BufferGeometry {
+  const n = g.getAttribute('position').count
+  const c = new Color(hex)
+  const arr = new Float32Array(n * 3)
+  for (let i = 0; i < n; i++) {
+    arr[i * 3] = c.r
+    arr[i * 3 + 1] = c.g
+    arr[i * 3 + 2] = c.b
+  }
+  g.setAttribute('color', new BufferAttribute(arr, 3))
+  return g
+}
+
+/** Dark stone disc with a bright rim: the rim glows in the gadget's colour through the instance tint. */
+function pedestalGeometry(): BufferGeometry {
+  const base = paint(new CylinderGeometry(0.85, 0.98, PEDESTAL_H, 22), '#2a2f3a')
+  base.translate(0, PEDESTAL_H / 2, 0)
+  const rim = paint(new TorusGeometry(0.84, 0.045, 8, 36), '#ffffff')
+  rim.rotateX(Math.PI / 2)
+  rim.translate(0, PEDESTAL_H + 0.01, 0)
+  const merged = mergeGeometries([nonIndexed(base), nonIndexed(rim)], false)!
+  merged.computeVertexNormals()
+  merged.computeBoundingSphere()
+  return merged
+}
+
 const geometries = new Map<GadgetShape, BufferGeometry>()
 for (const s of GADGET_SHAPES) geometries.set(s, geometryFor(s))
-const material = new MeshStandardMaterial({ roughness: 0.35, metalness: 0.25 })
+const shapeMaterial = new MeshStandardMaterial({ roughness: 0.35, metalness: 0.25 })
+const pedestalGeom = pedestalGeometry()
+const pedestalMat = (() => {
+  const m = makeInstancedMaterial({ roughness: 0.8, metalness: 0.05, emissiveScale: 1.4 })
+  m.vertexColors = true
+  return m
+})()
 
 interface ShapeGroupProps {
   shape: GadgetShape
@@ -69,14 +108,17 @@ interface ShapeGroupProps {
 }
 
 const ShapeGroup = memo(function ShapeGroup({ shape, items }: ShapeGroupProps) {
+  const rev = useTerrainRev()
   const mesh = useMemo(() => {
-    const m = new InstancedMesh(geometries.get(shape)!, material, items.length)
+    void rev
+    const m = new InstancedMesh(geometries.get(shape)!, shapeMaterial, items.length)
     m.frustumCulled = false
     for (let i = 0; i < items.length; i++) {
       const it = items[i]!
       const r = it.render
       const sc = Math.min(3, Math.max(0.3, Number.isFinite(r.scale) ? r.scale : 1))
-      dummy.position.set(it.x, Number.isFinite(r.height_offset ?? 0) ? Math.max(0, r.height_offset ?? 0) : 0, it.y)
+      const lift = Number.isFinite(r.height_offset ?? 0) ? Math.max(0, r.height_offset ?? 0) : 0
+      dummy.position.set(it.x, heightAt(it.x, it.y) + PEDESTAL_H + lift, it.y)
       dummy.rotation.set(0, ((r.rotation_deg ?? 0) * Math.PI) / 180, 0)
       dummy.scale.setScalar(sc)
       dummy.updateMatrix()
@@ -86,7 +128,7 @@ const ShapeGroup = memo(function ShapeGroup({ shape, items }: ShapeGroupProps) {
     m.instanceMatrix.needsUpdate = true
     if (m.instanceColor) m.instanceColor.needsUpdate = true
     return m
-  }, [shape, items])
+  }, [shape, items, rev])
   useEffect(() => () => mesh.dispose(), [mesh])
 
   const onMove = (e: ThreeEvent<PointerEvent>) => {
@@ -98,7 +140,45 @@ const ShapeGroup = memo(function ShapeGroup({ shape, items }: ShapeGroupProps) {
   return <primitive object={mesh} onPointerMove={onMove} onPointerOut={onOut} />
 })
 
-/** One instanced mesh per shape in the closed enum, rebuilt on gadgets_rev. */
+const Pedestals = memo(function Pedestals({ items }: { items: GadgetItem[] }) {
+  const rev = useTerrainRev()
+  const mesh = useMemo(() => {
+    void rev
+    const n = Math.max(1, items.length)
+    const geom = pedestalGeom.clone()
+    const attrs = attachInstanceAttributes(geom, n)
+    const m = new InstancedMesh(geom, pedestalMat, n)
+    m.frustumCulled = false
+    const pulse = attrs.pulse.array as Float32Array
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i]!
+      const sc = Math.min(3, Math.max(0.3, Number.isFinite(it.render.scale) ? it.render.scale : 1))
+      dummy.position.set(it.x, heightAt(it.x, it.y) - 0.02, it.y)
+      dummy.rotation.set(0, 0, 0)
+      dummy.scale.set(0.7 + 0.35 * sc, 1, 0.7 + 0.35 * sc)
+      dummy.updateMatrix()
+      m.setMatrixAt(i, dummy.matrix)
+      m.setColorAt(i, color.set(safeGadgetColor(it.render.color)))
+      pulse[i] = 0.55
+    }
+    m.count = items.length
+    m.instanceMatrix.needsUpdate = true
+    if (m.instanceColor) m.instanceColor.needsUpdate = true
+    attrs.pulse.needsUpdate = true
+    return m
+  }, [items, rev])
+  useEffect(
+    () => () => {
+      mesh.geometry.dispose()
+      mesh.dispose()
+    },
+    [mesh],
+  )
+  if (items.length === 0) return null
+  return <primitive object={mesh} />
+})
+
+/** One instanced mesh per shape in the closed enum plus one for the pedestals, rebuilt on gadgets_rev. */
 export const Gadgets = memo(function Gadgets() {
   const gadgets = useStore((s) => s.gadgets)
   const groups = useMemo(() => {
@@ -115,11 +195,14 @@ export const Gadgets = memo(function Gadgets() {
     }
     return Array.from(by.entries())
   }, [gadgets])
+  const valid = useMemo(() => (gadgets?.items ?? []).filter((it) => isShape(it.render?.shape)), [gadgets])
+  void terrainState
   return (
     <group>
       {groups.map(([shape, items]) => (
         <ShapeGroup key={shape + ':' + (gadgets?.rev ?? 0)} shape={shape} items={items} />
       ))}
+      <Pedestals items={valid} />
     </group>
   )
 })

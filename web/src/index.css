@@ -106,6 +106,12 @@ select {
   display: block;
   outline: none;
 }
+.vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.45) 100%);
+}
 .stage-hint {
   position: absolute;
   left: 14px;

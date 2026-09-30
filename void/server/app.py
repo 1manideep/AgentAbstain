@@ -63,17 +63,21 @@ def create_app(sim: Simulation, *, static_dir: Path | None = None, host: str | N
     if index is not None and index.is_file():
         root = Path(static_dir).resolve()  # type: ignore[arg-type]
 
-        @app.get("/", include_in_schema=False)
+        @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
         async def spa_index() -> FileResponse:
             return FileResponse(index)
 
-        @app.get("/{path:path}", include_in_schema=False)
+        @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
         async def spa_fallback(path: str) -> FileResponse:
             if path == "api" or path.startswith("api/") or path == "ws":
                 raise HTTPException(status_code=404, detail="not found")
             candidate = (root / path).resolve()
             if candidate.is_file() and candidate.is_relative_to(root):
                 return FileResponse(candidate)
+            # a missing asset (anything with a file extension) is a 404, so optional-file probes
+            # such as HEAD /models/rig.glb are answered truthfully; only routes fall back to the SPA
+            if "." in path.rsplit("/", 1)[-1]:
+                raise HTTPException(status_code=404, detail="not found")
             return FileResponse(index)
     else:
         @app.get("/", include_in_schema=False)

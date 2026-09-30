@@ -10,8 +10,10 @@ import type { PerspectiveCamera } from 'three'
 import type { EventMsg } from '../protocol'
 import { history } from '../state/history'
 import { useStore } from '../state/store'
+import { hourOfDay } from './daycycle'
 import { fxQueue } from './fx'
 import { mirror, runSystems, sampled, type FrameCtx } from './sceneState'
+import { heightAt } from './terrain'
 
 declare global {
   interface Window {
@@ -34,6 +36,9 @@ const ctx: FrameCtx = {
   out: sampled.out,
   reducedMotion: false,
   pixelAngle: 0.002,
+  heightAt,
+  hour: 12,
+  camera: null,
 }
 
 export function Driver() {
@@ -47,6 +52,8 @@ export function Driver() {
   const timing = useRef({ sample: 0, systems: 0, render: 0, frame: 0, n: 0, last: 0 })
 
   useEffect(() => {
+    // count every pass of the frame (the composer's included): reset manually at frame start
+    gl.info.autoReset = false
     // time the renderer's draw so the perf probe can split JS from GPU/raster cost
     const origRender = gl.render.bind(gl)
     gl.render = ((scene, camera) => {
@@ -76,11 +83,16 @@ export function Driver() {
     }
     return () => {
       gl.render = origRender
+      gl.info.autoReset = true
       delete window.__void
     }
   }, [gl, scene])
 
+  const lastCalls = useRef(0)
+
   useFrame((state, delta) => {
+    lastCalls.current = gl.info.render.calls // whole previous frame, composer passes included
+    gl.info.reset()
     const dt = delta > 0.1 ? 0.1 : delta < 0 ? 0 : delta
     const tm = timing.current
     const tStart = performance.now()
@@ -110,6 +122,8 @@ export function Driver() {
     const cam = state.camera as PerspectiveCamera
     const hPx = state.size.height * gl.getPixelRatio()
     ctx.pixelAngle = hPx > 0 && typeof cam.fov === 'number' ? (2 * Math.tan((cam.fov * Math.PI) / 360)) / hPx : 0.002
+    ctx.hour = out.count > 0 ? hourOfDay(out.tickOfDay, out.frac, mirror.ticksPerDay) : 12
+    ctx.camera = state.camera
     runSystems(ctx)
     tm.systems += performance.now() - tSampled
 
@@ -121,7 +135,7 @@ export function Driver() {
       w.fps = w.n / (now - w.t0)
       w.n = 0
       w.t0 = now
-      useStore.getState().setPerf({ fps: Math.round(w.fps), calls: gl.info.render.calls, dpr: gl.getPixelRatio() })
+      useStore.getState().setPerf({ fps: Math.round(w.fps), calls: lastCalls.current, dpr: gl.getPixelRatio() })
     }
     if (now - lastClockCommit.current >= 0.1) {
       lastClockCommit.current = now

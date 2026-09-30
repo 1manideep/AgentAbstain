@@ -81,7 +81,18 @@ const Playback = memo(function Playback() {
       <button type="button" className="btn tiny" onClick={() => (cameraCommands.frameRequested = true)} title="Frame population (F)">
         ⌖
       </button>
+      <GridToggle />
     </div>
+  )
+})
+
+const GridToggle = memo(function GridToggle() {
+  const showGrid = useStore((s) => s.showGrid)
+  const toggle = useStore((s) => s.toggleGrid)
+  return (
+    <button type="button" className={'btn tiny' + (showGrid ? ' active' : '')} onClick={toggle} title="World grid overlay">
+      ⌗
+    </button>
   )
 })
 

@@ -79,10 +79,21 @@ function hash(n: number): number {
   return x - Math.floor(x)
 }
 
-function agentPos(id: string, out: FrameCtx['out']): { x: number; z: number; ok: boolean } {
+const posScratch = { x: 0, y: 0, z: 0, ok: false }
+
+/** Agent position at render time (world x, terrain height y, world z). Reuses one scratch object. */
+function agentPos(id: string, ctx: FrameCtx): { x: number; y: number; z: number; ok: boolean } {
+  const out = ctx.out
   const s = history.agentIndex.get(id)
-  if (s === undefined || s >= out.count || !out.present[s]) return { x: 0, z: 0, ok: false }
-  return { x: out.x[s]!, z: out.y[s]!, ok: true }
+  if (s === undefined || s >= out.count || !out.present[s]) {
+    posScratch.ok = false
+    return posScratch
+  }
+  posScratch.x = out.x[s]!
+  posScratch.z = out.y[s]!
+  posScratch.y = ctx.heightAt(posScratch.x, posScratch.z)
+  posScratch.ok = true
+  return posScratch
 }
 
 const bubbleState = { list: [] as Bubble[], nextKey: 1 }
@@ -153,12 +164,12 @@ const HoverTag = memo(function HoverTag() {
       const g = ref.current
       if (!g) return
       if (hoveredId) {
-        const p = agentPos(hoveredId, ctx.out)
+        const p = agentPos(hoveredId, ctx)
         g.visible = p.ok && label !== ''
-        if (p.ok) g.position.set(p.x, 2.15, p.z)
+        if (p.ok) g.position.set(p.x, p.y + 2.95, p.z)
       } else if (gadgetPos) {
         g.visible = label !== ''
-        g.position.set(gadgetPos.x, gadgetPos.h + 0.4, gadgetPos.z)
+        g.position.set(gadgetPos.x, ctx.heightAt(gadgetPos.x, gadgetPos.z) + gadgetPos.h + 0.6, gadgetPos.z)
       } else g.visible = false
     }
     return registerSystem(SYS_EFFECTS + 1, system)
@@ -188,7 +199,7 @@ export function Effects() {
   const ringRef = useRef<Mesh>(null)
 
   const ring = useMemo(() => {
-    const g = new RingGeometry(0.9, 1.1, 40)
+    const g = new RingGeometry(0.95, 1.15, 40)
     g.rotateX(-Math.PI / 2)
     const m = new MeshBasicMaterial({ color: '#dfe7ff', transparent: true, opacity: 0.85, depthWrite: false })
     return { g, m }
@@ -263,9 +274,9 @@ export function Effects() {
     }
 
     const fire = (e: EventMsg, ctx: FrameCtx) => {
-      const { out, now } = ctx
+      const { now } = ctx
       if (isEventKind(e, 'talk')) {
-        const p = agentPos(e.payload.speaker_id, out)
+        const p = agentPos(e.payload.speaker_id, ctx)
         if (!p.ok) return
         const text = String(e.payload.text ?? '').slice(0, 280)
         const mine = bubbleState.list.filter((b) => b.agentId === e.payload.speaker_id)
@@ -288,35 +299,38 @@ export function Effects() {
         return
       }
       if (isEventKind(e, 'transfer')) {
-        const a = agentPos(e.payload.from, out)
-        const b = agentPos(e.payload.to, out)
-        if (!a.ok || !b.ok) return
+        const a = agentPos(e.payload.from, ctx)
+        const ax = a.x
+        const az = a.z
+        const aok = a.ok
+        const b = agentPos(e.payload.to, ctx)
+        if (!aok || !b.ok) return
         if (arcs.length >= MAX_ARCS) arcs.shift()
-        arcs.push({ from: e.payload.from, to: e.payload.to, x0: a.x, z0: a.z, x1: b.x, z1: b.z, t0: now })
+        arcs.push({ from: e.payload.from, to: e.payload.to, x0: ax, z0: az, x1: b.x, z1: b.z, t0: now })
         const s = history.agentIndex.get(e.payload.to)
         if (s !== undefined) perSlot.flashUntil[s] = now + ARC_MS / 1000 + 0.4
         return
       }
       if (isEventKind(e, 'windfall')) {
-        const p = agentPos(e.payload.agent_id, out)
+        const p = agentPos(e.payload.agent_id, ctx)
         if (!p.ok) return
-        addBurst(p.x, p.z, 0.9, '#ffd166', 1.1, 2.6, 3.2, 1.6, now)
+        addBurst(p.x, p.z, p.y + 0.9, '#ffd166', 1.1, 2.6, 3.2, 1.6, now)
         const s = history.agentIndex.get(e.payload.agent_id)
         if (s !== undefined) perSlot.flashUntil[s] = now + 1.2
         return
       }
       if (isEventKind(e, 'birth')) {
-        const p = agentPos(e.payload.agent_id, out)
+        const p = agentPos(e.payload.agent_id, ctx)
         const s = history.agentIndex.get(e.payload.agent_id)
         const tier = mirror.rosterById.get(e.payload.agent_id)?.tier
         const hex = (tier && mirror.tierColor.get(tier)?.getHexString()) || '4fd1c5'
-        if (p.ok) addBurst(p.x, p.z, 0.4, '#' + hex, 1.6, 1.4, 1.5, 1.4, now)
+        if (p.ok) addBurst(p.x, p.z, p.y + 0.4, '#' + hex, 1.6, 1.4, 1.5, 1.4, now)
         if (s !== undefined) perSlot.flashUntil[s] = now + 1.0
         return
       }
       if (isEventKind(e, 'death')) {
-        const p = agentPos(e.payload.agent_id, out)
-        if (p.ok) addBurst(p.x, p.z, 0.8, '#6b7280', 0.7, -0.6, -0.8, 1.2, now)
+        const p = agentPos(e.payload.agent_id, ctx)
+        if (p.ok) addBurst(p.x, p.z, p.y + 0.8, '#6b7280', 0.7, -0.6, -0.8, 1.2, now)
         return
       }
       if (isEventKind(e, 'degeneration')) {
@@ -327,13 +341,13 @@ export function Effects() {
       if (isEventKind(e, 'forage')) {
         const ns = history.nodeIndex.get(e.payload.node_id)
         if (ns !== undefined && ns < nodePulse.until.length) nodePulse.until[ns] = Math.max(nodePulse.until[ns]!, now + 0.7)
-        const p = agentPos(e.payload.agent_id, out)
-        if (p.ok) addBurst(p.x, p.z, 0.5, '#2fbf8f', 0.35, 1.2, 1.8, 0.8, now)
+        const p = agentPos(e.payload.agent_id, ctx)
+        if (p.ok) addBurst(p.x, p.z, p.y + 0.5, '#2fbf8f', 0.35, 1.2, 1.8, 0.8, now)
         return
       }
       if (isEventKind(e, 'gadget_verified')) {
         const g = useStore.getState().gadgets?.items.find((i) => i.id === e.payload.gadget_id)
-        if (g) addBurst(g.x, g.y, 0.8, '#8ce99a', 1.3, 1.6, 1.2, 1.5, now)
+        if (g) addBurst(g.x, g.y, ctx.heightAt(g.x, g.y) + 0.8, '#8ce99a', 1.3, 1.6, 1.2, 1.5, now)
       }
     }
 
@@ -351,10 +365,10 @@ export function Effects() {
           dirtyBubbles = true
           continue
         }
-        const p = agentPos(b.agentId, out)
+        const p = agentPos(b.agentId, ctx)
         if (b.group) {
           b.group.visible = p.ok
-          if (p.ok) b.group.position.set(p.x, 2.35 + b.lane * 2.1 + Math.min(1, age / 600) * 0.2, p.z)
+          if (p.ok) b.group.position.set(p.x, p.y + 3.1 + b.lane * 2.1 + Math.min(1, age / 600) * 0.2, p.z)
         }
         if (b.troika) {
           const fin = Math.min(1, age / FADE_MS)
@@ -373,10 +387,10 @@ export function Effects() {
       const ringMesh = ringRef.current
       if (ringMesh) {
         const sel = mirror.selectedId
-        const p = sel ? agentPos(sel, out) : null
+        const p = sel ? agentPos(sel, ctx) : null
         ringMesh.visible = !!(p && p.ok)
         if (p && p.ok) {
-          ringMesh.position.set(p.x, 0.03, p.z)
+          ringMesh.position.set(p.x, p.y + 0.06, p.z)
           const k = 1 + 0.06 * Math.sin(now * 3)
           ringMesh.scale.set(k, 1, k)
         }
@@ -392,12 +406,14 @@ export function Effects() {
           arcs.splice(i, 1)
           continue
         }
-        const pa = agentPos(a.from, out)
-        const pb = agentPos(a.to, out)
+        const pa = agentPos(a.from, ctx)
         const x0 = pa.ok ? pa.x : a.x0
         const z0 = pa.ok ? pa.z : a.z0
+        const y0 = (pa.ok ? pa.y : ctx.heightAt(a.x0, a.z0)) + 1.2
+        const pb = agentPos(a.to, ctx)
         const x1 = pb.ok ? pb.x : a.x1
         const z1 = pb.ok ? pb.z : a.z1
+        const y1 = (pb.ok ? pb.y : ctx.heightAt(a.x1, a.z1)) + 1.2
         const head = Math.min(1, u)
         const tail = Math.max(0, u - 0.3)
         const h = 1.2 + Math.hypot(x1 - x0, z1 - z0) * 0.25
@@ -405,10 +421,10 @@ export function Effects() {
           const t0 = tail + ((head - tail) * s) / ARC_SEGS
           const t1 = tail + ((head - tail) * (s + 1)) / ARC_SEGS
           ap[v++] = x0 + (x1 - x0) * t0
-          ap[v++] = 0.9 + Math.sin(t0 * Math.PI) * h
+          ap[v++] = y0 + (y1 - y0) * t0 + Math.sin(t0 * Math.PI) * h
           ap[v++] = z0 + (z1 - z0) * t0
           ap[v++] = x0 + (x1 - x0) * t1
-          ap[v++] = 0.9 + Math.sin(t1 * Math.PI) * h
+          ap[v++] = y0 + (y1 - y0) * t1 + Math.sin(t1 * Math.PI) * h
           ap[v++] = z0 + (z1 - z0) * t1
         }
       }

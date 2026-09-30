@@ -20,6 +20,12 @@ export interface FrameCtx {
   reducedMotion: boolean
   /** World units per pixel at unit distance: 2·tan(fov/2) / viewport height (in device pixels). */
   pixelAngle: number
+  /** Terrain height under a world (x, z); 0 until the terrain exists. */
+  heightAt: (x: number, z: number) => number
+  /** Hour of day (0–24) at the render clock, interpolated between ticks. */
+  hour: number
+  /** The rendering camera (read-only for systems other than the rig). */
+  camera: import('three').Camera | null
 }
 
 type System = (ctx: FrameCtx) => void
@@ -40,11 +46,13 @@ export function runSystems(ctx: FrameCtx): void {
   for (let i = 0; i < systems.length; i++) systems[i]!.fn(ctx)
 }
 
+export const SYS_TERRAIN = 5
 export const SYS_AGENTS = 10
 export const SYS_NODES = 20
 export const SYS_EFFECTS = 30
 export const SYS_ATMOSPHERE = 40
 export const SYS_CAMERA = 50
+export const SYS_RIG = 60
 
 /** The sampled world for the current frame. Rebuilt when history capacity grows. */
 export const sampled = {
@@ -115,6 +123,9 @@ export const mirror = {
   followId: null as string | null,
   reducedMotion: false,
   worldSize: 60,
+  ticksPerDay: 24,
+  seed: 42,
+  showGrid: false,
 }
 
 const scratch = new Color()
@@ -137,8 +148,11 @@ useStore.subscribe((s, prev) => {
   if (s.config !== prev.config) {
     mirror.config = s.config
     mirror.worldSize = s.config?.world_size ?? 60
+    mirror.ticksPerDay = s.config?.ticks_per_day ?? 24
+    mirror.seed = s.config?.seed ?? 42
     rebuildTierColors()
   }
+  mirror.showGrid = s.showGrid
   mirror.selectedId = s.selectedAgentId
   mirror.hoveredId = s.hoveredAgentId
   mirror.hoveredGadgetId = s.hoveredGadgetId
@@ -150,7 +164,10 @@ useStore.subscribe((s, prev) => {
   mirror.rosterById = s.rosterById
   mirror.config = s.config
   mirror.worldSize = s.config?.world_size ?? 60
+  mirror.ticksPerDay = s.config?.ticks_per_day ?? 24
+  mirror.seed = s.config?.seed ?? 42
   mirror.reducedMotion = s.reducedMotion
+  mirror.showGrid = s.showGrid
   rebuildTierColors()
 }
 

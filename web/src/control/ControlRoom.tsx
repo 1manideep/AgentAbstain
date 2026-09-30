@@ -68,7 +68,16 @@ const TeffCard = memo(function TeffCard() {
   }, [rev, series])
   const collapse = useMemo(() => {
     void rev
-    return Array.from(series.tCByTier.entries()).map(([tier, tC]) => ({ tier, tC, color: selectTierColor(config, tier) }))
+    const out: Array<{ tier: string; tC: number; color: string }> = []
+    const seen = new Set<string>()
+    for (const [tier, tc] of Object.entries(config?.tiers ?? {})) {
+      if (typeof tc.collapse_temperature === 'number') {
+        out.push({ tier, tC: tc.collapse_temperature, color: selectTierColor(config, tier) })
+        seen.add(tier)
+      }
+    }
+    for (const [tier, tC] of series.tCByTier) if (!seen.has(tier)) out.push({ tier, tC, color: selectTierColor(config, tier) })
+    return out
   }, [rev, series, config])
   return (
     <Card id="teff" title={label} meta={<span className="muted small">last 240 ticks</span>}>

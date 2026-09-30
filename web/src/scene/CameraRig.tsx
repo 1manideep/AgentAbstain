@@ -19,6 +19,7 @@ interface SavedCamera {
 
 const tmp = new Vector3()
 const tmp2 = new Vector3()
+const IDLE_MS = 30000
 
 function storageKey(runId: string | null): string {
   return `void.cam.${runId ?? 'none'}`
@@ -43,12 +44,34 @@ export function CameraRig({ size, runId }: CameraRigProps) {
     if (saved && Array.isArray(saved.p) && Array.isArray(saved.t)) {
       camera.position.set(saved.p[0], saved.p[1], saved.p[2])
       c.target.set(saved.t[0], saved.t[1], saved.t[2])
+      needsInitialFrame.current = false
     } else {
-      camera.position.set(0, size * 0.5, size * 0.85)
+      // low sun-side view; the first frames with agents re-frame on the population
+      camera.position.set(-size * 0.35, size * 0.32, size * 0.62)
       c.target.set(0, 0, 0)
+      needsInitialFrame.current = true
     }
     c.update()
   }, [runId, size, camera])
+
+  const needsInitialFrame = useRef(true)
+  const lastInput = useRef(performance.now())
+  useEffect(() => {
+    const touch = () => {
+      lastInput.current = performance.now()
+    }
+    const opts = { passive: true } as const
+    window.addEventListener('pointerdown', touch, opts)
+    window.addEventListener('wheel', touch, opts)
+    window.addEventListener('keydown', touch, opts)
+    window.addEventListener('touchstart', touch, opts)
+    return () => {
+      window.removeEventListener('pointerdown', touch)
+      window.removeEventListener('wheel', touch)
+      window.removeEventListener('keydown', touch)
+      window.removeEventListener('touchstart', touch)
+    }
+  }, [])
 
   const persist = useCallback(() => {
     const c = controls.current
@@ -75,6 +98,14 @@ export function CameraRig({ size, runId }: CameraRigProps) {
       const c = controls.current
       if (!c) return
       const { out, dt } = ctx
+      if (needsInitialFrame.current) {
+        let alive = 0
+        for (let s = 0; s < out.count; s++) if (out.present[s] && !out.dead[s]) alive++
+        if (alive > 0) {
+          needsInitialFrame.current = false
+          cameraCommands.frameRequested = true
+        }
+      }
       if (cameraCommands.frameRequested) {
         cameraCommands.frameRequested = false
         let minX = Infinity
@@ -106,9 +137,11 @@ export function CameraRig({ size, runId }: CameraRigProps) {
         tmp.copy(camera.position).sub(c.target)
         if (tmp.lengthSq() < 1e-6) tmp.set(0, 0.7, 1)
         tmp.normalize()
-        if (tmp.y < 0.35) tmp.y = 0.35
+        if (tmp.y < 0.32) tmp.y = 0.32
+        if (tmp.y > 0.75) tmp.y = 0.75
         tmp.normalize().multiplyScalar(dist)
-        anim.current = { target: new Vector3(cx, 0, cz), pos: new Vector3(cx, 0, cz).add(tmp) }
+        const cy = ctx.heightAt(cx, cz) + 0.8
+        anim.current = { target: new Vector3(cx, cy, cz), pos: new Vector3(cx, cy, cz).add(tmp) }
         useStore.getState().follow(null)
       }
       const k = 1 - Math.exp(-6 * dt)
@@ -124,12 +157,26 @@ export function CameraRig({ size, runId }: CameraRigProps) {
       if (followId) {
         const s = history.agentIndex.get(followId)
         if (s !== undefined && s < out.count && out.present[s]) {
-          tmp.set(out.x[s]!, 0.9, out.y[s]!)
+          tmp.set(out.x[s]!, ctx.heightAt(out.x[s]!, out.y[s]!) + 0.9, out.y[s]!)
           tmp2.copy(tmp).sub(c.target).multiplyScalar(k)
           c.target.add(tmp2)
           camera.position.add(tmp2)
           c.update()
         }
+        return
+      }
+      // idle drift: nothing selected and no input for 30 s → slow orbit around the target
+      if (!mirror.selectedId && performance.now() - lastInput.current > IDLE_MS && !ctx.reducedMotion) {
+        tmp.copy(camera.position).sub(c.target)
+        const ang = 0.035 * dt
+        const cos = Math.cos(ang)
+        const sin = Math.sin(ang)
+        const nx = tmp.x * cos - tmp.z * sin
+        const nz = tmp.x * sin + tmp.z * cos
+        tmp.x = nx
+        tmp.z = nz
+        camera.position.copy(c.target).add(tmp)
+        c.update()
       }
     }
     return registerSystem(SYS_CAMERA, system)

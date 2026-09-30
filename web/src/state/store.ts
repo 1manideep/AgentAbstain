@@ -136,6 +136,8 @@ export interface VoidState {
   followAgentId: string | null
   playback: { mode: PlaybackMode; speed: PlaybackSpeed }
   reducedMotion: boolean
+  /** Subtle world-grid overlay on the terrain (HUD toggle, persisted). */
+  showGrid: boolean
 
   // reducers (called by the feed)
   setConn: (c: ConnState, mode?: FeedMode) => void
@@ -160,6 +162,7 @@ export interface VoidState {
   setPlayback: (p: { mode: PlaybackMode; speed: PlaybackSpeed }) => void
   commitClock: (c: ClockView) => void
   setPerf: (p: Partial<PerfView>) => void
+  toggleGrid: () => void
 }
 
 const worldAcc: WorldStats = { ...EMPTY_WORLD }
@@ -236,6 +239,7 @@ export const useStore = create<VoidState>()((set, get) => {
       typeof window !== 'undefined' && typeof window.matchMedia === 'function'
         ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
         : false,
+    showGrid: readGridPref(),
 
     setConn: (conn, mode) => set(mode ? { conn, feedMode: mode } : { conn }),
 
@@ -398,8 +402,25 @@ export const useStore = create<VoidState>()((set, get) => {
     },
     commitClock: (c) => set({ clock: c }),
     setPerf: (p) => set({ perf: { ...get().perf, ...p } }),
+    toggleGrid: () => {
+      const v = !get().showGrid
+      try {
+        localStorage.setItem('void.grid', v ? '1' : '0')
+      } catch {
+        /* ignore */
+      }
+      set({ showGrid: v })
+    },
   }
 })
+
+function readGridPref(): boolean {
+  try {
+    return localStorage.getItem('void.grid') === '1'
+  } catch {
+    return false
+  }
+}
 
 export const selectTierColor = (config: HelloConfig | null, tier: string): string => {
   const c = config?.tiers[tier]?.color
