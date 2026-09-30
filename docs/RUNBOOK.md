@@ -17,7 +17,8 @@ cd web && npm install && npm run build && cd ..
 
 | Goal | Command |
 |---|---|
-| Watch a scripted world | `.venv/bin/void serve --config configs/demo.yaml` then open `http://127.0.0.1:8000` |
+| Watch a scripted world | `.venv/bin/void serve --config configs/demo.yaml` then open `http://127.0.0.1:8000` (add `--paused` to start paused, `--tick-seconds 1` to slow it, `--static web/dist` if you built elsewhere) |
+| Frontend only, no server | `cd web && VITE_FEED=fixture npm run dev` (replays the recorded fixture) |
 | Headless scripted run | `.venv/bin/void run --config configs/scripted_smoke.yaml --days 3 --out data/runs` |
 | Live two-tier run | `ANTHROPIC_API_KEY=... .venv/bin/void serve --config configs/live_two_tier.yaml` |
 | Resume a run | add `--resume` (a run whose tick counter is behind its metered calls is marked `inconsistent` and refuses) |
@@ -27,6 +28,13 @@ cd web && npm install && npm run build && cd ..
 | Inspect a run | `.venv/bin/void inspect --run-dir data/runs/demo --tree` (also `--money`, `--events N`, `--reindex`) |
 
 The server prints the operator token once at startup (or set `VOID_OPERATOR_TOKEN`). The web app fetches it from `/api/session`, which only answers same-origin requests; every POST needs `Authorization: Bearer <token>`.
+
+## Frontend notes
+
+- `npm run build` writes `web/dist`, which `void serve` serves at `/`. `npm run typecheck`, `npm run test` (vitest) and `npm run lint` are the checks.
+- On a machine with a GPU the scene runs with MSAA, ambient occlusion, bloom and a vignette at dpr up to 1.5; on a software renderer it drops to Lambert shading, no composer and dpr 0.75 automatically.
+- Keys: space pause/resume playback, `,`/`.` step, `L` live, `F` frame the population, `Esc` clear selection; click selects, double-click follows.
+- Assets: `web/public/models/rig.glb` (ReadyPlayerMe or Mixamo export with idle/walk/sleep clips) and `web/public/models/manifest.json` (prop pack) are picked up automatically when present; `web/README.md` documents the formats.
 
 ## Run directory layout
 
