@@ -1,0 +1,26 @@
+# exp_memory, arm vector: cosine-only retrieval (memory.mode vector), no graph walk. The arms differ only in
+# memory.mode. memory.probe_every_ticks 6 makes the loop plant a two-hop probe note for every alive
+# agent every 6 ticks and check it is recalled on the next tick; the cumulative hit rate is
+# `probe_recall` on the tick rows. Secondary `tracer_adopters` needs the tracer, so it is enabled
+# identically in both arms. VoidConfig.warnings() is empty for this config.
+extends: base.yaml
+run:
+  name: exp_memory_vector
+  days: 3
+  ticks_per_day: 12
+entropy:
+  degeneration:
+    mode: observe
+memory:
+  mode: vector
+  probe_every_ticks: 6
+experiment:
+  name: exp_memory
+  arm: vector
+  independent_variables: [memory.mode]
+  primary_outcome: probe_recall
+  secondary_outcomes: [tracer_adopters, tracer_reach]
+  tracer:
+    enabled: true
+    day: 1
+    agent: Ada

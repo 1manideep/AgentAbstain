@@ -1,0 +1,27 @@
+# exp_gate, arm off: gadgets are verified without running their tests (sandbox.gate_enabled false).
+# The arms differ only in sandbox.gate_enabled. 12 ticks/day x 8 days, no tier mutation, and a high
+# scripted gadget_defect_rate (0.6) so the gate has something to catch. Primary
+# `gadget_use_failure_rate` (cumulative, from the last day row); secondary `mean_balance`.
+# DESIGN §17 asks for 30 days; 8 keeps a scripted run short (total_cap 30 >= 8 * 3 daily cap).
+# VoidConfig.warnings() is empty for this config.
+extends: base.yaml
+run:
+  name: exp_gate_off
+  days: 8
+  ticks_per_day: 12
+population:
+  tier_mutation_prob: 0.0
+entropy:
+  degeneration:
+    mode: observe
+tiers:
+  scripted:
+    gadget_defect_rate: 0.6
+sandbox:
+  gate_enabled: false
+experiment:
+  name: exp_gate
+  arm: "off"
+  independent_variables: [sandbox.gate_enabled]
+  primary_outcome: gadget_use_failure_rate
+  secondary_outcomes: [mean_balance, gadgets.verified, gadgets.rejected]

@@ -1,0 +1,22 @@
+# exp_press, arm both: chronicle on x gossip on (one cell of the 2x2). The four arms (both /
+# chronicle / gossip / none) toggle chronicle.enabled and gossip.enabled and nothing else.
+# Primary `notes_by_channel.chronicle` and secondary `notes_by_channel.gossip` are live note
+# counts per channel from the last day row. VoidConfig.warnings() is empty for this config.
+extends: base.yaml
+run:
+  name: exp_press_both
+  days: 3
+  ticks_per_day: 12
+entropy:
+  degeneration:
+    mode: observe
+chronicle:
+  enabled: true
+gossip:
+  enabled: true
+experiment:
+  name: exp_press
+  arm: both
+  independent_variables: [chronicle.enabled, gossip.enabled]
+  primary_outcome: notes_by_channel.chronicle
+  secondary_outcomes: [notes_by_channel.gossip, gossip_transfers]

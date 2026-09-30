@@ -1,0 +1,27 @@
+# exp_spread, arm gossip: the tracer note can spread only by gossip (gossip on, reproduction off).
+# The three arms (gossip / inherit / both) toggle gossip.enabled and population.reproduction_enabled
+# and nothing else. A tracer note is planted in Ada's vault on day 1. Primary `tracer_reach`
+# (alive agents holding a descendant of the tracer note, last tick row); secondary `tracer_adopters`.
+# VoidConfig.warnings() is empty for this config.
+extends: base.yaml
+run:
+  name: exp_spread_gossip
+  days: 4
+  ticks_per_day: 12
+population:
+  reproduction_enabled: false
+entropy:
+  degeneration:
+    mode: observe
+gossip:
+  enabled: true
+experiment:
+  name: exp_spread
+  arm: gossip
+  independent_variables: [gossip.enabled, population.reproduction_enabled]
+  primary_outcome: tracer_reach
+  secondary_outcomes: [tracer_adopters, gossip_transfers]
+  tracer:
+    enabled: true
+    day: 1
+    agent: Ada

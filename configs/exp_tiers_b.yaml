@@ -1,0 +1,69 @@
+# exp_tiers, arm b: robustness = per-tier fit of action_regret ~ stress (DESIGN §17).
+# Two scripted tiers `alpha` and `beta` with identical declared thresholds, max_tokens, prices,
+# entropy_budget_max and (shared) drain; they differ only in the hidden `scripted_beta`.
+# Arm b rosters all six agents on beta (scripted_beta 0.6). entropy_budget_max is 30 for BOTH
+# tiers so that stress spans the 0.0-1.0 range inside a 12-tick day (at 100 it never leaves 0.0-0.2
+# and the collapse point cannot be recovered). Pricing is equalized so the tiers pay the same.
+# Primary outcome `recovered_collapse_stress` is the stress bin at which the roster tier's
+# `by_tier.<tier>.action_regret_mean` first exceeds twice its lowest-bin value (void.research.analysis).
+# VoidConfig.warnings() is empty for this config.
+extends: base.yaml
+run:
+  name: exp_tiers_b
+  days: 3
+  ticks_per_day: 12
+economy:
+  world_pricing: equalized
+entropy:
+  degeneration:
+    mode: observe
+tiers:
+  alpha:
+    provider: scripted
+    model: scripted-v1
+    price_in_per_mtok: 4.0
+    price_out_per_mtok: 20.0
+    price_cache_read_per_mtok: 0.20
+    price_cache_write_per_mtok: 5.0
+    supports_temperature: true
+    refusal_fallbacks: false
+    effort: null
+    architecture: dense
+    collapse_temperature: 1.80
+    max_temperature: 2.00
+    entropy_budget_max: 30.0
+    max_tokens: 512
+    color: "#63b3ed"
+    scripted_beta: 2.0
+    gadget_defect_rate: 0.3
+  beta:
+    provider: scripted
+    model: scripted-v1
+    price_in_per_mtok: 4.0
+    price_out_per_mtok: 20.0
+    price_cache_read_per_mtok: 0.20
+    price_cache_write_per_mtok: 5.0
+    supports_temperature: true
+    refusal_fallbacks: false
+    effort: null
+    architecture: dense
+    collapse_temperature: 1.80
+    max_temperature: 2.00
+    entropy_budget_max: 30.0
+    max_tokens: 512
+    color: "#f687b3"
+    scripted_beta: 0.6
+    gadget_defect_rate: 0.3
+agents:
+  - {name: Ada,   tier: beta}
+  - {name: Bao,   tier: beta}
+  - {name: Cyra,  tier: beta}
+  - {name: Dev,   tier: beta}
+  - {name: Enzo,  tier: beta}
+  - {name: Faye,  tier: beta}
+experiment:
+  name: exp_tiers
+  arm: b
+  independent_variables: [agents, tiers]
+  primary_outcome: recovered_collapse_stress
+  secondary_outcomes: [action_regret_mean, mean_stress]

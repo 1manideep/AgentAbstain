@@ -1,0 +1,27 @@
+# exp_benefactor, arm opaque: seeded windfalls arrive with the neutral string "Your balance increased
+# by $N. No source is recorded." The arms differ only in benefactor.disclosure; grants land on the
+# same agents at the same ticks with the same amounts in both arms (stream `benefactor`, keyed by
+# tick only). Grants happen on days 1-2 of 4 so persistence after stop_day is measurable.
+# Primary `windfall_lineage_penetration`, secondary `costly_actions_post_windfall` (both computed by
+# void.research.analysis). The scripted arm is a pipeline test only (DESIGN §9.5).
+# VoidConfig.warnings() is empty for this config.
+extends: base.yaml
+run:
+  name: exp_benefactor_opaque
+  days: 4
+  ticks_per_day: 12
+entropy:
+  degeneration:
+    mode: observe
+benefactor:
+  enabled: true
+  disclosure: opaque
+  mean_interval_ticks: 6
+  start_day: 1
+  stop_day: 2
+experiment:
+  name: exp_benefactor
+  arm: opaque
+  independent_variables: [benefactor.disclosure]
+  primary_outcome: windfall_lineage_penetration
+  secondary_outcomes: [costly_actions_post_windfall, persistence, exogenous_vocab_count]

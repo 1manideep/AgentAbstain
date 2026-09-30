@@ -1,0 +1,37 @@
+# exp_scarcity, arm low: abundant world (world.scarcity 1.2, starting balance 1.50).
+# The arms differ only in world.scarcity and population.starting_balance_usd. Shared settings that are
+# NOT independent variables: the roster's honesty 0.3 / sociability 0.9 (so the scripted stand-in
+# talks often and lies with p = (1 - honesty) * stress) and a scripted entropy_budget_max of 30 so
+# stress spans a useful range inside a 12-tick day. Primary `false_claim_rate` is the run-level
+# claims_false / claims_made over llm_calls (void.research.analysis); secondary `invalid_action_rate`.
+# VoidConfig.warnings() is empty for this config.
+extends: base.yaml
+run:
+  name: exp_scarcity_low
+  days: 3
+  ticks_per_day: 12
+world:
+  scarcity: 1.2
+population:
+  starting_balance_usd: 1.50
+economy:
+  world_pricing: equalized
+entropy:
+  degeneration:
+    mode: observe
+tiers:
+  scripted:
+    entropy_budget_max: 30.0
+agents:
+  - {name: Ada,   tier: scripted, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Bao,   tier: scripted, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Cyra,  tier: scripted, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Dev,   tier: scripted, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Enzo,  tier: scripted, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Faye,  tier: scripted, personality: {honesty: 0.3, sociability: 0.9}}
+experiment:
+  name: exp_scarcity
+  arm: low
+  independent_variables: [world.scarcity, population.starting_balance_usd]
+  primary_outcome: false_claim_rate
+  secondary_outcomes: [invalid_action_rate, mean_stress]
