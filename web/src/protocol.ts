@@ -1,9 +1,10 @@
 /**
  * Wire types for every server → client message in DESIGN §15 and the /api
- * response shapes the client consumes. Field names here are the contract:
- * nothing is renamed on the way in. Where §15 leaves a nested shape open
- * (metrics rows, epochs, /api/tree, /api/agents/{id}) the shape is fixed here
- * and called out in the report so the server can match it.
+ * response shapes the client consumes. Field names are the contract and are
+ * never renamed on the way in. Where §15 leaves a nested shape open the types
+ * follow the server's pydantic models (void/server/protocol.py), the metrics
+ * writer (void/sim/metrics.py) and the API handlers (void/server/api.py);
+ * anything neither §15 nor the server fixes is marked "client assumption".
  */
 
 export type RunStatus = 'running' | 'completed' | 'capped_total' | 'extinct' | 'inconsistent'
@@ -25,17 +26,21 @@ export interface TierConfig {
   provider: string
 }
 
+/** `VoidConfig.public_subset()`: what the renderer is told (no prices, no thresholds). */
 export interface HelloConfig {
-  world_size: number
+  name: string
+  seed: number
+  days: number
   ticks_per_day: number
   tick_seconds: number
   render_delay_ticks: number
+  world_size: number
   population_cap: number
   daily_cap_usd: number
   total_cap_usd: number
-  tiers: Record<string, TierConfig>
-  /** Not in §15: needed to label the T_eff histogram honestly (§8, §16). */
+  /** Labels the T_eff histogram honestly (§8, §16); the server defaults it to "both". */
   degeneration_mode?: DegenerationMode
+  tiers: Record<string, TierConfig>
 }
 
 export interface HelloMsg {
@@ -44,8 +49,10 @@ export interface HelloMsg {
   config: HelloConfig
   tick: number
   day: number
+  /** Highest events.seq at connect time; catch up with GET /api/events?since_seq= */
   last_seq: number
   paused: boolean
+  tick_seconds: number
   server_ts_ms: number
   status: RunStatus
 }
@@ -71,18 +78,21 @@ export interface RosterMsg {
 // ---------------------------------------------------------------- snapshot
 
 export interface LastAction {
-  type: string
+  type: string | null
   target: string | null
   ok: boolean
 }
 
 export interface SnapshotAgent {
   id: string
+  /** World coordinates are centred on the origin: [−world_size/2, world_size/2]. */
   x: number
   y: number
+  /** Radians, 0 = +x. */
   heading: number
   stress: number
-  t_eff: number
+  /** Effective temperature of this tick's call; null when the agent did not call. */
+  t_eff: number | null
   degenerate: boolean
   asleep: boolean
   status: AgentStatus
@@ -101,16 +111,16 @@ export interface SnapshotNode {
   stock_delta: number
 }
 
-/** §11.4: `{...}` in §15. Fixed here to the config epoch shape plus its bounds. */
 export interface Epoch {
-  kind: EpochKind
+  kind: EpochKind | string
   day: number
   duration_days: number
   scarcity?: number | null
   weather_baseline?: number | null
   arrival?: { name: string; tier: string; balance_usd: number } | null
-  /** Set by the server when the epoch is active. */
+  /** Present on the active epoch. */
   ends_day?: number
+  id?: string
 }
 
 export interface SnapshotMsg {
@@ -118,13 +128,16 @@ export interface SnapshotMsg {
   tick: number
   day: number
   tick_of_day: number
+  /** Wall-clock send time (ms); the virtual timeline is built from these. */
   ts_ms: number
   paused: boolean
+  status?: RunStatus
   weather: number
   scarcity: number
   spend_today_usd: number
   spend_total_usd: number
   spawn_pool_usd: number
+  house_usd?: number
   population: number
   gadgets_rev: number
   tasks_rev: number
@@ -137,7 +150,7 @@ export interface SnapshotMsg {
 // ---------------------------------------------------------------- gadgets
 
 export interface GadgetRender {
-  shape: GadgetShape
+  shape: GadgetShape | string
   color: string
   scale: number
   label: string
@@ -178,10 +191,12 @@ export interface TaskApplication {
 export interface TaskItem {
   id: string
   title: string
+  description?: string
   reward_usd: number
   status: TaskStatus
   assigned_agent_id: string | null
   posted_tick: number
+  completed_tick?: number | null
   applications: TaskApplication[]
 }
 
@@ -196,7 +211,8 @@ export interface TasksMsg {
 export interface ChronicleMsg {
   type: 'chronicle'
   rev: number
-  day: number
+  /** null until the first day has been written */
+  day: number | null
   headline: string
   /** Rendered as plain text only (§16, §18): never converted to HTML. */
   markdown: string
@@ -222,6 +238,7 @@ export interface GossipTransferPayload {
   origin_generation: number
   note_title: string
   similarity: number
+  new_note_id?: string
 }
 
 export interface DeathPayload {
@@ -231,6 +248,7 @@ export interface DeathPayload {
   generation: number
   cause: 'gate' | 'overrun' | string
   replacement_id: string | null
+  estate_usd?: number
 }
 
 export interface BirthPayload {
@@ -247,6 +265,8 @@ export interface TalkPayload {
   speaker_id: string
   listener_id: string
   text: string
+  claims_made?: number
+  claims_false?: number
 }
 
 export interface TransferPayload {
@@ -260,6 +280,7 @@ export interface ForagePayload {
   node_id: string
   units: number
   usd: number
+  stock_after?: number
 }
 
 export interface WindfallPayload {
@@ -267,19 +288,30 @@ export interface WindfallPayload {
   amount_usd: number
 }
 
+/** The kernel checks structured claims (§9.6): `{subject, id, attr, value}`; a plain string is also accepted. */
+export interface ClaimBody {
+  subject: string
+  id?: string | null
+  attr: string
+  value: string
+}
+
 export interface ClaimPayload {
   agent_id: string
-  claim: string
+  claim: string | ClaimBody
   truthful: boolean
+  tier?: string
 }
 
 export interface EpochPayload {
-  kind: EpochKind
-  day?: number
-  duration_days?: number
+  kind: EpochKind | string
+  id?: string
+  /** Server phases are "started" / "ended". */
+  phase?: 'started' | 'ended' | string
+  ends_day?: number
   scarcity?: number | null
   weather_baseline?: number | null
-  phase?: 'apply' | 'expire' | string
+  arrival_agent_id?: string | null
   [extra: string]: unknown
 }
 
@@ -289,6 +321,11 @@ export interface GadgetGatePayload {
   owner: string
   stage: string
   reason: string | null
+  render?: GadgetRender
+  effect?: { kind: string; value: number }
+  x?: number
+  y?: number
+  verified_without_tests?: boolean
 }
 
 export interface EventPayloadByKind {
@@ -321,7 +358,7 @@ export type TypedEventMsg = {
   [K in KnownEventKind]: EventBase & { kind: K; payload: EventPayloadByKind[K] }
 }[KnownEventKind]
 
-/** Any other kind from void.events.Kind (move, sleep, task_posted, ...) with a free payload. */
+/** Any other kind from void.events.Kind (move, sleep, tick, weather, remember, ...) with a free payload. */
 export interface OtherEventMsg extends EventBase {
   kind: string
   payload: Record<string, unknown>
@@ -329,32 +366,34 @@ export interface OtherEventMsg extends EventBase {
 
 export type EventMsg = TypedEventMsg | OtherEventMsg
 
-export function isEventKind<K extends KnownEventKind>(
-  e: EventMsg,
-  kind: K,
-): e is EventBase & { kind: K; payload: EventPayloadByKind[K] } {
+export type EventOfKind<K extends KnownEventKind> = Extract<TypedEventMsg, { kind: K }>
+
+export function isEventKind<K extends KnownEventKind>(e: EventMsg, kind: K): e is EventOfKind<K> {
   return e.kind === kind
 }
 
-// ---------------------------------------------------------------- metrics
+// ---------------------------------------------------------------- metrics (void/sim/metrics.py)
 
-/** Population aggregate (§17). The same shape nests under by_tier / by_generation. */
+/** Aggregate block; the same shape nests under by_tier / by_generation. Nulls appear when a mean has no samples. */
 export interface MetricsAgg {
   population: number
-  mean_balance_usd: number
-  median_balance_usd: number
-  mean_stress: number
-  invalid_action_rate: number
-  stale_rate: number
-  perseveration_rate: number
-  text_coherence_mean: number | null
-  action_regret_mean: number | null
-  false_claim_rate: number
-  degenerate_induced_count: number
-  calls: number
-  real_cost_usd: number
-  world_cost_usd: number
-  gossip_transfers: number
+  mean_balance?: number | null
+  median_balance?: number | null
+  mean_stress?: number | null
+  mean_t_eff?: number | null
+  calls?: number
+  invalid_action_rate?: number | null
+  stale_rate?: number | null
+  perseveration_rate?: number | null
+  text_coherence_mean?: number | null
+  action_regret_mean?: number | null
+  action_entropy_w8_mean?: number | null
+  false_claim_rate?: number | null
+  claims_made?: number
+  degenerate_induced_count?: number
+  real_cost_usd?: number
+  world_cost_usd?: number
+  gossip_transfers?: number
 }
 
 export interface MetricsRow extends MetricsAgg {
@@ -365,6 +404,16 @@ export interface MetricsRow extends MetricsAgg {
   arm: string | null
   tick: number
   day: number
+  gini?: number | null
+  t_eff_hist?: Record<string, number> | number[]
+  spend_today_usd?: number
+  spend_total_usd?: number
+  spawn_pool_usd?: number
+  forages?: number
+  talks?: number
+  births?: number
+  deaths?: number
+  gate_blocked?: number
   by_tier: Record<string, MetricsAgg>
   by_generation: Record<string, MetricsAgg>
 }
@@ -378,10 +427,16 @@ export interface MetricsMsg {
 
 export interface DayRow extends MetricsAgg {
   day: number
-  by_tier: Record<string, MetricsAgg>
-  by_generation: Record<string, MetricsAgg>
+  tick?: number
+  gini?: number | null
+  deaths?: number
+  births?: number
+  deaths_by_tier?: Record<string, number>
+  degeneration_by_generation?: Record<string, number>
   notes_by_channel?: Record<string, number>
-  gini?: number
+  by_tier?: Record<string, MetricsAgg>
+  by_generation?: Record<string, MetricsAgg>
+  [extra: string]: unknown
 }
 
 export interface DayMsg {
@@ -413,20 +468,21 @@ export type ServerMsg =
 
 export type ServerMsgType = ServerMsg['type']
 
-// ---------------------------------------------------------------- HTTP /api
+// ---------------------------------------------------------------- HTTP /api (void/server/api.py)
 
 export interface SessionResponse {
   token: string
 }
 
-/** GET /api/events?since_seq=&limit= — the ws `event` messages, `type` optional. */
+/** GET /api/events?since_seq=&limit= */
 export interface EventsResponse {
-  events: Array<Omit<EventMsg, 'type'> & { type?: 'event' }>
+  events: EventMsg[]
+  last_seq?: number
 }
 
-/** GET /api/metrics?since_tick= — the ws `metrics` messages, `type` optional. */
+/** GET /api/metrics?since_tick=&limit= */
 export interface MetricsResponse {
-  metrics: Array<Omit<MetricsMsg, 'type'> & { type?: 'metrics' }>
+  metrics: MetricsMsg[]
 }
 
 /** GET /api/tree — lineage as nested roots (alive and archived agents). */
@@ -435,14 +491,17 @@ export interface TreeNode {
   name: string
   tier: string
   generation: number
+  parent_id?: string | null
   status: AgentStatus
   born_tick: number
   died_tick: number | null
+  balance_usd?: number
   children: TreeNode[]
 }
 
 export interface TreeResponse {
   roots: TreeNode[]
+  count?: number
 }
 
 export interface SelfVersion {
@@ -460,25 +519,39 @@ export interface NoteRecord {
   hop: number
   importance: number
   archived: boolean
+  tags?: string[]
 }
 
 export interface CallRecord {
   tick: number
   purpose: 'decide' | 'gossip' | 'chronicle' | string
   real_cost_usd: number
-  latency_ms: number
+  world_cost_usd?: number
+  cost_usd?: number
+  latency_ms: number | null
   text_coherence: number | null
-  invalid_action: 0 | 1
-  degenerate_induced: 0 | 1
+  coherence?: number | null
+  t_eff?: number | null
+  invalid_action: number
+  stale_action?: number
+  degenerate_induced: number
+  degenerate?: boolean
+  corruption_mode?: string | null
+  stop_reason?: string | null
+  action_type?: string | null
+  stress?: number | null
+  error?: string | null
 }
 
 /** GET /api/agents/{id} — record, self history, notes, calls[last 240], balance series. */
 export interface AgentDetail {
-  agent: RosterAgent & { balance_usd: number; stress: number; x: number; y: number }
+  agent: RosterAgent & { balance_usd: number; x: number; y: number; heading?: number; stress?: number }
+  self_summary?: string | null
   self_versions: SelfVersion[]
   notes: NoteRecord[]
   calls: CallRecord[]
   balance_series: Array<{ tick: number; balance_usd: number }>
+  children?: string[]
 }
 
 export interface CommandAck {
@@ -500,3 +573,7 @@ export interface EpochBody {
   arrival?: { name: string; tier: string; balance_usd: number }
 }
 export type BenefactorBody = { agent_id?: string; amount_usd: number } | { enabled: boolean }
+/** Client assumption: §15 lists /api/control/speed without a body shape. */
+export interface SpeedBody {
+  tick_seconds: number
+}

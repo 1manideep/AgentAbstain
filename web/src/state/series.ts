@@ -83,6 +83,8 @@ export class Series {
 
   degenByGen = new Int32Array(MAX_GENERATIONS)
   degenTotal = 0
+  /** Collapse temperature per tier, learned from degeneration payloads. */
+  tCByTier = new Map<string, number>()
 
   popByTick = new TickRing()
   meanBalanceByTick = new TickRing()
@@ -111,6 +113,7 @@ export class Series {
     this.teffSamples = 0
     this.degenByGen.fill(0)
     this.degenTotal = 0
+    this.tCByTier.clear()
     this.popByTick.clear()
     this.meanBalanceByTick.clear()
     this.giniByTick.clear()
@@ -241,6 +244,7 @@ export class Series {
       const gi = g < 0 ? 0 : g >= MAX_GENERATIONS ? MAX_GENERATIONS - 1 : g
       this.degenByGen[gi]!++
       this.degenTotal++
+      if (typeof e.payload.t_c === 'number' && e.payload.tier) this.tCByTier.set(e.payload.tier, e.payload.t_c)
       return
     }
     if (isEventKind(e, 'claim')) {

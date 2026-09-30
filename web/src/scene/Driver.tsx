@@ -17,7 +17,10 @@ declare global {
     __void?: {
       gl: { info: { render: { calls: number; triangles: number } } }
       stats: () => { calls: number; triangles: number; fps: number; dpr: number; frames: number }
+      timing: () => { sampleMs: number; systemsMs: number; renderMs: number; frameMs: number; n: number }
       history: typeof history
+      select: (id: string | null) => void
+      scene: import('three').Scene
     }
   }
 }
@@ -33,14 +36,31 @@ const ctx: FrameCtx = {
 
 export function Driver() {
   const gl = useThree((s) => s.gl)
+  const scene = useThree((s) => s.scene)
   const frames = useRef(0)
   const fpsWindow = useRef({ t0: 0, n: 0, fps: 0 })
   const lastClockCommit = useRef(0)
   const lastTick = useRef(-1)
 
+  const timing = useRef({ sample: 0, systems: 0, render: 0, frame: 0, n: 0, last: 0 })
+
   useEffect(() => {
+    // time the renderer's draw so the perf probe can split JS from GPU/raster cost
+    const origRender = gl.render.bind(gl)
+    gl.render = ((scene, camera) => {
+      const t = performance.now()
+      origRender(scene, camera)
+      timing.current.render += performance.now() - t
+    }) as typeof gl.render
     window.__void = {
       gl,
+      timing: () => {
+        const t = timing.current
+        const n = Math.max(1, t.n)
+        const out = { sampleMs: t.sample / n, systemsMs: t.systems / n, renderMs: t.render / n, frameMs: t.frame / n, n: t.n }
+        t.sample = t.systems = t.render = t.frame = t.n = 0
+        return out
+      },
       stats: () => ({
         calls: gl.info.render.calls,
         triangles: gl.info.render.triangles,
@@ -49,19 +69,29 @@ export function Driver() {
         frames: frames.current,
       }),
       history,
+      select: (id) => useStore.getState().select(id),
+      scene,
     }
     return () => {
+      gl.render = origRender
       delete window.__void
     }
-  }, [gl])
+  }, [gl, scene])
 
   useFrame((state, delta) => {
     const dt = delta > 0.1 ? 0.1 : delta < 0 ? 0 : delta
+    const tm = timing.current
+    const tStart = performance.now()
+    if (tm.last > 0) tm.frame += tStart - tm.last
+    tm.last = tStart
+    tm.n++
     const p = history.playback
     const before = p.renderVts
     const renderVts = history.advance(dt)
     const out = sampled.out
     history.sample(renderVts, out)
+    const tSampled = performance.now()
+    tm.sample += tSampled - tStart
 
     // Scrubbing backwards: re-arm effects for the ticks we will see again.
     if (lastTick.current >= 0 && out.tick < lastTick.current - 1) {
@@ -76,6 +106,7 @@ export function Driver() {
     ctx.out = out
     ctx.reducedMotion = mirror.reducedMotion
     runSystems(ctx)
+    tm.systems += performance.now() - tSampled
 
     frames.current++
     const w = fpsWindow.current

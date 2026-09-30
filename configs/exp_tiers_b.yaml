@@ -5,7 +5,9 @@
 # tiers so that stress spans the 0.0-1.0 range inside a 12-tick day (at 100 it never leaves 0.0-0.2
 # and the collapse point cannot be recovered). Pricing is equalized so the tiers pay the same.
 # Primary outcome `recovered_collapse_stress` is the stress bin at which the roster tier's
-# `by_tier.<tier>.action_regret_mean` first exceeds twice its lowest-bin value (void.research.analysis).
+# `by_tier.<tier>.action_regret_mean` first exceeds twice its lowest-bin value (by at least 0.25), with a
+# tier that is already a coin flip at rest (mean p_chosen < 0.5) collapsed at its lowest bin
+# (void.research.analysis.recovered_collapse_stress).
 # VoidConfig.warnings() is empty for this config.
 extends: base.yaml
 run:
