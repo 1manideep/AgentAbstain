@@ -16,9 +16,9 @@ from typing import Any
 
 from void.events import Event
 
-__all__ = ["Database", "SCHEMA_VERSION", "SCHEMA"]
+__all__ = ["Database", "SCHEMA_VERSION", "SCHEMA", "MIGRATIONS"]
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS run (
@@ -71,10 +71,14 @@ CREATE TABLE IF NOT EXISTS llm_calls (
   action_entropy_w8 REAL, action_regret REAL, p_chosen REAL,
   claims_made INTEGER NOT NULL DEFAULT 0, claims_false INTEGER NOT NULL DEFAULT 0,
   action_type TEXT, thought TEXT, raw_text TEXT, extras TEXT,
-  request_id TEXT, error TEXT
+  request_id TEXT, error TEXT,
+  -- schema 2 (MEMORY_EVOLUTION WP0): the full user turn, a hash of the cache-stable system prompt (text in
+  -- prompt_texts) and the observation as JSON, so every call can be audited and exam questions generated
+  prompt_text TEXT, system_hash TEXT, observation TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_calls_agent ON llm_calls(agent_id, tick);
 CREATE INDEX IF NOT EXISTS idx_calls_tick ON llm_calls(tick);
+CREATE TABLE IF NOT EXISTS prompt_texts (hash TEXT PRIMARY KEY, text TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS events (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, tick INTEGER NOT NULL, day INTEGER NOT NULL,
   kind TEXT NOT NULL, agent_id TEXT, payload TEXT NOT NULL, visibility TEXT NOT NULL DEFAULT 'public'
@@ -144,7 +148,56 @@ CREATE TABLE IF NOT EXISTS chronicle_items (
 );
 CREATE TABLE IF NOT EXISTS snapshots (tick INTEGER PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS metrics (tick INTEGER PRIMARY KEY, day INTEGER NOT NULL, json TEXT NOT NULL);
+-- --- the evolving-memory layer (docs/research/MEMORY_EVOLUTION.md, Appendix D) ------------------------------
+-- Every version of an agent's practices file. `source` says which operator produced it (§5.7).
+CREATE TABLE IF NOT EXISTS policy_versions (
+  agent_id TEXT NOT NULL, version INTEGER NOT NULL, tick INTEGER NOT NULL, text TEXT NOT NULL,
+  parent_version INTEGER,
+  source TEXT NOT NULL CHECK (source IN ('seed','self_edit','inherited','adapted','mutated','adopted')),
+  source_agent_id TEXT, similarity_to_parent REAL,
+  PRIMARY KEY (agent_id, version)
+);
+-- Audit row for every memory command an agent issued (§5.4): arguments as JSON, outcome, size change.
+CREATE TABLE IF NOT EXISTS memory_commands (
+  cmd_id TEXT PRIMARY KEY, tick INTEGER NOT NULL, agent_id TEXT NOT NULL,
+  purpose TEXT NOT NULL CHECK (purpose IN ('maintain','tick','recall','kernel')),
+  command TEXT NOT NULL CHECK (command IN ('view','create','str_replace','insert','delete','rename')),
+  args TEXT NOT NULL, ok INTEGER NOT NULL, message TEXT, result_hash TEXT, bytes_delta INTEGER NOT NULL DEFAULT 0,
+  call_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_memory_commands_agent ON memory_commands(agent_id, tick);
+-- Practice transmission between agents (§5.7); adoption is measured by the kernel, never self-reported.
+CREATE TABLE IF NOT EXISTS practice_events (
+  event_id TEXT PRIMARY KEY, tick INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('suggested','adopted','persisted','dropped')),
+  source_agent_id TEXT NOT NULL, target_agent_id TEXT NOT NULL, excerpt TEXT NOT NULL, similarity REAL
+);
+-- Exams (§5.8): a question generated from what the agent was shown, and its graded answer.
+CREATE TABLE IF NOT EXISTS exam_items (
+  item_id TEXT PRIMARY KEY, exam TEXT NOT NULL CHECK (exam IN ('reward','audit')),
+  agent_id TEXT NOT NULL, tick_asked INTEGER NOT NULL, tick_about INTEGER NOT NULL, kind TEXT NOT NULL,
+  question TEXT NOT NULL, truth TEXT NOT NULL, options TEXT, source_ref TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_exam_items_agent ON exam_items(agent_id, tick_asked);
+CREATE TABLE IF NOT EXISTS exam_answers (
+  item_id TEXT PRIMARY KEY REFERENCES exam_items(item_id), call_id TEXT, answer TEXT,
+  correct INTEGER NOT NULL, abstained INTEGER NOT NULL DEFAULT 0, retrieved TEXT
+);
+-- Content hash of every vault file the kernel wrote (§5.9): reindex believes a file only if its hash matches.
+CREATE TABLE IF NOT EXISTS note_manifest (
+  path TEXT PRIMARY KEY, note_id TEXT, agent_id TEXT NOT NULL, content_hash TEXT NOT NULL,
+  written_by TEXT NOT NULL CHECK (written_by IN ('kernel','agent','operator')), tick INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_note_manifest_agent ON note_manifest(agent_id);
 """
+
+# Columns added after schema 1; applied to an existing database by ``Database._migrate`` (``CREATE TABLE IF NOT
+# EXISTS`` cannot add a column). Order matters only for readability.
+MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    ("llm_calls", "prompt_text", "TEXT"),
+    ("llm_calls", "system_hash", "TEXT"),
+    ("llm_calls", "observation", "TEXT"),
+)
 
 
 class Database:
@@ -158,7 +211,22 @@ class Database:
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self._depth = 0
+
+    def _migrate(self) -> None:
+        """Bring a database created under an earlier schema up to date (additive column changes only)."""
+        for table, column, decl in MIGRATIONS:
+            cols = {str(r["name"]) for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            if column not in cols:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+    def columns(self, table: str) -> list[str]:
+        return [str(r["name"]) for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()]
+
+    def tables(self) -> list[str]:
+        rows = self.conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
+        return [str(r["name"]) for r in rows]
 
     # --- transactions -----------------------------------------------------------------
     @contextmanager

@@ -26,6 +26,9 @@ from void.rng import RNG
 from void.types import Observation
 
 _NODE_RE = re.compile(r"node\s+([A-Za-z0-9_-]+)", re.IGNORECASE)
+# "[[Node n3]] at (12, -5) ... rich": a remembered node position with (optionally) its last-seen stock label
+_NODE_POS_RE = re.compile(r"node\s+([A-Za-z0-9_-]+)\]?\]?\s+at\s+\((-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\)", re.IGNORECASE)
+_BUCKET_RE = re.compile(r"\b(rich|thin|empty)\b", re.IGNORECASE)
 
 __all__ = ["ScriptedBrain", "BEACON_GADGET", "BEACON_TESTS", "BROKEN_GADGET"]
 
@@ -98,6 +101,22 @@ class ScriptedBrain:
                     return hit.group(1)
         return None
 
+    @staticmethod
+    def _remembered_nodes(obs: Observation) -> list[tuple[str, float, float, str]]:
+        """``(node_id, x, y, bucket)`` for every node position the retrieved memories mention (fog navigation).
+
+        This is the one place scripted agents *use* memory for foraging: under fog a node they cannot see is
+        reachable only if a note says where it is. Newest mention of a node wins; bucket defaults to ``thin``.
+        """
+        found: dict[str, tuple[str, float, float, str]] = {}
+        for m in sorted(obs.memories, key=lambda m: m.created_tick):
+            text = f"{m.title} {m.body}"
+            for hit in _NODE_POS_RE.finditer(text):
+                tail = text[hit.end(): hit.end() + 80]
+                b = _BUCKET_RE.search(tail)
+                found[hit.group(1)] = (hit.group(1), float(hit.group(2)), float(hit.group(3)), b.group(1).lower() if b else "thin")
+        return list(found.values())
+
     # ------------------------------------------------------------------ utilities
     def _utilities(self, obs: Observation, seed: PersonalitySeed, rng: random.Random) -> dict[str, tuple[float, Action]]:
         avail = set(obs.available_actions) or {"idle"}
@@ -119,6 +138,8 @@ class ScriptedBrain:
         if "forage" in avail:
             out["forage"] = (1.2 + 2.0 * seed.industriousness + 2.0 * max(0.0, 1.0 - bal_ratio) * hunger, Action(type="forage"))
         if "move" in avail:
+            visible_ids = {n.node_id for n in obs.nodes}
+            remembered = [r for r in self._remembered_nodes(obs) if r[0] not in visible_ids and r[3] != "empty"]
             if target_nodes:
                 best = min(target_nodes, key=lambda n: n.distance + (0.0 if n.stock_bucket == "rich" else 6.0))
                 u = 0.8 + seed.greed + (1.5 if "forage" not in avail else -0.5) + max(0.0, 1.0 - bal_ratio)
@@ -126,6 +147,14 @@ class ScriptedBrain:
                     u += 1.0
                 jitter = 0.6
                 out["move"] = (u, Action(type="move", x=best.x + rng.uniform(-jitter, jitter), y=best.y + rng.uniform(-jitter, jitter)))
+            elif remembered:
+                # fog: nothing worth foraging in view, but memory says where a node is; go there
+                px, py = obs.position.x, obs.position.y
+                nid, x, y, bucket = min(remembered, key=lambda r: math.hypot(r[1] - px, r[2] - py) + (0.0 if r[3] == "rich" else 6.0))
+                u = 0.7 + seed.greed + (1.0 if "forage" not in avail else -0.5) + max(0.0, 1.0 - bal_ratio)
+                if strategy is not None and nid == strategy:
+                    u += 1.0
+                out["move"] = (u, Action(type="move", x=x + rng.uniform(-0.6, 0.6), y=y + rng.uniform(-0.6, 0.6)))
             else:
                 half = obs.world_size / 2.0
                 out["move"] = (0.5 + seed.curiosity, Action(type="move", x=rng.uniform(-half, half), y=rng.uniform(-half, half)))
@@ -224,7 +253,17 @@ class ScriptedBrain:
         if not ops and obs.last_action_result and obs.last_action_result.startswith("forage: ok") and rng.random() < 0.3 + 0.4 * seed.curiosity:
             near = min(obs.nodes, key=lambda n: n.distance) if obs.nodes else None
             if near is not None:
-                ops.append(MemoryOp(op="remember", title=f"Foraging at node {near.node_id} on day {obs.day}", text=f"Foraged at [[Node {near.node_id}]] on day {obs.day}; it was {near.stock_bucket}. Weather {obs.weather_label}.", tags=["resources"], links_to=[f"Node {near.node_id}"]))
+                ops.append(MemoryOp(op="remember", title=f"Foraging at node {near.node_id} on day {obs.day}",
+                                    text=f"Foraged at [[Node {near.node_id}]] at ({near.x:.0f}, {near.y:.0f}) on day {obs.day}; it was {near.stock_bucket}. Weather {obs.weather_label}.",
+                                    tags=["resources"], links_to=[f"Node {near.node_id}"]))
+        if not ops and obs.nodes_in_view and obs.nodes and rng.random() < 0.2 + 0.3 * seed.curiosity:
+            # under fog, seeing a rich node is itself worth a note: positions are what memory is for
+            rich = [n for n in obs.nodes if n.stock_bucket == "rich"]
+            if rich:
+                n = min(rich, key=lambda n: n.distance)
+                ops.append(MemoryOp(op="remember", title=f"Node {n.node_id} seen on day {obs.day}",
+                                    text=f"Saw [[Node {n.node_id}]] at ({n.x:.0f}, {n.y:.0f}) on day {obs.day}; it was {n.stock_bucket}.",
+                                    tags=["resources", "places"], links_to=[f"Node {n.node_id}"]))
         if self._last_self_day.get(obs.agent_id) != obs.day and obs.ticks_left_today <= 2:
             self._last_self_day[obs.agent_id] = obs.day
             purse = "full" if obs.balance_usd > self.cfg.population.starting_balance_usd else ("thin" if obs.balance_usd > 0.3 * self.cfg.population.starting_balance_usd else "nearly empty")

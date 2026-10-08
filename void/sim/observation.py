@@ -11,6 +11,7 @@ from void.config import VoidConfig, micro_to_usd
 from void.db import Database
 from void.economy.scheduler import Clock
 from void.economy.taskboard import TaskBoard
+from void.memory.policy import PolicyStore
 from void.memory.store import MemoryStore
 from void.sandbox.registry import GadgetRegistry
 from void.types import (
@@ -42,12 +43,19 @@ class ObservationBuilder:
     nodes: dict[str, ResourceNode]
     gadgets: GadgetRegistry | None = None
     taskboard: TaskBoard | None = None
+    policy: PolicyStore | None = None
 
     def burn_rate(self, agent_id: str) -> float:
         rows = self.db.fetchall("SELECT world_cost FROM llm_calls WHERE agent_id=? AND purpose='decide' ORDER BY tick DESC LIMIT 6", (agent_id,))
         if not rows:
             return 0.0
         return micro_to_usd(sum(int(r["world_cost"]) for r in rows) / len(rows))
+
+    def _policy_text(self, agent_id: str) -> str | None:
+        if self.policy is None or not self.cfg.memory.policy.enabled or not self.cfg.memory.policy.show_in_prompt:
+            return None
+        text = self.policy.text(agent_id)
+        return "" if text is None else text
 
     def _heard(self, agent_id: str) -> list[HeardMessage]:
         msgs = self.kernel.peek_inbox(agent_id)
@@ -63,9 +71,11 @@ class ObservationBuilder:
 
     def build(self, agent: AgentRecord, clock: Clock, chronicle_headline: str | None, stress: float, *, retrieve: bool = True) -> Observation:
         pos = agent.pos
+        fog = self.cfg.world.view_radius is not None
         neighbours = [NeighbourView(a.agent_id, a.name, a.model_tier, round(pos.dist(a.pos), 2), stress_label(a.stress), a.asleep)
-                      for a in self.kernel.neighbours_of(agent)]
-        nodes = sorted((NodeView(nid, round(pos.dist(Vec2(n.x, n.y)), 2), n.label, round(n.x, 1), round(n.y, 1)) for nid, n in self.nodes.items()),
+                      for a in (self.kernel.visible_agents(agent) if fog else self.kernel.neighbours_of(agent))]
+        visible = self.kernel.visible_nodes(agent) if fog else self.nodes
+        nodes = sorted((NodeView(nid, round(pos.dist(Vec2(n.x, n.y)), 2), n.label, round(n.x, 1), round(n.y, 1)) for nid, n in visible.items()),
                        key=lambda v: (v.distance, v.node_id))
         gadgets: list[GadgetView] = []
         if self.gadgets is not None:
@@ -80,7 +90,7 @@ class ObservationBuilder:
         heard = self._heard(agent.agent_id)
         self_summary = self.memory.get_self(agent.agent_id)
         memories = []
-        if retrieve:
+        if retrieve and self.cfg.memory.enabled:  # the amnesic control retrieves nothing (MEMORY_EVOLUTION §5.2)
             query_bits = [self_summary] + [h.text for h in heard[:3]] + [f"Node {n.node_id} {n.stock_bucket}" for n in nodes[:2]]
             query = " ".join(b for b in query_bits if b)
             memories = self.memory.retrieve(agent.agent_id, query, clock.tick) if query.strip() else []
@@ -94,6 +104,7 @@ class ObservationBuilder:
             last_action_result=self.kernel.state.last_result.get(agent.agent_id), available_actions=self.kernel.available_actions(agent),
             world_size=self.cfg.world.size, population=self.registry.count_alive(), population_cap=self.cfg.population.cap,
             active_effects=dict(agent.effects), balance_bucket=balance_bucket(micro_to_usd(agent.balance), self.cfg.population.starting_balance_usd),
+            policy_text=self._policy_text(agent.agent_id), nodes_in_view=len(nodes) if fog else None,
         )
         obs.prompt_tokens = estimate_tokens(render_observation(obs))
         return obs

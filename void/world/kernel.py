@@ -24,6 +24,7 @@ from void.db import Database
 from void.economy.taskboard import TaskBoard
 from void.economy.wallet import Wallet
 from void.events import Event, EventBus, Kind
+from void.rng import RNG
 from void.types import ActionOutcome, AgentStatus, HeardMessage, Vec2, balance_bucket, stress_label
 from void.world.resources import ResourceNode, forage_units, forage_value_micro
 from void.world.weather import Weather
@@ -47,6 +48,7 @@ class KernelState:
     failure_ticks: dict[str, deque[int]] = field(default_factory=dict)
     read_chronicle_tick: dict[str, int] = field(default_factory=dict)
     windfall_tick: dict[str, int] = field(default_factory=dict)
+    seen_nodes: dict[str, set[str]] = field(default_factory=dict)  # fog: node ids each agent has had in view
 
 
 class Kernel:
@@ -54,8 +56,9 @@ class Kernel:
                  nodes: dict[str, ResourceNode], bus: EventBus, *, gate: GadgetGate | None = None,
                  gadgets: GadgetRegistry | None = None, taskboard: TaskBoard | None = None,
                  gossip: Gossip | None = None, lifecycle: Lifecycle | None = None,
-                 chronicle_reader: Callable[[], str | None] | None = None) -> None:
+                 chronicle_reader: Callable[[], str | None] | None = None, rng: RNG | None = None) -> None:
         self.cfg = cfg
+        self.rng = rng
         self.db = db
         self.registry = registry
         self.wallet = wallet
@@ -188,6 +191,32 @@ class Kernel:
         out.sort(key=lambda a: (agent.pos.dist(a.pos), a.agent_id))
         return out
 
+    # --- fog of war (MEMORY_EVOLUTION §5.2) ---------------------------------------------------------------
+    def visible_nodes(self, agent: AgentRecord) -> dict[str, ResourceNode]:
+        """Nodes the agent can see this tick: every node without fog, those within ``world.view_radius`` with it."""
+        r = self.cfg.world.view_radius
+        if r is None:
+            return dict(self.nodes)
+        return {nid: n for nid, n in self.nodes.items() if agent.pos.dist(Vec2(n.x, n.y)) <= r}
+
+    def visible_agents(self, agent: AgentRecord) -> list[AgentRecord]:
+        """Other living agents in view (talk range is always within view), nearest first."""
+        r = self.cfg.world.view_radius
+        if r is None:
+            r = self.talk_radius_for(agent)
+        else:
+            r = max(r, self.talk_radius_for(agent))
+        out = [a for a in self.registry.alive() if a.agent_id != agent.agent_id and agent.pos.dist(a.pos) <= r]
+        out.sort(key=lambda a: (agent.pos.dist(a.pos), a.agent_id))
+        return out
+
+    def note_seen(self, agent_id: str, node_ids: list[str]) -> list[str]:
+        """Record nodes now in view; returns the ones seen for the first time (entity stubs are made on first sight)."""
+        seen = self.state.seen_nodes.setdefault(agent_id, set())
+        fresh = [nid for nid in node_ids if nid not in seen]
+        seen.update(fresh)
+        return sorted(fresh)
+
     # --- claims -----------------------------------------------------------------------------------------------
     def _claim_context(self, agent: AgentRecord) -> ClaimContext:
         start = self.cfg.population.starting_balance_usd
@@ -199,18 +228,31 @@ class Kernel:
             ctx.agent_stress_bucket[a.agent_id] = stress_label(a.stress)
         return ctx
 
-    def _check_claims(self, agent: AgentRecord, action: Action) -> tuple[int, int]:
+    def _check_claims(self, agent: AgentRecord, action: Action, *, listener: AgentRecord | None = None) -> tuple[int, int]:
         if not action.claims:
             return 0, 0
         results = evaluate(action.claims, self._claim_context(agent))
         made = false = 0
+        p_feedback = self.cfg.world.claim_feedback_p
+        feedback_rng = (self.rng.stream("claim_feedback", agent.agent_id, self.state.tick)
+                        if (listener is not None and p_feedback > 0 and self.rng is not None) else None)
         for claim, truthful in results:
             if truthful is None:
                 continue
             made += 1
             false += 0 if truthful else 1
-            self.bus.emit(Event(self.state.tick, self.state.day, "claim", {"agent_id": agent.agent_id, "claim": claim.model_dump(),
-                                                                         "truthful": truthful, "tier": agent.model_tier}, agent.agent_id))
+            payload = {"agent_id": agent.agent_id, "claim": claim.model_dump(), "truthful": truthful, "tier": agent.model_tier,
+                       "listener_id": listener.agent_id if listener is not None else None}
+            self.bus.emit(Event(self.state.tick, self.state.day, Kind.CLAIM, payload, agent.agent_id))
+            if not truthful and feedback_rng is not None and feedback_rng.random() < p_feedback:
+                # Claim feedback (MEMORY_EVOLUTION §5.2): the listener learns the claim was false, as a world message.
+                about = claim.id or ("the weather" if claim.subject == "weather" else "themself")
+                text = (f"You find out that what {agent.name} ({agent.agent_id}) told you about {about} "
+                        f"({claim.attr.replace('_', ' ')} {claim.value}) was false.")
+                self.hear(listener.agent_id, HeardMessage("feedback", None, None, text, self.state.tick))
+                self.bus.emit(Event(self.state.tick, self.state.day, Kind.CLAIM_FEEDBACK,
+                                    {"speaker_id": agent.agent_id, "listener_id": listener.agent_id, "claim": claim.model_dump()},
+                                    listener.agent_id))
         return made, false
 
     # --- apply ------------------------------------------------------------------------------------------------
@@ -296,7 +338,7 @@ class Kernel:
         if not text:
             return ActionOutcome.invalid("talk", "empty_text")
         self.hear(target.agent_id, HeardMessage("talk", agent.agent_id, agent.name, text, self.state.tick))
-        made, false = self._check_claims(agent, action)
+        made, false = self._check_claims(agent, action, listener=target)
         self.bus.emit(Event(self.state.tick, self.state.day, Kind.TALK, {"speaker_id": agent.agent_id, "listener_id": target.agent_id, "text": text,
                                                                         "claims_made": made, "claims_false": false}, agent.agent_id))
         if self.gossip is not None:

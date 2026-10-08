@@ -18,7 +18,8 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-__all__ = ["VoidConfig", "TierConfig", "IntelligenceConfig", "load_config", "usd_to_micro", "micro_to_usd", "MICRO"]
+__all__ = ["VoidConfig", "TierConfig", "IntelligenceConfig", "MemoryConfig", "MemoryPolicyConfig", "MaintenanceConfig",
+           "ExamConfig", "MaintenanceStrategy", "MaintenanceRight", "load_config", "usd_to_micro", "micro_to_usd", "MICRO"]
 
 MICRO = 1_000_000
 
@@ -43,6 +44,9 @@ class RunConfig(StrictModel):
     tick_seconds: float = 0.0
     data_dir: str = "data/runs"
     snapshot_ring: int = 600
+    # Store the full rendered prompt and the observation of every call in llm_calls (MEMORY_EVOLUTION §10, WP0).
+    # The exam generators and the Parquet export read these; a run without them cannot be audited.
+    log_prompts: bool = True
 
 
 class WeatherConfig(StrictModel):
@@ -73,6 +77,21 @@ class WorldConfig(StrictModel):
         default_factory=lambda: {"forage_bonus": 0.25, "weather_shield": 0.5, "talk_range": 2.0}
     )
     tracer_node_capacity_mult: float = 1.5
+    # Fog (MEMORY_EVOLUTION §5.2): nodes and agents beyond this distance are not listed in the observation;
+    # None lists everything (today's behaviour). Node entity stubs are created on first sight, not at birth.
+    view_radius: float | None = None
+    # Claim feedback: after a checkable false claim the listener learns it was false with this probability.
+    claim_feedback_p: float = 0.0
+
+    @model_validator(mode="after")
+    def _check_fog(self) -> WorldConfig:
+        if self.view_radius is not None and self.view_radius <= 0:
+            raise ValueError("world.view_radius must be > 0 (or null for no fog)")
+        if not (0.0 <= self.claim_feedback_p <= 1.0):
+            raise ValueError("world.claim_feedback_p must be within [0, 1]")
+        if self.view_radius is not None and self.view_radius < self.talk_radius:
+            raise ValueError("world.view_radius must be >= world.talk_radius (an agent must see whom it can talk to)")
+        return self
 
 
 class PopulationConfig(StrictModel):
@@ -101,12 +120,25 @@ class EconomyConfig(StrictModel):
     equalized_price_cache_write_per_mtok: float = 5.0
     chronicle_budget_usd: float = 0.50
     house_budget_usd: float = 1.00
+    # Kernel wallet that pays for measurement (exam calls) and, later, selection rewards (MEMORY_EVOLUTION §5.8).
+    # Seeded once so the money-conservation identity gains one term and still balances.
+    research_pool_usd: float = 0.0
 
     @model_validator(mode="after")
     def _caps(self) -> EconomyConfig:
         if self.total_cap_usd < self.daily_cap_usd:
             raise ValueError("economy.total_cap_usd must be >= economy.daily_cap_usd")
         return self
+
+
+# Planted strategies with known effects (MEMORY_EVOLUTION §6.2): the measurement pipeline must recover their order.
+MaintenanceStrategy = Literal["noop", "index_builder", "hoarder", "decoy", "summarize"]
+
+# What a maintenance call may do (MEMORY_EVOLUTION §5.3 control ladder, expressed as rights):
+#   notes      create new notes under /memories/notes/ (the equal-compute "summarize your day" control, E1 arm b)
+#   policy     edit /memories/memory_policy.md (C1 adds this)
+#   structure  str_replace / insert / delete / rename on notes and /memories/index/ (C2 adds this)
+MaintenanceRight = Literal["notes", "policy", "structure"]
 
 
 class TierConfig(StrictModel):
@@ -129,6 +161,9 @@ class TierConfig(StrictModel):
     gadget_defect_rate: float = 0.3     # scripted tiers: probability a proposed gadget template is defective
     thinking_budget: int | None = None  # gemini: thinking tokens per call (0 disables); None sends no thinking config
     api_temperature_max: float = 1.0    # the provider's temperature ceiling that T_eff = max_temperature maps to (Gemini: 2.0)
+    # Scripted tiers only: the planted memory-maintenance strategy for the E0 controls (MEMORY_EVOLUTION §6.2).
+    # None means the tier's maintenance call is a no-op. Provider tiers always ask the model.
+    maintenance_strategy: MaintenanceStrategy | None = None
 
     @model_validator(mode="after")
     def _check_temps(self) -> TierConfig:
@@ -140,6 +175,8 @@ class TierConfig(StrictModel):
             raise ValueError("thinking_budget must be >= 0 (0 disables thinking); an automatic budget cannot be reserved for")
         if self.thinking_budget is not None and self.provider != "gemini":
             raise ValueError("thinking_budget applies to gemini tiers only")
+        if self.maintenance_strategy is not None and self.provider != "scripted":
+            raise ValueError("maintenance_strategy applies to scripted tiers only (provider tiers ask the model)")
         return self
 
 
@@ -195,7 +232,85 @@ class EntropyConfig(StrictModel):
     degeneration: DegenerationConfig = DegenerationConfig()
 
 
+class MemoryPolicyConfig(StrictModel):
+    """The agent-owned practices file ``/memories/memory_policy.md`` (MEMORY_EVOLUTION §5.5)."""
+
+    enabled: bool = False
+    seed: Literal["blank", "default", "diverse"] = "default"   # S0 / S1 / S2 in the proposal
+    max_chars: int = 2000
+    max_edits_per_day: int = 5
+    show_in_prompt: bool = True       # rendered fenced in the user turn, never in the system prompt
+    inherit: bool = True              # a child starts from its parent's policy (source ``inherited``)
+
+    @model_validator(mode="after")
+    def _check(self) -> MemoryPolicyConfig:
+        if self.max_chars < 100:
+            raise ValueError("memory.policy.max_chars must be >= 100")
+        if self.max_edits_per_day < 0:
+            raise ValueError("memory.policy.max_edits_per_day must be >= 0")
+        return self
+
+
+class MaintenanceConfig(StrictModel):
+    """The paid nightly maintenance step (MEMORY_EVOLUTION §5.6): one structured call per living agent per day."""
+
+    enabled: bool = False
+    mode: Literal["forced", "optional"] = "forced"
+    rights: list[MaintenanceRight] = Field(default_factory=lambda: ["notes", "policy", "structure"])
+    feedback: Literal["F0", "F1", "F2"] = "F1"   # none / day outcomes / outcomes plus retrieval diagnostics
+    payer: Literal["agent", "research_pool"] = "agent"
+    max_commands: int = 30
+    max_files: int = 200
+    max_file_bytes: int = 8000
+    max_vault_bytes: int = 200_000
+    max_tokens: int = 1024            # output cap of the maintenance call (also bounds its hold)
+    notes_shown: int = 12             # today's newest notes listed in the prompt
+    note_chars_shown: int = 240
+
+    @model_validator(mode="after")
+    def _check(self) -> MaintenanceConfig:
+        if len(set(self.rights)) != len(self.rights):
+            raise ValueError("memory.maintenance.rights has duplicates")
+        for name in ("max_commands", "max_files", "max_file_bytes", "max_vault_bytes", "max_tokens", "notes_shown", "note_chars_shown"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"memory.maintenance.{name} must be > 0")
+        if self.max_file_bytes > self.max_vault_bytes:
+            raise ValueError("memory.maintenance.max_file_bytes must be <= max_vault_bytes")
+        return self
+
+
+class ExamConfig(StrictModel):
+    """The audit exam (MEMORY_EVOLUTION §5.8, Appendix E): questions about what the agent itself was shown,
+    graded by exact match, paid by the research pool, never rewarded. The reward exam is a later arm."""
+
+    enabled: bool = False
+    delay_days: int = 2               # ask about facts shown at least this many days earlier
+    questions_per_agent: int = 3
+    kinds: list[Literal["balance", "neighbour", "node", "heard", "transfer", "claim"]] = Field(
+        default_factory=lambda: ["balance", "neighbour", "node"])
+    max_tokens: int = 200
+    guess_penalty: float = 0.5        # formula scoring: correct +1, abstain 0, wrong -guess_penalty (abstain when unsure)
+
+    @model_validator(mode="after")
+    def _check(self) -> ExamConfig:
+        if self.delay_days < 1 or self.questions_per_agent < 1 or self.max_tokens <= 0:
+            raise ValueError("memory.exam: delay_days and questions_per_agent must be >= 1, max_tokens > 0")
+        if not self.kinds or len(set(self.kinds)) != len(self.kinds):
+            raise ValueError("memory.exam.kinds must be non-empty and unique")
+        if not (0.0 <= self.guess_penalty <= 1.0):
+            raise ValueError("memory.exam.guess_penalty must be within [0, 1]")
+        return self
+
+
 class MemoryConfig(StrictModel):
+    # The amnesic switch (MEMORY_EVOLUTION §5.2, E1 arm a0): False drops every `remember` and returns no
+    # retrieved notes. The self-summary stays (identity, at most self_max_words) so prompts remain comparable.
+    enabled: bool = True
+    # R1 retrieval (§5.3): notes the agent tags ``index`` get this additive entry-point boost (0 = R0, today).
+    index_boost: float = 0.0
+    policy: MemoryPolicyConfig = MemoryPolicyConfig()
+    maintenance: MaintenanceConfig = MaintenanceConfig()
+    exam: ExamConfig = ExamConfig()
     embedding_dim: int = 256
     entry_k: int = 4
     hops: int = 2
@@ -360,6 +475,21 @@ class VoidConfig(StrictModel):
                 raise ValueError("arrival epochs need an `arrival` block with a known tier")
         return self
 
+    @model_validator(mode="after")
+    def _memory_layer_consistency(self) -> VoidConfig:
+        m = self.memory
+        if m.maintenance.enabled and not m.enabled:
+            raise ValueError("memory.maintenance.enabled requires memory.enabled (an amnesic agent has nothing to maintain)")
+        if "policy" in m.maintenance.rights and m.maintenance.enabled and not m.policy.enabled:
+            raise ValueError("memory.maintenance.rights includes 'policy' but memory.policy.enabled is false")
+        if m.exam.enabled and not self.run.log_prompts:
+            raise ValueError("memory.exam.enabled requires run.log_prompts (questions are generated from what was shown)")
+        if m.exam.enabled and "claim" in m.exam.kinds and self.world.claim_feedback_p <= 0:
+            raise ValueError("memory.exam.kinds includes 'claim' but world.claim_feedback_p is 0 (nothing to ask about)")
+        if m.index_boost < 0:
+            raise ValueError("memory.index_boost must be >= 0")
+        return self
+
     def warnings(self) -> list[str]:
         """Load-time sanity warnings (never fatal): economy balance and cap arithmetic."""
         out: list[str] = []
@@ -415,6 +545,9 @@ class VoidConfig(StrictModel):
             "daily_cap_usd": self.economy.daily_cap_usd,
             "total_cap_usd": self.economy.total_cap_usd,
             "degeneration_mode": self.entropy.degeneration.mode,
+            "view_radius": self.world.view_radius,
+            "memory_layer": {"enabled": self.memory.enabled, "policy": self.memory.policy.enabled,
+                             "maintenance": self.memory.maintenance.enabled, "exam": self.memory.exam.enabled},
             "tiers": {k: {"color": t.color, "model": t.model, "provider": t.provider,
                           "collapse_temperature": t.collapse_temperature, "max_temperature": t.max_temperature,
                           "rank": self.rung_of(k)}

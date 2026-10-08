@@ -83,7 +83,7 @@ class TaskView:
 
 @dataclass
 class HeardMessage:
-    kind: str  # talk | windfall | transfer | gossip | system
+    kind: str  # talk | windfall | transfer | gossip | system | feedback
     from_agent_id: str | None
     from_name: str | None
     text: str
@@ -135,6 +135,8 @@ class Observation:
     active_effects: dict[str, float] = field(default_factory=dict)
     balance_bucket: str = "comfortable"
     prompt_tokens: int = 0
+    policy_text: str | None = None     # the agent's own memory policy (MEMORY_EVOLUTION §5.5), None when the layer is off
+    nodes_in_view: int | None = None   # under fog: how many of the world's nodes this observation lists (None = no fog)
 
 
 @dataclass

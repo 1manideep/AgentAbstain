@@ -285,7 +285,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         _print_tree([dict(r) for r in db.fetchall("SELECT * FROM agents ORDER BY born_tick, agent_id")])
     if args.money:
         print("\n== money ==")
-        for k in ("spawn_pool", "house", "chronicle", "spend_today", "spend_total"):
+        for k in ("spawn_pool", "house", "chronicle", "research_pool", "spend_today", "spend_total"):
             print(f"{k:>12}: ${micro_to_usd(int(db.kv_get(k, 0) or 0)):.4f}")
         total = int(db.fetchone("SELECT COALESCE(SUM(balance),0) AS s FROM agents")["s"])
         print(f"{'agents':>12}: ${micro_to_usd(total):.4f}")

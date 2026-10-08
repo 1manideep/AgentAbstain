@@ -11,7 +11,7 @@ Rules (DESIGN §9.1, v2 reservation model):
   world cost from the payer. If the world cost exceeds the balance (only possible on a
   provider quirk, since the hold bounded it) the difference is debited from the ``house``
   wallet as ``overrun`` so every dollar has a ledger row.
-* Kernel wallets (``spawn_pool``, ``house``, ``chronicle``) live in ``world_kv`` and get
+* Kernel wallets (``spawn_pool``, ``house``, ``chronicle``, ``research_pool``) live in ``world_kv`` and get
   ledger rows like agents do, so money is conserved across the whole run.
 * ``charged_call`` is the single choke point for any LLM call.
 """
@@ -31,7 +31,7 @@ from void.ids import IdFactory
 
 __all__ = ["Wallet", "GateResult", "MeterResult", "InsufficientFunds", "KERNEL_WALLETS", "ChargedCall"]
 
-KERNEL_WALLETS = ("spawn_pool", "house", "chronicle")
+KERNEL_WALLETS = ("spawn_pool", "house", "chronicle", "research_pool")
 
 
 class InsufficientFunds(Exception):
@@ -76,7 +76,8 @@ class Wallet:
         for key, initial in (("spend_today", 0), ("spend_total", 0),
                              ("spawn_pool", usd_to_micro(cfg.population.spawn_pool_usd)),
                              ("house", usd_to_micro(cfg.economy.house_budget_usd)),
-                             ("chronicle", usd_to_micro(cfg.economy.chronicle_budget_usd)), ("house_debt", 0)):
+                             ("chronicle", usd_to_micro(cfg.economy.chronicle_budget_usd)),
+                             ("research_pool", usd_to_micro(cfg.economy.research_pool_usd)), ("house_debt", 0)):
             if db.kv_get(key) is None:
                 db.kv_set(key, initial)
 
@@ -204,7 +205,8 @@ class Wallet:
         else:
             real = real_cost_micro(usage, tier, self.cfg.tiers)
             world = world_cost_micro(usage, tier, self.cfg.economy, self.cfg.tiers)
-        kind = {"decide": "llm_call", "gossip": "gossip_call", "chronicle": "chronicle_call"}.get(purpose, "llm_call")
+        kind = {"decide": "llm_call", "gossip": "gossip_call", "chronicle": "chronicle_call", "maintain": "maintenance_call",
+                "exam": "exam_call"}.get(purpose, "llm_call")
         payload = {"real_cost": real, "world_cost": world, "estimated": int(estimated)}
         if usage is not None:
             payload.update({"in": usage.input_tokens, "out": usage.output_tokens,
@@ -270,9 +272,10 @@ class Wallet:
         agents = int(self.db.fetchone("SELECT COALESCE(SUM(balance),0) AS s FROM agents")["s"])
         return {"agents": agents, "spawn_pool": self.balance("spawn_pool"), "house": self.balance("house"),
                 "house_debt": int(self.db.kv_get("house_debt", 0)), "chronicle": self.balance("chronicle"),
+                "research_pool": self.balance("research_pool"),
                 "spend_today": self.spend_today, "spend_total": self.spend_total}
 
     def totals(self) -> dict[str, int]:
         return {"spend_today": self.spend_today, "spend_total": self.spend_total, "spawn_pool": self.spawn_pool,
-                "house": self.balance("house"), "chronicle": self.balance("chronicle"),
+                "house": self.balance("house"), "chronicle": self.balance("chronicle"), "research_pool": self.balance("research_pool"),
                 "daily_cap": self.daily_cap, "total_cap": self.total_cap, "reserved_today": self._reserved_today}

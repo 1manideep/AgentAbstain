@@ -70,6 +70,18 @@ class Kind:
     # control
     PAUSE = "pause"
     RESUME = "resume"
+    # claims (kernel) and claim feedback to the listener (MEMORY_EVOLUTION §5.2)
+    CLAIM = "claim"
+    CLAIM_FEEDBACK = "claim_feedback"
+    # the evolving-memory layer (MEMORY_EVOLUTION §5)
+    MAINTENANCE = "maintenance"                  # one agent's nightly maintenance call settled (payload: commands, ok, cost)
+    MAINTENANCE_SKIPPED = "maintenance_skipped"  # could not afford it, or gated out (payload: reason)
+    MEMORY_COMMAND = "memory_command"            # one command applied or refused (payload mirrors memory_commands)
+    POLICY_CHANGED = "policy_changed"            # a new policy_versions row (payload: version, source, similarity)
+    PRACTICE_SUGGESTED = "practice_suggested"
+    PRACTICE_ADOPTED = "practice_adopted"
+    EXAM_ASKED = "exam_asked"                    # operator visibility: the question and the truth
+    EXAM_ANSWERED = "exam_answered"              # operator visibility: answer, correct, abstained
 
 
 @dataclass

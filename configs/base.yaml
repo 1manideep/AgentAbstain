@@ -6,8 +6,11 @@ run:
   ticks_per_day: 24
   tick_seconds: 0
   data_dir: data/runs
+  log_prompts: true        # full prompt + observation per call in llm_calls (needed by the exams and the export)
 world:
   size: 60.0
+  view_radius: null        # fog of war (MEMORY_EVOLUTION §5.2): e.g. 12.0 hides nodes and agents beyond 12 units
+  claim_feedback_p: 0.0    # listener learns a false claim was false with this probability (0 = never)
   max_speed: 2.0
   talk_radius: 4.0
   forage_radius: 1.5
@@ -38,6 +41,7 @@ economy:
   hold_multiplier: 1.0
   world_pricing: real
   chronicle_budget_usd: 0.50
+  research_pool_usd: 0.0   # kernel wallet that pays for exam calls (and later the reward arms)
 tiers:
   frontier:
     provider: anthropic
@@ -214,6 +218,33 @@ entropy:
     p_at_collapse: 0.15
     p_at_max: 0.90
 memory:
+  enabled: true            # false = the amnesic control: no notes written, nothing retrieved (self-summary stays)
+  index_boost: 0.0         # R1 retrieval: entry-point boost for notes tagged `index` (0 = R0)
+  policy:                  # the agent-owned practices file (MEMORY_EVOLUTION §5.5)
+    enabled: false
+    seed: default          # blank | default | diverse
+    max_chars: 2000
+    max_edits_per_day: 5
+    show_in_prompt: true
+    inherit: true
+  maintenance:             # the paid nightly maintenance call (MEMORY_EVOLUTION §5.6)
+    enabled: false
+    mode: forced           # forced | optional
+    rights: [notes, policy, structure]   # [notes] = the equal-compute "summarize your day" control
+    feedback: F1           # F0 none | F1 day outcomes | F2 outcomes plus retrieval diagnostics
+    payer: agent           # agent | research_pool
+    max_commands: 30
+    max_files: 200
+    max_file_bytes: 8000
+    max_vault_bytes: 200000
+    max_tokens: 1024
+  exam:                    # the audit exam (MEMORY_EVOLUTION §5.8): never rewarded, paid by the research pool
+    enabled: false
+    delay_days: 2
+    questions_per_agent: 3
+    kinds: [balance, neighbour, node]
+    max_tokens: 200
+    guess_penalty: 0.5
   embedding_dim: 256
   entry_k: 4
   hops: 2

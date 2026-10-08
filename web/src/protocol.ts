@@ -45,6 +45,8 @@ export interface HelloConfig {
   total_cap_usd: number
   /** Labels the T_eff histogram honestly (§8, §16); the server defaults it to "both". */
   degeneration_mode?: DegenerationMode
+  view_radius?: number | null
+  memory_layer?: { enabled: boolean; policy: boolean; maintenance: boolean; exam: boolean }
   tiers: Record<string, TierConfig>
   /** `intelligence.ladder`: tier names from smartest to dumbest (empty when the run has no ladder). */
   intelligence?: { ladder: string[] }

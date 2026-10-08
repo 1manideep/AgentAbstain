@@ -21,7 +21,7 @@ from void.brain import coherence, entropy
 from void.brain.base import Brain, BrainResult, Sampling, Usage
 from void.brain.decision import Action, Decision, MemoryOp, sanitize_text
 from void.brain.factory import build_brains
-from void.brain.prompt import estimate_tokens, system_prompt
+from void.brain.prompt import estimate_tokens, render_observation, system_prompt
 from void.config import VoidConfig, micro_to_usd, usd_to_micro
 from void.db import SCHEMA_VERSION, Database
 from void.economy.benefactor import Benefactor
@@ -30,12 +30,16 @@ from void.economy.taskboard import TaskBoard
 from void.economy.wallet import Wallet
 from void.events import OPERATOR, Event, EventBus, Kind
 from void.ids import IdFactory
+from void.memory.commands import MemoryCommands
+from void.memory.policy import PolicyStore
 from void.memory.store import MemoryStore
+from void.research.exams import Exams
 from void.rng import RNG
 from void.sandbox.gate import GadgetGate
 from void.sandbox.registry import GadgetRegistry
 from void.sandbox.runner import DisabledSandbox, SandboxRunner, SubprocessSandbox
 from void.sim.control import Command, ControlQueue
+from void.sim.maintenance import Maintenance
 from void.sim.metrics import MetricsRecorder, shannon
 from void.sim.observation import ObservationBuilder
 from void.sim.snapshot import build_snapshot, gadgets_message, roster
@@ -82,8 +86,11 @@ class Simulation:
         self.registry = AgentRegistry(self.db)
         self.wallet = Wallet(self.db, cfg, self.ids)
         self.memory = MemoryStore(self.db, cfg.memory, self.ids, self.run_dir / "vaults")
+        # the evolving-memory layer (docs/research/MEMORY_EVOLUTION.md): policy file, command audit, nightly step, exams
+        self.policy = PolicyStore(self.db, cfg.memory.policy, self.run_dir / "vaults")
+        self.commands = MemoryCommands(self.db, self.memory, cfg.memory.maintenance, self.ids)
         self.lifecycle = Lifecycle(cfg, self.db, self.registry, self.wallet, self.memory, self.bus, self.ids, self.rng,
-                                   self.run_dir / "vaults", self.run_dir / "graveyard")
+                                   self.run_dir / "vaults", self.run_dir / "graveyard", policy=self.policy)
         self.weather = Weather(cfg.world.weather, value=float(self.db.kv_get("weather", cfg.world.weather.baseline)))
         self.weather.set_baseline(float(self.db.kv_get("weather_baseline", cfg.world.weather.baseline)))
         self.nodes: dict[str, ResourceNode] = {}
@@ -101,8 +108,11 @@ class Simulation:
         self.epochs = Epochs(cfg, self.db, self.weather, self.bus, self.lifecycle)
         self.kernel = Kernel(cfg, self.db, self.registry, self.wallet, self.weather, self.nodes, self.bus, gate=self.gate,
                              gadgets=self.gadgets, taskboard=self.taskboard, gossip=self.gossip, lifecycle=self.lifecycle,
-                             chronicle_reader=self._chronicle_text)
-        self.observer = ObservationBuilder(cfg, self.db, self.registry, self.kernel, self.memory, self.nodes, self.gadgets, self.taskboard)
+                             chronicle_reader=self._chronicle_text, rng=self.rng)
+        self.observer = ObservationBuilder(cfg, self.db, self.registry, self.kernel, self.memory, self.nodes, self.gadgets, self.taskboard,
+                                           policy=self.policy)
+        self.maintenance = Maintenance(self)
+        self.exams = Exams(self)
         self.clock = Clock.load(self.db, cfg.run.ticks_per_day)
         self.scheduler = Scheduler(cfg, self.registry)
         self.control = ControlQueue(self.db)
@@ -117,6 +127,7 @@ class Simulation:
             from void.brain.utility_calls import make_chronicle_writer
             self.chronicle.llm_writer = make_chronicle_writer(self)
         self.system_tokens = {t: estimate_tokens(system_prompt(cfg, t)) for t in cfg.tiers}
+        self.system_hash = {t: self._store_prompt_text(system_prompt(cfg, t)) for t in cfg.tiers}
         self.snapshot_listeners: list[Callable[[dict[str, Any]], None]] = []
         self.status = "running"
         self.paused = asyncio.Event()
@@ -215,6 +226,7 @@ class Simulation:
             "failure_ticks": {aid: list(q) for aid, q in sorted(ks.failure_ticks.items())},
             "read_chronicle_tick": dict(sorted(ks.read_chronicle_tick.items())),
             "windfall_tick": dict(sorted(ks.windfall_tick.items())),
+            "seen_nodes": {aid: sorted(v) for aid, v in sorted(ks.seen_nodes.items())},
             "action_history": {aid: list(h) for aid, h in sorted(self.action_history.items())},
             "probes": {aid: list(v) for aid, v in sorted(self._probes.items())},
             "probe_hits": self._probe_hits, "probe_total": self._probe_total,
@@ -232,6 +244,7 @@ class Simulation:
         ks.failure_ticks = {aid: deque(q, maxlen=8) for aid, q in v.get("failure_ticks", {}).items()}
         ks.read_chronicle_tick = {k: int(t) for k, t in v.get("read_chronicle_tick", {}).items()}
         ks.windfall_tick = {k: int(t) for k, t in v.get("windfall_tick", {}).items()}
+        ks.seen_nodes = {aid: set(ids) for aid, ids in v.get("seen_nodes", {}).items()}
         self.action_history = {aid: deque(h, maxlen=8) for aid, h in v.get("action_history", {}).items()}
         self._probes = {aid: (str(p[0]), str(p[1]), int(p[2])) for aid, p in v.get("probes", {}).items()}
         self._probe_hits = int(v.get("probe_hits", 0))
@@ -259,11 +272,34 @@ class Simulation:
             self.seed_of[a.agent_id] = a.seed
 
     def _ensure_entities(self, agent_id: str, tick: int) -> None:
+        """Node entity stubs (link anchors). Without fog every node at birth; with fog only nodes the agent has seen,
+        so a vault never knows a position its owner was not shown (MEMORY_EVOLUTION §5.2)."""
         fn = getattr(self.memory, "ensure_entity", None)
         if fn is None:
             return
+        if self.cfg.world.view_radius is not None:
+            rec = self.registry.get(agent_id)
+            if rec is None:
+                return
+            fresh = self.kernel.note_seen(agent_id, sorted(self.kernel.visible_nodes(rec)))
+            for nid in fresh:
+                n = self.nodes[nid]
+                fn(agent_id, f"Node {nid}", tick, f"A resource node at ({n.x:.0f}, {n.y:.0f}).")
+            return
         for nid, n in sorted(self.nodes.items()):
             fn(agent_id, f"Node {nid}", tick, f"A resource node at ({n.x:.0f}, {n.y:.0f}).")
+
+    def _store_prompt_text(self, text: str) -> str:
+        """Content-address a cache-stable prompt in ``prompt_texts``; returns its hash (stored in llm_calls.system_hash)."""
+        h = hashlib.sha256(text.encode("utf-8")).hexdigest()[:24]
+        self.db.execute("INSERT OR IGNORE INTO prompt_texts(hash, text) VALUES(?,?)", (h, text))
+        return h
+
+    @staticmethod
+    def _observation_json(obs: Observation) -> str:
+        """The observation as compact JSON (what the agent was shown; the exam generators read it)."""
+        from dataclasses import asdict
+        return json.dumps(asdict(obs), separators=(",", ":"), sort_keys=True, default=str)
 
     def _chronicle_text(self) -> str | None:
         if self.chronicle is None:
@@ -404,6 +440,8 @@ class Simulation:
             self.registry.update(aid, entropy_budget=budget, stress=s.stress)
             a.entropy_budget, a.stress = budget, s.stress
             sampling[aid] = s
+            if cfg.world.view_radius is not None:
+                self._ensure_entities(aid, tick)  # first sight of a node creates its link anchor
             obs[aid] = self.observer.build(a, self.clock, headline, s.stress)
 
         # gating with reservations
@@ -457,14 +495,18 @@ class Simulation:
             m = self.wallet.meter(aid, tier, None if unknown else r.usage, tick, call_id, holds[aid], purpose="decide")
             if m.overrun:
                 self.lifecycle.pending_bankrupt[aid] = "overrun"
+            logged = cfg.run.log_prompts
             self.db.execute(
                 "INSERT INTO llm_calls(call_id, tick, agent_id, purpose, tier, model, provider, input_tokens, output_tokens, cache_read_tokens, "
                 "cache_write_tokens, real_cost, world_cost, hold, estimated, latency_ms, stop_reason, effective_temperature, api_temperature, stress, "
-                "degenerate_induced, request_id, error, raw_text) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "degenerate_induced, request_id, error, raw_text, prompt_text, system_hash, observation) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (call_id, tick, aid, "decide", a.model_tier, r.model or tier.model, tier.provider, r.usage.input_tokens, r.usage.output_tokens,
                  r.usage.cache_read_tokens, r.usage.cache_write_tokens, m.real_cost, m.world_cost, holds[aid], int(m.estimated), r.latency_ms,
                  r.stop_reason, sampling[aid].effective_temperature, sampling[aid].api_temperature, sampling[aid].stress,
-                 int(sampling[aid].degenerate), r.request_id, r.error, (r.raw_text or "")[:4000]),
+                 int(sampling[aid].degenerate), r.request_id, r.error, (r.raw_text or "")[:4000],
+                 render_observation(obs[aid]) if logged else None, self.system_hash.get(a.model_tier) if logged else None,
+                 self._observation_json(obs[aid]) if logged else None),
             )
             if r.error and r.error.startswith("refusal"):
                 self.bus.emit(Event(tick, day, Kind.BRAIN_REFUSAL, {"agent_id": aid, "error": r.error}, aid))
@@ -562,6 +604,10 @@ class Simulation:
         self.scheduler.begin_day()
         self.wallet.reset_day()
         self.gate.reset_day()
+        # the evolving-memory layer runs between days: paid maintenance first (it may bankrupt), then the exam
+        # (paid by the research pool); each step commits its own metering like any other model call
+        await self.maintenance.run_day(day, tick)
+        await self.exams.run_day(day, tick)
         self.bus.emit(Event(tick, day, Kind.DAY_START, {"day": day}))
         tr = cfg.experiment.tracer
         if tr.enabled and not self._tracer_planted and day >= tr.day:
@@ -643,6 +689,8 @@ class Simulation:
             if op.op == "revise_self":
                 version, summary = self.memory.revise_self(aid, tick, text)
                 self.bus.emit(Event(tick, self.clock.day, Kind.REVISE_SELF, {"agent_id": aid, "version": version}, aid))
+                continue
+            if not self.cfg.memory.enabled:  # amnesic control: notes are never written (MEMORY_EVOLUTION §5.2)
                 continue
             tags = [sanitize_text(t, single_line=True, max_len=20) for t in op.tags][:5]
             channel = "observed"

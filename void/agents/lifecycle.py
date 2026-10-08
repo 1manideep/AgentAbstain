@@ -13,6 +13,7 @@ from void.economy.wallet import Wallet
 from void.events import Event, EventBus, Kind
 from void.ids import IdFactory
 from void.memory.notes import Provenance
+from void.memory.policy import PolicyStore
 from void.memory.store import MemoryStore
 from void.rng import RNG
 from void.types import ActionOutcome, AgentStatus, Vec2
@@ -42,8 +43,10 @@ def mutation_candidates(cfg: VoidConfig, tier: str) -> list[str]:
 
 class Lifecycle:
     def __init__(self, cfg: VoidConfig, db: Database, registry: AgentRegistry, wallet: Wallet, memory: MemoryStore,
-                 bus: EventBus, ids: IdFactory, rng: RNG, vault_root: Path, graveyard_root: Path) -> None:
+                 bus: EventBus, ids: IdFactory, rng: RNG, vault_root: Path, graveyard_root: Path,
+                 policy: PolicyStore | None = None) -> None:
         self.cfg = cfg
+        self.policy = policy
         self.db = db
         self.registry = registry
         self.wallet = wallet
@@ -91,9 +94,11 @@ class Lifecycle:
         self.population += 1
         return self.registry.get(rec.agent_id) or rec
 
-    def _init_vault(self, rec: AgentRecord, tick: int, summary: str) -> None:
+    def _init_vault(self, rec: AgentRecord, tick: int, summary: str, *, roster_index: int = 0, parent_id: str | None = None) -> None:
         self.memory.vault_for(rec.agent_id).ensure()
         self.memory.revise_self(rec.agent_id, tick, summary)
+        if self.policy is not None:  # seed or inherit the memory policy (MEMORY_EVOLUTION §5.5, §5.7)
+            self.policy.init_for(rec.agent_id, tick, roster_index=roster_index, parent_id=parent_id)
 
     def _unique_name(self, base: str) -> str:
         """A name no living agent holds (case-insensitive), within the 20-character limit."""
@@ -115,7 +120,7 @@ class Lifecycle:
             seed = PersonalitySeed.generate(self.rng.stream("seed", "initial", i), spec.personality)
             rec = self._new_record(spec.name, spec.tier, 0, seed, self._spawn_position(None, f"initial:{i}"), tick, 0, None)
             rec = self._insert(rec, tick, ("external", usd_to_micro(self.cfg.population.starting_balance_usd), "", "starting_balance"))
-            self._init_vault(rec, tick, f"I am {rec.name}. {seed.motto} I have just arrived in the void and know nothing yet.")
+            self._init_vault(rec, tick, f"I am {rec.name}. {seed.motto} I have just arrived in the void and know nothing yet.", roster_index=i)
             self.bus.emit(Event(tick, 1, Kind.BIRTH, {"agent_id": rec.agent_id, "name": rec.name, "tier": rec.model_tier, "generation": 0,
                                                     "parent_id": None, "kind": "fresh", "endowment_usd": self.cfg.population.starting_balance_usd}, rec.agent_id))
             out.append(rec)
@@ -144,7 +149,7 @@ class Lifecycle:
                                parent.generation + 1, parent.agent_id)
         rec = self._insert(rec, tick, funding)
         first = (parent_self.strip().split(".")[0].strip() + ".") if parent_self.strip() else parent.seed.motto
-        self._init_vault(rec, tick, f"Child of {parent.name}. {first}")
+        self._init_vault(rec, tick, f"Child of {parent.name}. {first}", parent_id=parent.agent_id)
         for note in self.memory.top_notes(parent.agent_id, self.cfg.memory.inherit_top_k, exclude_tags=("entity", "self", "probe")):
             origin = note.provenance.origin_note_id or note.note_id
             self.memory.copy_note(note, rec.agent_id, tick, provenance=_prov(
