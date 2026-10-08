@@ -41,6 +41,7 @@ from pydantic import BaseModel, Field, model_validator
 from void.config import MaintenanceConfig, MaintenanceRight
 from void.db import Database
 from void.ids import IdFactory
+from void.memory.policy import PolicyStore
 from void.memory.store import MemoryStore
 
 __all__ = [
@@ -175,11 +176,13 @@ class MemoryCommands:
     here later, ``recall`` for the C3 tool, ``kernel`` for kernel-initiated writes).
     """
 
-    def __init__(self, db: Database, store: MemoryStore, cfg: MaintenanceConfig, ids: IdFactory) -> None:
+    def __init__(self, db: Database, store: MemoryStore, cfg: MaintenanceConfig, ids: IdFactory,
+                 policy: PolicyStore | None = None) -> None:
         self.db = db
         self.store = store
         self.cfg = cfg
         self.ids = ids
+        self.policy = policy  # edits of /memories/memory_policy.md are delegated to PolicyStore.set (source self_edit)
 
     # --- read side ---------------------------------------------------------------------------------
     def listing(self, agent_id: str, *, tick: int | None = None) -> str:

@@ -82,10 +82,11 @@ class PolicyVersion:
 class PolicyStore:
     """Read and write policies; one ``policy_versions`` row per change and the file mirrored into the vault."""
 
-    def __init__(self, db: Database, cfg: MemoryPolicyConfig, vault_root: Path) -> None:
+    def __init__(self, db: Database, cfg: MemoryPolicyConfig, vault_root: Path, *, ticks_per_day: int = 24) -> None:
         self.db = db
         self.cfg = cfg
         self.vault_root = Path(vault_root)
+        self.ticks_per_day = max(1, int(ticks_per_day))
 
     # --- read ------------------------------------------------------------------------------------
     def path_for(self, agent_id: str) -> Path:
@@ -108,9 +109,15 @@ class PolicyStore:
             "FROM policy_versions WHERE agent_id=? ORDER BY version", (agent_id,))
         return [PolicyVersion(**{k: r[k] for k in r.keys()}) for r in rows]
 
-    def edits_today(self, agent_id: str, day_start_tick: int) -> int:
-        row = self.db.fetchone("SELECT COUNT(*) AS n FROM policy_versions WHERE agent_id=? AND tick>=? AND source='self_edit'",
-                               (agent_id, int(day_start_tick)))
+    def day_start(self, tick: int) -> int:
+        """First tick of the day containing ``tick`` (ticks are 1-based; day d spans (d-1)*T+1 .. d*T)."""
+        t = max(1, int(tick))
+        return ((t - 1) // self.ticks_per_day) * self.ticks_per_day + 1
+
+    def edits_today(self, agent_id: str, tick: int) -> int:
+        """Self-edits recorded on the day of ``tick`` (the ``max_edits_per_day`` budget counts these)."""
+        row = self.db.fetchone("SELECT COUNT(*) AS n FROM policy_versions WHERE agent_id=? AND tick>=? AND tick<=? AND source='self_edit'",
+                               (agent_id, self.day_start(tick), self.day_start(tick) + self.ticks_per_day - 1))
         return int(row["n"]) if row is not None else 0
 
     # --- write -----------------------------------------------------------------------------------

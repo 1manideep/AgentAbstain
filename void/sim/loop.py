@@ -87,8 +87,8 @@ class Simulation:
         self.wallet = Wallet(self.db, cfg, self.ids)
         self.memory = MemoryStore(self.db, cfg.memory, self.ids, self.run_dir / "vaults")
         # the evolving-memory layer (docs/research/MEMORY_EVOLUTION.md): policy file, command audit, nightly step, exams
-        self.policy = PolicyStore(self.db, cfg.memory.policy, self.run_dir / "vaults")
-        self.commands = MemoryCommands(self.db, self.memory, cfg.memory.maintenance, self.ids)
+        self.policy = PolicyStore(self.db, cfg.memory.policy, self.run_dir / "vaults", ticks_per_day=cfg.run.ticks_per_day)
+        self.commands = MemoryCommands(self.db, self.memory, cfg.memory.maintenance, self.ids, policy=self.policy)
         self.lifecycle = Lifecycle(cfg, self.db, self.registry, self.wallet, self.memory, self.bus, self.ids, self.rng,
                                    self.run_dir / "vaults", self.run_dir / "graveyard", policy=self.policy)
         self.weather = Weather(cfg.world.weather, value=float(self.db.kv_get("weather", cfg.world.weather.baseline)))
