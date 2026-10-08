@@ -22,6 +22,7 @@ import yaml
 __all__ = [
     "CHANNELS",
     "DEFAULT_CHANNEL",
+    "OPERATOR_CHANNEL",
     "DEFAULT_TITLE",
     "RELATED_HEADING",
     "Provenance",
@@ -42,8 +43,12 @@ _WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
 _YAML_WIDTH = 1_000_000  # never fold long scalars onto several lines
 DEFAULT_TITLE = "untitled"
 
-CHANNELS: tuple[str, ...] = ("observed", "gossip", "inherited", "chronicle", "tracer")
+# ``operator`` is never written by the kernel on a fresh note: ``MemoryStore.reindex`` assigns it to a vault file
+# whose content hash does not match the manifest (a hand edit in Obsidian, or a file the kernel never wrote), so
+# human edits stay visible in the analysis instead of passing as the channel their frontmatter claims (§5.9).
+CHANNELS: tuple[str, ...] = ("observed", "gossip", "inherited", "chronicle", "tracer", "operator")
 DEFAULT_CHANNEL = "observed"
+OPERATOR_CHANNEL = "operator"
 
 RELATED_HEADING = "## Related"
 _RELATED_RE = re.compile(r"(?m)^## Related[ \t]*$")
