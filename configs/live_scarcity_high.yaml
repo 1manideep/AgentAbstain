@@ -1,0 +1,28 @@
+# exp_scarcity_live, arm high: the scripted scarcity-and-deception experiment re-run on a live Gemini tier.
+# Same world as exp_scarcity_high (scarcity 0.5, starting balance 0.60, equalized pricing, observe mode);
+# the roster runs on the `sharp` rung (gemini-3.7-flash) instead of scripted agents, 5 days x 12 ticks.
+# Personalities are kept for parity with the scripted arms; a provider brain never sees them (only its motto).
+# Cost `[estimate, prices unverified]`: about 1.3k prompt + 0.9k cached system + 0.25k output tokens and up to
+# 1k thinking tokens per call at sharp's list prices is about $0.004 per call; 6 agents x 60 ticks is at most
+# 360 calls, so about $1.5 per run and about $30 for 10 seeds x 2 arms. On `average` (gemini-3.1-flash-lite,
+# no thinking) the same pilot is about $5. The real-dollar ceiling per run is economy.total_cap_usd.
+# Run:  GEMINI_API_KEY=... .venv/bin/void run --config configs/live_scarcity_high.yaml --seeds 1-10 --out data/exp
+# then the low arm, then  .venv/bin/python scripts/compare.py data/exp/exp_scarcity_live
+extends: exp_scarcity_high.yaml
+run:
+  name: live_scarcity_high
+  days: 5
+  ticks_per_day: 12
+economy:
+  daily_cap_usd: 2.00
+  total_cap_usd: 10.00
+agents:
+  - {name: Ada,   tier: sharp, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Bao,   tier: sharp, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Cyra,  tier: sharp, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Dev,   tier: sharp, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Enzo,  tier: sharp, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Faye,  tier: sharp, personality: {honesty: 0.3, sociability: 0.9}}
+experiment:
+  name: exp_scarcity_live
+  arm: high

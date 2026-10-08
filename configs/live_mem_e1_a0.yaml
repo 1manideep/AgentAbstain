@@ -1,0 +1,10 @@
+# exp_mem_e1, arm a0: amnesic. No notes are written and nothing is retrieved; the self-summary stays.
+# The memory-dependence check: under fog this arm must lose to arm a by a preset margin, or no later result
+# about memory quality means anything (MEMORY_EVOLUTION §5.2).
+extends: live_mem_e1_base.yaml
+run:
+  name: live_mem_e1_a0
+memory:
+  enabled: false
+experiment:
+  arm: a0

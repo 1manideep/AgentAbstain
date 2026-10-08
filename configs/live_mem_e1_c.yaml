@@ -1,0 +1,13 @@
+# exp_mem_e1, arm c: policy plus maintenance at control level C2 (notes, policy, structure): the main condition.
+extends: live_mem_e1_base.yaml
+run:
+  name: live_mem_e1_c
+memory:
+  policy:
+    enabled: true
+    seed: default
+  maintenance:
+    enabled: true
+    rights: [notes, policy, structure]
+experiment:
+  arm: c

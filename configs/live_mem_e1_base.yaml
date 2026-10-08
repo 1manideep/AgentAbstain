@@ -1,0 +1,52 @@
+# E1 shared world (docs/research/MEMORY_EVOLUTION.md §6.3): does self-directed memory help? Ten agents on one
+# live Gemini rung under fog with claim feedback, 10 days x 24 ticks, equalized pricing, observe mode, exams
+# every day about two days back (paid by the research pool). The four arms differ ONLY in the memory layer:
+#   a0  amnesic (memory.enabled false): no notes, nothing retrieved; the memory-dependence check
+#   a   the default scaffold: per-tick notes and kernel retrieval, no policy, no maintenance
+#   b   equal-compute control: a nightly "summarize your day" call with the notes right only
+#   c   policy plus maintenance at C2 (notes, policy, structure), the main condition
+# Cost `[estimate, prices unverified]`: on `average` (gemini-3.1-flash-lite, no thinking) a decision is about
+# $0.0008, a maintenance call about $0.003 and an exam call about $0.001; 10 agents x 240 ticks plus 90
+# maintenance and 270 exam calls is about $2.4 per run, so about $100 for 10 seeds x 4 arms (arm a0 and a
+# have no maintenance). The pilot in the proposal (section 10.4, S1) budgets about $70 for this.
+# Not an arm itself: the four live_mem_e1_*.yaml files extend it. Requires GEMINI_API_KEY.
+extends: base.yaml
+run:
+  name: live_mem_e1
+  days: 10
+  ticks_per_day: 24
+world:
+  view_radius: 12.0
+  claim_feedback_p: 0.5
+economy:
+  daily_cap_usd: 1.50
+  total_cap_usd: 15.00
+  world_pricing: equalized
+  research_pool_usd: 1.00
+entropy:
+  degeneration:
+    mode: observe
+population:
+  cap: 13
+memory:
+  exam:
+    enabled: true
+    delay_days: 2
+    questions_per_agent: 3
+    kinds: [balance, neighbour, node, heard, claim]
+agents:
+  - {name: Ada,   tier: average, personality: {curiosity: 0.9, sociability: 0.7}}
+  - {name: Bao,   tier: average, personality: {greed: 0.9, honesty: 0.3}}
+  - {name: Cyra,  tier: average, personality: {caution: 0.9}}
+  - {name: Dev,   tier: average, personality: {industriousness: 0.95}}
+  - {name: Enzo,  tier: average, personality: {sociability: 0.95, honesty: 0.9}}
+  - {name: Faye,  tier: average, personality: {curiosity: 0.8, caution: 0.2}}
+  - {name: Gil,   tier: average, personality: {greed: 0.2, sociability: 0.6}}
+  - {name: Hex,   tier: average, personality: {curiosity: 0.6, honesty: 0.5}}
+  - {name: Ivo,   tier: average, personality: {industriousness: 0.7, caution: 0.6}}
+  - {name: Juno,  tier: average, personality: {sociability: 0.8, greed: 0.5}}
+experiment:
+  name: exp_mem_e1
+  independent_variables: [memory.enabled, memory.policy.enabled, memory.maintenance.enabled, memory.maintenance.rights]
+  primary_outcome: mean_balance
+  secondary_outcomes: [exam_score, exam_abstain_rate, false_claim_rate, notes_by_channel.observed]

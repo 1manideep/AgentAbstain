@@ -1,0 +1,9 @@
+# exp_mem_e0, arm index_builder: positive control: keeps one index note per known node, boosted at retrieval under R1; fitness gain by construction.
+extends: exp_mem_e0_base.yaml
+run:
+  name: exp_mem_e0_index_builder
+tiers:
+  scripted:
+    maintenance_strategy: index_builder
+experiment:
+  arm: index_builder

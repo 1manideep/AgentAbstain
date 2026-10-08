@@ -1,0 +1,21 @@
+# exp_scarcity_live, arm low: the abundant counterpart of live_scarcity_high (scarcity 1.2, balance 1.50).
+# See live_scarcity_high.yaml for the roster, cost and run instructions; the two arms differ only in the
+# declared independent variables (world.scarcity, population.starting_balance_usd).
+extends: exp_scarcity_low.yaml
+run:
+  name: live_scarcity_low
+  days: 5
+  ticks_per_day: 12
+economy:
+  daily_cap_usd: 2.00
+  total_cap_usd: 10.00
+agents:
+  - {name: Ada,   tier: sharp, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Bao,   tier: sharp, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Cyra,  tier: sharp, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Dev,   tier: sharp, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Enzo,  tier: sharp, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Faye,  tier: sharp, personality: {honesty: 0.3, sociability: 0.9}}
+experiment:
+  name: exp_scarcity_live
+  arm: low

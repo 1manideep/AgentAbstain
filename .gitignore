@@ -15,3 +15,6 @@ web/dist/
 # misc
 .DS_Store
 *.log
+
+# agent worktrees (git worktree checkouts used by parallel implementers)
+.claude/worktrees/

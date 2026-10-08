@@ -32,8 +32,11 @@ TIERS_DAYS = 2
 
 
 def exp_configs() -> dict[str, list[Path]]:
+    """Arm configs grouped by experiment; a ``*_base.yaml`` is a shared parent, not an arm."""
     groups: dict[str, list[Path]] = {}
     for p in sorted(CONFIGS.glob("exp_*.yaml")):
+        if p.name.endswith("_base.yaml"):
+            continue
         groups.setdefault(str(load_config(p).experiment.name), []).append(p)
     return groups
 
@@ -91,8 +94,8 @@ def smoke_run(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 # --- (a) configs ---------------------------------------------------------------------------------------------
 def test_every_experiment_config_loads_without_warnings() -> None:
-    paths = sorted(CONFIGS.glob("exp_*.yaml"))
-    assert len(paths) >= 19
+    paths = sorted(p for p in CONFIGS.glob("exp_*.yaml") if not p.name.endswith("_base.yaml"))
+    assert len(paths) >= 23
     for p in paths:
         cfg = load_config(p)
         assert cfg.experiment.name and cfg.experiment.arm, p.name
@@ -104,7 +107,8 @@ def test_every_experiment_config_loads_without_warnings() -> None:
 
 def test_arms_differ_only_in_declared_independent_variables() -> None:
     groups = exp_configs()
-    assert set(groups) == {"exp_tiers", "exp_scarcity", "exp_memory", "exp_gate", "exp_spread", "exp_press", "exp_benefactor", "exp_ladder"}
+    assert set(groups) == {"exp_tiers", "exp_scarcity", "exp_memory", "exp_gate", "exp_spread", "exp_press", "exp_benefactor", "exp_ladder",
+                           "exp_mem_e0"}
     for name, paths in groups.items():
         assert len(paths) >= 2, name
         cfgs = [load_config(p) for p in paths]

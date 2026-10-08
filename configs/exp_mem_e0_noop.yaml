@@ -1,0 +1,9 @@
+# exp_mem_e0, arm noop: null control: pays for the nightly call and does nothing; the expected loss is exactly its cost.
+extends: exp_mem_e0_base.yaml
+run:
+  name: exp_mem_e0_noop
+tiers:
+  scripted:
+    maintenance_strategy: noop
+experiment:
+  arm: noop

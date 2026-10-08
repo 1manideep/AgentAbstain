@@ -1,0 +1,9 @@
+# exp_mem_e0, arm decoy: metric check: rewrites its policy nightly with long jargon and touches no note; no effect on fitness, a positive effect on naive text metrics, which the analysis must not adopt.
+extends: exp_mem_e0_base.yaml
+run:
+  name: exp_mem_e0_decoy
+tiers:
+  scripted:
+    maintenance_strategy: decoy
+experiment:
+  arm: decoy

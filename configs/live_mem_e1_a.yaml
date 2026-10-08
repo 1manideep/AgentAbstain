@@ -1,0 +1,6 @@
+# exp_mem_e1, arm a: the default scaffold (per-tick notes, kernel retrieval, no policy, no maintenance).
+extends: live_mem_e1_base.yaml
+run:
+  name: live_mem_e1_a
+experiment:
+  arm: a

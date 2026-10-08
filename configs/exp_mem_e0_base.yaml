@@ -1,0 +1,47 @@
+# E0 shared world (docs/research/MEMORY_EVOLUTION.md §6.2): the controls that must pass before any money is
+# spent. Six scripted agents under fog (view radius 12 in a 60-unit world, so most nodes are out of sight
+# most of the time and a remembered position is worth money), claim feedback on, the policy file seeded,
+# the nightly maintenance call paid by the agent at every right, and the audit exam asked two days back.
+# The arms differ ONLY in tiers.scripted.maintenance_strategy (noop / index_builder / hoarder / decoy).
+# Fitness is end-of-run mean balance; exam_score and probe_recall are the memory-quality secondaries.
+# Not an arm itself (no experiment.arm): the four exp_mem_e0_*.yaml files extend it.
+extends: base.yaml
+run:
+  name: exp_mem_e0
+  days: 6
+  ticks_per_day: 12
+world:
+  view_radius: 12.0
+  claim_feedback_p: 0.5
+economy:
+  world_pricing: equalized
+  research_pool_usd: 1.00
+entropy:
+  degeneration:
+    mode: observe
+memory:
+  policy:
+    enabled: true
+    seed: default
+  maintenance:
+    enabled: true
+    rights: [notes, policy, structure]
+    feedback: F1
+    payer: agent
+  exam:
+    enabled: true
+    delay_days: 2
+    questions_per_agent: 3
+    kinds: [balance, neighbour, node]
+agents:
+  - {name: Ada,   tier: scripted, personality: {curiosity: 0.8}}
+  - {name: Bao,   tier: scripted, personality: {greed: 0.8}}
+  - {name: Cyra,  tier: scripted, personality: {caution: 0.8}}
+  - {name: Dev,   tier: scripted, personality: {industriousness: 0.8}}
+  - {name: Enzo,  tier: scripted, personality: {sociability: 0.8}}
+  - {name: Faye,  tier: scripted, personality: {curiosity: 0.6, caution: 0.4}}
+experiment:
+  name: exp_mem_e0
+  independent_variables: [tiers.scripted.maintenance_strategy]
+  primary_outcome: mean_balance
+  secondary_outcomes: [exam_score, probe_recall, notes_by_channel.observed, invalid_action_rate]

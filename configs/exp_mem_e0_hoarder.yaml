@@ -1,0 +1,9 @@
+# exp_mem_e0, arm hoarder: negative control: copies every note and appends an everything-note; dilutes retrieval, a loss.
+extends: exp_mem_e0_base.yaml
+run:
+  name: exp_mem_e0_hoarder
+tiers:
+  scripted:
+    maintenance_strategy: hoarder
+experiment:
+  arm: hoarder

@@ -1,0 +1,12 @@
+# exp_mem_e1, arm b: the equal-compute control. One nightly call with the notes right only: the agent may
+# write summary notes but has no policy and no rights over structure. Separates "more thinking" from
+# "agent-authored practice".
+extends: live_mem_e1_base.yaml
+run:
+  name: live_mem_e1_b
+memory:
+  maintenance:
+    enabled: true
+    rights: [notes]
+experiment:
+  arm: b
