@@ -159,7 +159,7 @@ let stopFixture: (() => void) | null = null
 export function startFeed(): () => void {
   if (FIXTURE_MODE) {
     let cancelled = false
-    void startFixture().then((stop) => {
+    void startFixture(() => cancelled).then((stop) => {
       if (cancelled) stop()
       else stopFixture = stop
     })

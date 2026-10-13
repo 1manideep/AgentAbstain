@@ -12,6 +12,7 @@ TypeScript, react-three-fiber, drei, zustand; charts are inline SVG.
 | `npm run gen:fixture [-- --out dir]` | synthetic 300-tick fixture + `api.json` (a genuine one: `void mock-feed --out web/public/fixtures/mock.jsonl`) |
 | `npm run typecheck` / `test` / `build` / `lint` | tsc -b, vitest, vite build, oxlint |
 | `npm run screenshot` / `screenshot:landscape` | Playwright smoke shots + fps / draw-call measurement (dev server must be running) |
+| `npm run screenshot:tour` | visual tour, 35 stills + captions in `screenshots/tour/` (fixture dev server, best with `VITE_FIXTURE_BURST=1000`) |
 
 Fixture pacing: `VITE_FIXTURE_PACE` (ts-delta multiplier, default 0.6), `VITE_FIXTURE_BURST` (ticks delivered at once on connect, default 40).
 
@@ -102,7 +103,16 @@ npm run build && npx vite preview --port 4173      # gallery shots are taken fro
 VITE_FEED=fixture npm run dev -- --port 5173       # world shot uses fixture mode with ?rig=1
 npm run screenshot:humans                          # VOID_SHOTS=contact,moves,world,world-night · VOID_MOVES_PRESET=1
 npm run screenshot:behaviour                       # screenshots/behaviour-world.png (fixture mode, dev server on 5173)
+npm run screenshot:tour                            # screenshots/tour/*.png + README.md captions (same server; VOID_TOUR=01,16 picks shots)
 ```
+
+The tour (`scripts/screenshot-tour.mjs`) picks every tick and group from the
+recording, frames each view by raycasting candidate cameras against the scene
+(nothing between the camera and the subject, no clutter at the lens), and
+replays the recorded events of that tick so bubbles and bursts are on screen.
+It imports the store from the dev server's module graph, so it needs `vite`
+rather than `vite preview`; start the server with `VITE_FIXTURE_BURST=1000` so
+the whole recording arrives at once.
 
 `behaviour-world.png` freezes a daytime group and injects four events through
 `window.__void.inject` (the same path the socket takes): a talk whose claim is

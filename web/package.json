@@ -13,6 +13,7 @@
     "screenshot:landscape": "node scripts/screenshot-landscape.mjs",
     "screenshot:humans": "node scripts/screenshot-humans.mjs",
     "screenshot:behaviour": "node scripts/screenshot-behaviour.mjs",
+    "screenshot:tour": "node scripts/screenshot-tour.mjs",
     "lint": "oxlint",
     "preview": "vite preview"
   },

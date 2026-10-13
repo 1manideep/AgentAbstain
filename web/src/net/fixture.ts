@@ -32,16 +32,23 @@ function envNumber(name: string, fallback: number): number {
   return Number.isFinite(v) ? v : fallback
 }
 
-export async function startFixture(): Promise<() => void> {
+/**
+ * `isCancelled` is checked once the recording has been fetched: React's StrictMode starts the feed twice in
+ * development and stops the first one before its fetch resolves, and the connect burst must not be delivered
+ * by both (the history would hold the recording twice, ticks 1..N then 1..N again).
+ */
+export async function startFixture(isCancelled: () => boolean = () => false): Promise<() => void> {
   const store = useStore.getState()
   store.setConn('connecting', 'fixture')
   const res = await fetch('/fixtures/mock.jsonl')
+  if (isCancelled()) return () => {}
   if (!res.ok) {
     console.error('fixture missing: run `npm run gen:fixture`')
     store.setConn('closed', 'fixture')
     return () => {}
   }
   const text = await res.text()
+  if (isCancelled()) return () => {}
   const msgs: ServerMsg[] = []
   for (const line of text.split('\n')) {
     const t = line.trim()

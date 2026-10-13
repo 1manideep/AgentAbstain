@@ -1,4 +1,5 @@
 import { memo, useCallback, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import type { EpochBody, EpochKind } from '../protocol'
 import { apiPost, FIXTURE_MODE } from '../net/api'
 import { useStore } from '../state/store'
@@ -55,7 +56,8 @@ const ServerControls = memo(function ServerControls() {
 })
 
 const EpochForm = memo(function EpochForm() {
-  const tiers = useStore((s) => Object.keys(s.config?.tiers ?? {}))
+  // a fresh array per call would re-render forever (zustand compares snapshots by reference)
+  const tiers = useStore(useShallow((s) => Object.keys(s.config?.tiers ?? {})))
   const { busy, msg, run } = useAction()
   const [kind, setKind] = useState<EpochKind>('drought')
   const [days, setDays] = useState('1')

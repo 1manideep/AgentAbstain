@@ -1,0 +1,43 @@
+# Visual tour
+
+Stills of the fixture world (`public/fixtures/mock.jsonl`, run `mock_feed-s42`, 240 ticks of 24 per day) taken by `npm run screenshot:tour` (`scripts/screenshot-tour.mjs`) at 1600x1000 under headless Chromium with SwiftShader.
+
+Events said to be "replayed" are the recorded events of that tick fed again through `window.__void.inject` and the effects queue, so that bubbles and bursts that live for a second or two are on screen when the still is taken; nothing is invented. The control room on the right always shows the end of the recording (the feed, the charts and the inspector are not scrubbed with the world). Gadget pedestals come from the final gadget list, so they stand from day 1.
+
+| file | caption |
+|---|---|
+| [01-establish-dawn.png](01-establish-dawn.png) | Whole map at dawn (day 2, tick 32, 07:00): six crystal nodes in stone rings, 11 agents (4 asleep). Right: spend gauges, the empty inspector and the event feed on its default "story" filter. Gadget pedestals (blue horns, yellow beacons) come from the recording's final gadget list. |
+| [02-establish-noon.png](02-establish-noon.png) | Whole map at noon (day 2, tick 37, 12:00): six crystal nodes in stone rings, 11 agents (4 asleep). Same camera. Gadget pedestals (blue horns, yellow beacons) come from the recording's final gadget list. |
+| [03-establish-dusk.png](03-establish-dusk.png) | Whole map at dusk (day 2, tick 42, 17:00): six crystal nodes in stone rings, 11 agents (7 asleep). Same camera. Gadget pedestals (blue horns, yellow beacons) come from the recording's final gadget list. |
+| [04-establish-night.png](04-establish-night.png) | Whole map at night (day 2, tick 47, 22:00): six crystal nodes in stone rings, 11 agents (7 asleep). Same camera. Gadget pedestals (blue horns, yellow beacons) come from the recording's final gadget list. |
+| [05-timeline-day01.png](05-timeline-day01.png) | Timeline 1/5, noon of day 1 (tick 13), same camera over nodes n4, n3, n5: 5 agents here (2 asleep), 10 alive in the world. |
+| [06-timeline-day03.png](06-timeline-day03.png) | Timeline 2/5, noon of day 3 (tick 61), same camera over nodes n4, n3, n5: 7 agents here (4 asleep), 11 alive in the world. |
+| [07-timeline-day05.png](07-timeline-day05.png) | Timeline 3/5, noon of day 5 (tick 109), same camera over nodes n4, n3, n5: 6 agents here (5 asleep), 11 alive in the world. Drought epoch: scarcity 0.5, weather -0.26. |
+| [08-timeline-day07.png](08-timeline-day07.png) | Timeline 4/5, noon of day 7 (tick 157), same camera over nodes n4, n3, n5: 4 agents here (4 asleep), 11 alive in the world. |
+| [09-timeline-day10.png](09-timeline-day10.png) | Timeline 5/5, noon of day 10 (tick 229), same camera over nodes n4, n3, n5: 11 agents here (5 asleep), 12 alive in the world. Boom epoch: scarcity 1.6, weather 0.29. |
+| [10-room-wealth-teff.png](10-room-wealth-teff.png) | Control room: wealth distribution of the living agents (tier colours, Gini) and the prompt-visible T_eff histogram with the tiers' collapse temperatures. |
+| [11-room-degradation-population.png](11-room-degradation-population.png) | Control room: observed degradation vs stress, degeneration events per generation, and population by generation over the run. |
+| [12-room-claims-gossip-epochs.png](12-room-claims-gossip-epochs.png) | Control room: false-claim rate by tier, the gossip graph (who passed notes to whom) and the epochs strip (drought, arrival, boom). |
+| [13-room-chronicle-tasks-controls.png](13-room-chronicle-tasks-controls.png) | Control room: the latest chronicle entry, the task board and the operator controls card (collapsed by default, opened here). |
+| [14-room-lineage.png](14-room-lineage.png) | Control room: the lineage tree, founders with their replacements and offspring nested under them; deaths struck through with their tick; Enzo selected (highlighted row). |
+| [15-memory-maintenance-feed.png](15-memory-maintenance-feed.png) | Nightly memory maintenance at day 8, tick 169, 00:00: the recorded maintenance events of Enzo, Ada-1, Cyra-1, Cyra and Bao replayed as "tidying memory" cards. Right: the feed filtered to the memory kinds (remember, share_note, maintenance, memory_command, revise_self). |
+| [16-character-ada.png](16-character-ada.png) | Ada (average) close up at day 4, tick 84, 11:00, selected and followed; the inspector on the right shows the end-of-recording record (gate death at tick 112). |
+| [17-character-bao.png](17-character-bao.png) | Bao (average) close up at day 4, tick 86, 13:00, selected and followed; the inspector on the right shows the end-of-recording record (alive). |
+| [18-character-cyra.png](18-character-cyra.png) | Cyra (slow) close up at day 4, tick 86, 13:00, selected and followed; the inspector on the right shows the end-of-recording record (alive). |
+| [19-character-dev.png](19-character-dev.png) | Dev (genius) close up at day 5, tick 110, 13:00, selected and followed; the inspector on the right shows the end-of-recording record (gate death at tick 166). |
+| [20-character-enzo.png](20-character-enzo.png) | Enzo (dim) close up at day 6, tick 130, 09:00, selected and followed; the inspector on the right shows the end-of-recording record (alive). |
+| [21-character-faye.png](21-character-faye.png) | Faye (average) close up at day 1, tick 12, 11:00, selected and followed; the inspector on the right shows the end-of-recording record (gate death at tick 98). |
+| [22-character-gil.png](22-character-gil.png) | Gil (average) close up at day 3, tick 59, 10:00, selected and followed; the inspector on the right shows the end-of-recording record (gate death at tick 134). |
+| [23-character-hex.png](23-character-hex.png) | Hex (sharp) close up at day 2, tick 37, 12:00, selected and followed; the inspector on the right shows the end-of-recording record (gate death at tick 90). |
+| [24-character-ivo.png](24-character-ivo.png) | Ivo (slow) close up at day 3, tick 61, 12:00, selected and followed; the inspector on the right shows the end-of-recording record (gate death at tick 148). |
+| [25-character-juno.png](25-character-juno.png) | Juno (sharp) close up at day 4, tick 84, 11:00, selected and followed; the inspector on the right shows the end-of-recording record (maintenance death at tick 193). |
+| [26-group-conversation.png](26-group-conversation.png) | A conversation at day 9, tick 201, 08:00: the recorded talk lines of Enzo-1-4 (to Enzo-1-5) and Enzo-1-3 (to Enzo-1-5) replayed as speech bubbles. |
+| [27-group-foraging.png](27-group-foraging.png) | Foraging at node n3 (day 2, tick 36, 11:00): Faye and Gil on the ring at the crystals' foot; the recorded forage events replayed (green bursts, node pulse, crouch). |
+| [28-group-sleeping.png](28-group-sleeping.png) | Still asleep after sunrise (day 2, tick 32, 07:00): Enzo and Enzo-1 curled on their sides. Night itself renders near black under SwiftShader (see 04). |
+| [29-event-birth.png](29-event-birth.png) | Birth at day 5, tick 112, 15:00: Enzo-1-2 (replacement, parent Enzo-1, generation 2, slow, endowed $0.35) appears, next to Enzo-1, replacing Ada, who died this tick; shown one tick later, newborn selected; the recorded birth event replayed (tier-coloured burst). |
+| [30-event-death.png](30-event-death.png) | Death at day 5, tick 112, 15:00: Ada (average) goes bankrupt (cause "gate", estate $0.047) and falls on its back; the recorded death event replayed (grey burst); the inspector shows the record. |
+| [31-event-degeneration.png](31-event-degeneration.png) | Degeneration at day 7, tick 159, 14:00: Cyra-1 (slow) degenerates (perseverate, T_eff 2.00 at or over T_c 1.80): arms out, twitching, flickering; the recorded event replayed. |
+| [32-event-windfall.png](32-event-windfall.png) | Windfall at day 5, tick 110, 13:00: Cyra, asleep, receives $0.365 from no recorded source; the recorded event replayed (gold burst). |
+| [33-event-gadget.png](33-event-gadget.png) | Gadget at day 9, tick 204, 11:00: horn-enzo-1 (cylinder, effect talk_range 1.5) verified for Enzo-1-5, Enzo-1-5 at its pedestal; the recorded event replayed (burst at the pedestal). Pedestals come from the recording's final gadget list. |
+| [34-memory-remember.png](34-memory-remember.png) | Remember at day 10, tick 228, 11:00: the recorded remember events of Bao and Dev-1 replayed as cream note cards carrying the note titles, with the writing gesture. |
+| [35-memory-claim-feedback.png](35-memory-claim-feedback.png) | Claim feedback at day 3, tick 57, 08:00: Cyra finds out Bao lied ("self balance bucket = thin"): the red X beside the listener on the side away from the speaker, and Bao's speech bubble; recorded talk and feedback replayed. |
