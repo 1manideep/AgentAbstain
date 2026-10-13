@@ -101,7 +101,14 @@ Screenshots (`screenshots/humans-contact.png`, `humans-moves.png`, `humans-world
 npm run build && npx vite preview --port 4173      # gallery shots are taken from dist
 VITE_FEED=fixture npm run dev -- --port 5173       # world shot uses fixture mode with ?rig=1
 npm run screenshot:humans                          # VOID_SHOTS=contact,moves,world,world-night · VOID_MOVES_PRESET=1
+npm run screenshot:behaviour                       # screenshots/behaviour-world.png (fixture mode, dev server on 5173)
 ```
+
+`behaviour-world.png` freezes a daytime group and injects four events through
+`window.__void.inject` (the same path the socket takes): a talk whose claim is
+false, the listener's claim feedback (red X on the side away from the
+speaker, head shake), a remember (note card stacked above the speech bubble,
+writing gesture) and a nightly maintenance pass.
 
 The server's CSP allows same-origin assets and blob workers
 (`worker-src 'self' blob:`), which is what the troika text workers and GLB

@@ -25,7 +25,7 @@ cd web && npm install && npm run build && cd ..
 | Resume a run | add `--resume` (a run whose tick counter is behind its metered calls is marked `inconsistent` and refuses) |
 | Slow down or pause | in the control room, or `POST /api/control/speed {"tick_seconds": 1.5}`, `/pause`, `/resume`, `/step` |
 | Export protocol schemas | `.venv/bin/void schema --out schemas/` |
-| Record a fixture for the frontend | `.venv/bin/void mock-feed --config configs/scripted_smoke.yaml --ticks 240 --out web/public/fixtures/mock.jsonl` |
+| Record a fixture for the frontend | `.venv/bin/void mock-feed --config configs/demo_memory.yaml --ticks 240 --out web/public/fixtures/mock.jsonl` (the committed fixture; `demo_memory` turns the memory layer on so the feed carries maintenance, policy and exam events) |
 | Inspect a run | `.venv/bin/void inspect --run-dir data/runs/demo --tree` (also `--money`, `--events N`, `--reindex`) |
 | Evolving-memory layer (fog, policy file, nightly maintenance, audit exam) | see the section below; configs `exp_mem_e0_*.yaml` (scripted controls) and `live_mem_e1_*.yaml` (the pilot) |
 
