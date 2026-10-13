@@ -10,6 +10,7 @@ from typing import Any
 from void.agents.registry import AgentRegistry
 from void.config import VoidConfig, micro_to_usd
 from void.db import Database
+from void.memory.notes import CHANNELS
 
 __all__ = ["MetricsRecorder"]
 
@@ -155,7 +156,7 @@ class MetricsRecorder:
         sims: dict[int, list[float]] = {}
         for g in gossip:
             sims.setdefault(int(g.get("hop", 0)), []).append(float(g.get("similarity", 0.0)))
-        notes_by_channel = {c: 0 for c in ("observed", "gossip", "inherited", "chronicle", "tracer")}
+        notes_by_channel = {c: 0 for c in CHANNELS}
         for r in self.db.fetchall("SELECT channel, COUNT(*) AS n FROM notes WHERE archived=0 GROUP BY channel ORDER BY channel"):
             notes_by_channel[r["channel"]] = int(r["n"])
         gadget_rows = self.db.fetchall("SELECT status, COUNT(*) AS n FROM gadgets GROUP BY status ORDER BY status")
