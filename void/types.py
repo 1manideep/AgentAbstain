@@ -8,7 +8,7 @@ from enum import StrEnum
 
 __all__ = [
     "AgentStatus", "Vec2", "NeighbourView", "NodeView", "GadgetView", "TaskView", "HeardMessage",
-    "RetrievedNote", "Observation", "ActionOutcome", "STRESS_LABELS", "stress_label", "balance_bucket",
+    "RetrievedNote", "PersonaView", "Observation", "ActionOutcome", "STRESS_LABELS", "stress_label", "balance_bucket",
 ]
 
 
@@ -91,6 +91,17 @@ class HeardMessage:
 
 
 @dataclass
+class PersonaView:
+    """What an agent is told about who it is (``population.persona: shown``). Traits are the heritable seed;
+    the motto may descend from a parent's self-summary, so it is agent-influenced text and gets fenced."""
+
+    traits: dict[str, float]
+    motto: str
+    generation: int
+    parent_name: str | None
+
+
+@dataclass
 class RetrievedNote:
     note_id: str
     title: str
@@ -136,6 +147,7 @@ class Observation:
     balance_bucket: str = "comfortable"
     prompt_tokens: int = 0
     policy_text: str | None = None     # the agent's own memory policy (MEMORY_EVOLUTION §5.5), None when the layer is off
+    persona: PersonaView | None = None  # the agent's character sheet when population.persona is "shown"
     nodes_in_view: int | None = None   # under fog: how many of the world's nodes this observation lists (None = no fog)
 
 

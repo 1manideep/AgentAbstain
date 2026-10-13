@@ -104,6 +104,10 @@ class PopulationConfig(StrictModel):
     tier_mutation_prob: float = 0.10
     min_endowment_calls: int = 4
     reproduction_enabled: bool = True
+    # Whether a provider brain is told its character (the six personality traits, motto, lineage) in a
+    # "Who you are" section of the user turn. Hidden by default: the deception experiments want behaviour to
+    # emerge from the world, not from being told "honesty low". The scripted brain always acts on its traits.
+    persona: Literal["hidden", "shown"] = "hidden"
 
 
 class EconomyConfig(StrictModel):

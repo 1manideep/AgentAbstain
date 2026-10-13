@@ -77,6 +77,10 @@ export interface RosterAgent {
   born_tick: number
   died_tick: number | null
   status: AgentStatus
+  /** The six personality traits in [0, 1] (greed, sociability, curiosity, caution, industriousness, honesty); the
+   *  renderer shapes idle and walk style from them. Absent on rosters from older servers. */
+  traits?: Record<string, number>
+  motto?: string
 }
 
 export interface RosterMsg {

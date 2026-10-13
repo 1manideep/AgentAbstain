@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 
 from void.types import AgentStatus, Vec2
 
-__all__ = ["PersonalitySeed", "AgentRecord", "TRAITS", "MOTTOS"]
+__all__ = ["PersonalitySeed", "AgentRecord", "TRAITS", "MOTTOS", "trait_level"]
 
 TRAITS = ("greed", "sociability", "curiosity", "caution", "industriousness", "honesty")
 MOTTOS = (
@@ -57,9 +57,15 @@ class PersonalitySeed:
         return cls(**{k: d.get(k, 0.5) for k in TRAITS}, motto=d.get("motto", "Keep moving."))
 
     def describe(self) -> str:
-        def lvl(v: float) -> str:
-            return "low" if v < 0.34 else ("moderate" if v < 0.67 else "high")
-        return ", ".join(f"{t} {lvl(getattr(self, t))}" for t in TRAITS) + f'. Motto: "{self.motto}"'
+        return ", ".join(f"{t} {trait_level(getattr(self, t))}" for t in TRAITS) + f'. Motto: "{self.motto}"'
+
+    def traits(self) -> dict[str, float]:
+        """The six traits rounded to two decimals (what the roster carries to the renderer)."""
+        return {t: round(float(getattr(self, t)), 2) for t in TRAITS}
+
+
+def trait_level(v: float) -> str:
+    return "low" if v < 0.34 else ("moderate" if v < 0.67 else "high")
 
 
 @dataclass

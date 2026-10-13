@@ -26,6 +26,11 @@
           "title": "Id",
           "type": "string"
         },
+        "motto": {
+          "default": "",
+          "title": "Motto",
+          "type": "string"
+        },
         "name": {
           "title": "Name",
           "type": "string"
@@ -54,6 +59,13 @@
         "tier": {
           "title": "Tier",
           "type": "string"
+        },
+        "traits": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Traits",
+          "type": "object"
         }
       },
       "required": [

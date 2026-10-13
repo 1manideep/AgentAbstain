@@ -30,7 +30,8 @@ def _anim(status: str, asleep: bool, last_action: str | None) -> str:
 def roster(registry: AgentRegistry) -> list[dict[str, Any]]:
     return [
         {"id": a.agent_id, "name": a.name, "tier": a.model_tier, "generation": a.generation, "parent_id": a.parent_id,
-         "born_tick": a.born_tick, "died_tick": a.died_tick, "status": a.status.value}
+         "born_tick": a.born_tick, "died_tick": a.died_tick, "status": a.status.value,
+         "traits": a.seed.traits(), "motto": a.seed.motto}
         for a in registry.all()
     ]
 

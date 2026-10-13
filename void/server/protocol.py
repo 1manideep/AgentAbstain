@@ -79,6 +79,8 @@ class RosterAgent(BaseModel):
     born_tick: int
     died_tick: int | None = None
     status: AgentStatusStr
+    traits: dict[str, float] = Field(default_factory=dict)  # the six personality traits, for behaviour in the renderer
+    motto: str = ""
 
 
 class Roster(BaseModel):

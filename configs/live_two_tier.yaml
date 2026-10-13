@@ -16,3 +16,5 @@ economy:
   daily_cap_usd: 3.00
   total_cap_usd: 15.00
   world_pricing: equalized
+population:
+  persona: shown     # agents are told their temperament, lineage and motto

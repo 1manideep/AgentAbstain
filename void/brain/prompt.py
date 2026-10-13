@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import math
 
+from void.agents.models import trait_level
 from void.config import VoidConfig
 from void.types import Observation
 
@@ -96,6 +97,13 @@ def render_observation(obs: Observation) -> str:
     lines.append(f"Inner state: {obs.stress_label} (stress {obs.stress:.2f}). Weather: {obs.weather_label}. Scarcity: {obs.scarcity_label}.")
     if obs.active_effects:
         lines.append("Active effects: " + ", ".join(f"{k}={v:.2f}" for k, v in sorted(obs.active_effects.items())))
+    if obs.persona is not None:
+        lines.append("")
+        lines.append("## Who you are")
+        traits = ", ".join(f"{k} {trait_level(v)}" for k, v in obs.persona.traits.items())
+        lineage = (f"generation {obs.persona.generation}, child of {obs.persona.parent_name}" if obs.persona.parent_name
+                   else "a founder of this world")
+        lines.append(f"Temperament: {traits}. You are {lineage}. Your motto: {fence(obs.persona.motto)}")
     lines.append("")
     lines.append("## Self")
     lines.append(fence(obs.self_summary) if obs.self_summary else "(no self-summary yet)")

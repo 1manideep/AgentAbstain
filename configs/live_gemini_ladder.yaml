@@ -29,4 +29,5 @@ agents:
   - {name: Ivo,   personality: {industriousness: 0.7, caution: 0.6}}
   - {name: Juno,  personality: {sociability: 0.8, greed: 0.5}}
 population:
+  persona: shown     # agents are told their temperament, lineage and motto
   cap: 13

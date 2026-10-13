@@ -20,6 +20,7 @@ from void.types import (
     NeighbourView,
     NodeView,
     Observation,
+    PersonaView,
     Vec2,
     balance_bucket,
     stress_label,
@@ -50,6 +51,13 @@ class ObservationBuilder:
         if not rows:
             return 0.0
         return micro_to_usd(sum(int(r["world_cost"]) for r in rows) / len(rows))
+
+    def _persona(self, agent: AgentRecord) -> PersonaView | None:
+        if self.cfg.population.persona != "shown":
+            return None
+        parent = self.registry.get(agent.parent_id) if agent.parent_id else None
+        return PersonaView(traits=agent.seed.traits(), motto=agent.seed.motto, generation=agent.generation,
+                           parent_name=parent.name if parent is not None else None)
 
     def _policy_text(self, agent_id: str) -> str | None:
         if self.policy is None or not self.cfg.memory.policy.enabled or not self.cfg.memory.policy.show_in_prompt:
@@ -105,6 +113,7 @@ class ObservationBuilder:
             world_size=self.cfg.world.size, population=self.registry.count_alive(), population_cap=self.cfg.population.cap,
             active_effects=dict(agent.effects), balance_bucket=balance_bucket(micro_to_usd(agent.balance), self.cfg.population.starting_balance_usd),
             policy_text=self._policy_text(agent.agent_id), nodes_in_view=len(nodes) if fog else None,
+            persona=self._persona(agent),
         )
         obs.prompt_tokens = estimate_tokens(render_observation(obs))
         return obs

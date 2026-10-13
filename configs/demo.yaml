@@ -13,6 +13,7 @@ world:
   node_regen_per_tick: 0.25
   forage_yield_usd: 0.0045
 population:
+  persona: shown     # agents are told their temperament, lineage and motto
   cap: 13
   starting_balance_usd: 0.40
   spawn_pool_usd: 3.0
