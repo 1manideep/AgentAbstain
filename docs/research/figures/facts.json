@@ -30,6 +30,115 @@
     "median_final_generation": 3.0,
     "runs": 5
   },
+  "literature": {
+    "abstracts_fetched": 49,
+    "cols": [
+      "labelled task metric",
+      "task feedback",
+      "peer verification",
+      "ecological (survival/economy)",
+      "human",
+      "other",
+      "none"
+    ],
+    "grid": [
+      [
+        6,
+        15,
+        2,
+        1,
+        1,
+        10,
+        15
+      ],
+      [
+        0,
+        2,
+        0,
+        0,
+        1,
+        1,
+        2
+      ],
+      [
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        9,
+        15,
+        0,
+        1,
+        0,
+        1,
+        0
+      ],
+      [
+        1,
+        2,
+        0,
+        1,
+        0,
+        1,
+        4
+      ],
+      [
+        10,
+        2,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        4,
+        3,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        1,
+        2,
+        0,
+        1,
+        0,
+        9,
+        4
+      ],
+      [
+        13,
+        2,
+        0,
+        8,
+        0,
+        1,
+        5
+      ]
+    ],
+    "papers": 158,
+    "proposal_cell_count": 1,
+    "proposal_cell_social": 1,
+    "rows": [
+      "memory content",
+      "memory structure",
+      "retrieval config",
+      "prompt/playbook",
+      "shared artifacts",
+      "code",
+      "weights",
+      "other",
+      "none"
+    ]
+  },
   "power_seeds_for_80pct": {
     "Exact sign test|d=0.5": null,
     "Exact sign test|d=0.8": 25,

@@ -29,6 +29,7 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.colors  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import matplotlib.ticker  # noqa: E402,F401
 import numpy as np  # noqa: E402
@@ -507,10 +508,111 @@ def fig_roadmap():
     save(fig, "fig9_roadmap.png")
 
 
+# --------------------------------------------------------------------------------------------- literature coverage (REAL)
+UNIT_ROWS = [
+    ("memory content", "memory content"),
+    ("memory structure", "memory structure"),
+    ("retrieval config", "retrieval config"),
+    ("prompt/playbook", "prompt / playbook"),
+    ("shared artifacts", "shared artifacts"),
+    ("code", "code"),
+    ("weights", "weights"),
+    ("other", "other"),
+    ("none", "nothing evolves\n(benchmarks, security, theory)"),
+]
+SIGNAL_COLS = [
+    ("labelled task metric", "labelled\ntask metric"),
+    ("task feedback", "task\nfeedback"),
+    ("peer verification", "peer\nverification"),
+    ("ecological (survival/economy)", "ecological\n(survival, economy)"),
+    ("human", "human"),
+    ("other", "other"),
+    ("none", "none"),
+]
+
+
+def _bucket(value: str, table: list[tuple[str, str]], default: str) -> str:
+    """First table key whose stem appears in the record's free-text value; records say ``none`` explicitly."""
+    v = (value or "").lower().strip()
+    head = v.split(" (")[0].split(";")[0].strip()
+    for key, _ in table:
+        stem = key.split(" (")[0]
+        if head == stem or head.startswith(stem + " ") or head.startswith(stem + "/"):
+            return key
+    for key, _ in table:
+        if key not in ("other", "none") and key.split(" (")[0] in v:
+            return key
+    return default
+
+
+def fig_literature(papers_path: Path) -> dict[str, object]:
+    """Where the swept literature sits on the two axes that define the proposal: what evolves, and what selects.
+    One count per paper (its primary unit and signal); the proposal's own cell is outlined."""
+    data = json.loads(papers_path.read_text())
+    papers = data["papers"]
+    rows = [k for k, _ in UNIT_ROWS]
+    cols = [k for k, _ in SIGNAL_COLS]
+    grid = np.zeros((len(rows), len(cols)), dtype=int)
+    social = np.zeros_like(grid)
+    for p in papers:
+        r = rows.index(_bucket(str(p.get("evolving_unit", "")), UNIT_ROWS, "other"))
+        c = cols.index(_bucket(str(p.get("selection_signal", "")), SIGNAL_COLS, "other"))
+        grid[r, c] += 1
+        if str(p.get("social_transmission", "")).lower().startswith("yes"):
+            social[r, c] += 1
+    fig = plt.figure(figsize=(10.4, 7.0), dpi=DPI)
+    fig.suptitle("Where the prior work sits: what evolves, and what selects it", x=0.04, ha="left", fontsize=13.5, fontweight="bold", y=0.975)
+    fig.text(0.04, 0.925, f"{len(papers)} unique papers from the eight-angle sweep, one cell per paper (its primary unit and signal).\n"
+             "After the slash: how many of them move memories or practices between agents.", fontsize=9.2, color=INK2, ha="left", va="top",
+             linespacing=1.5)
+    ax = fig.add_axes([0.24, 0.16, 0.72, 0.66])
+    ax.grid(False)
+    vmax = max(1, int(grid.max()))
+    cmap = matplotlib.colors.LinearSegmentedColormap.from_list("blue_seq", [SURFACE, BLUE_TINT, "#9fc0ea", BLUE, "#174b8c"])
+    ax.imshow(grid, cmap=cmap, vmin=0, vmax=vmax, aspect="auto")
+    for r in range(len(rows)):
+        for c in range(len(cols)):
+            n = int(grid[r, c])
+            if n == 0:
+                continue
+            dark = n > 0.55 * vmax
+            txt = f"{n}" + (f" / {int(social[r, c])}" if social[r, c] else "")
+            ax.text(c, r, txt, ha="center", va="center", fontsize=9.4, color=SURFACE if dark else INK, fontweight="bold" if dark else "normal")
+    # the 2 px surface gap between cells
+    for k in range(len(cols) + 1):
+        ax.axvline(k - 0.5, color=SURFACE, lw=2)
+    for k in range(len(rows) + 1):
+        ax.axhline(k - 0.5, color=SURFACE, lw=2)
+    # the proposal: a memory *practice* (policy + structure) under ecological selection, with transmission
+    pr = rows.index("prompt/playbook")
+    pc = cols.index("ecological (survival/economy)")
+    ax.add_patch(FancyBboxPatch((pc - 0.47, pr - 0.47), 0.94, 0.94, boxstyle="round,pad=0.0,rounding_size=0.08", fill=False, ec=ORANGE, lw=2.4))
+    ax.annotate("this proposal: a memory practice,\nheritable and transmissible,\nselected by an economy", xy=(pc + 0.47, pr + 0.1),
+                xytext=(pc - 0.5, pr + 2.55), fontsize=8.8, color=ORANGE, ha="center", va="center",
+                arrowprops={"arrowstyle": "-|>", "color": ORANGE, "lw": 1.3, "connectionstyle": "arc3,rad=-0.25"})
+    ax.set_xticks(range(len(cols)))
+    ax.set_xticklabels([lab for _, lab in SIGNAL_COLS], fontsize=8.8)
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels([lab for _, lab in UNIT_ROWS], fontsize=9)
+    ax.set_xlabel("what judges the change (selection signal)", fontsize=9.5, color=INK2, labelpad=8)
+    ax.set_ylabel("what changes over time (evolving unit)", fontsize=9.5, color=INK2, labelpad=8)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.tick_params(length=0)
+    read = sum(1 for p in papers if p.get("read_status") == "abstract_fetched")
+    tag(fig, "REAL", f"docs/research/literature/papers.json; {read} of {len(papers)} abstracts fetched, the rest from search summaries")
+    save(fig, "fig10_literature.png")
+    cell = int(grid[pr, pc])
+    return {"papers": len(papers), "abstracts_fetched": read, "proposal_cell_count": cell,
+            "proposal_cell_social": int(social[pr, pc]), "rows": rows, "cols": cols, "grid": grid.tolist()}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", type=Path, default=None, help="directory holding seed_*/ run directories (for the REAL figures)")
-    ap.add_argument("--only", default="", help="comma list: arch,trust,loop,power,cost,gens,vault,hyp,road")
+    ap.add_argument("--only", default="", help="comma list: arch,trust,loop,power,cost,gens,vault,hyp,road,lit")
+    ap.add_argument("--papers", type=Path, default=REPO / "docs" / "research" / "literature" / "papers.json",
+                    help="the literature sweep (for the lit figure)")
     args = ap.parse_args()
     only = set(filter(None, args.only.split(",")))
     def want(key: str) -> bool:
@@ -528,6 +630,8 @@ def main() -> None:
         facts["power_seeds_for_80pct"] = fig_power()
     if want("cost"):
         facts["cost_table_usd"] = {k: [round(v, 3) for v in vs] for k, vs in fig_cost().items()}
+    if want("lit") and args.papers.exists():
+        facts["literature"] = fig_literature(args.papers)
     if args.runs is not None:
         if want("gens"):
             facts["generations"] = fig_generations(args.runs)
