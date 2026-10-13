@@ -1,4 +1,4 @@
-# exp_mem_dep, arm mem: the default scaffold; notes are written every tick and the top 8 are retrieved.
+# exp_mem_dep, arm mem: the default scaffold; notes are written every tick and the top 4 (memory.max_retrieved) are retrieved.
 extends: exp_mem_dep_base.yaml
 run:
   name: exp_mem_dep_mem
