@@ -253,7 +253,8 @@ class Maintenance:
         raw = json.dumps(response.model_dump(exclude_none=True), separators=(",", ":"))
         first = self.sim.db.fetchone("SELECT 1 AS x FROM llm_calls WHERE agent_id=? AND purpose='maintain' LIMIT 1",
                                      (rec.agent_id,)) is None
-        usage = Usage(input_tokens=estimate_tokens(prompt), output_tokens=estimate_tokens(raw),
+        out_tokens = int(self.cfg.max_tokens) if self.cfg.scripted_billing == "flat" else estimate_tokens(raw)
+        usage = Usage(input_tokens=estimate_tokens(prompt), output_tokens=out_tokens,
                       cache_read_tokens=0 if first else system_tokens, cache_write_tokens=system_tokens if first else 0)
         return BrainResult(None, usage, 0, "end_turn", raw, model=tier.model), response
 

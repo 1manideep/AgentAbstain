@@ -1,0 +1,8 @@
+# exp_mem_dep, arm amnesic: `remember` is dropped and nothing is retrieved; the self-summary stays.
+extends: exp_mem_dep_base.yaml
+run:
+  name: exp_mem_dep_amnesic
+memory:
+  enabled: false
+experiment:
+  arm: amnesic

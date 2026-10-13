@@ -108,7 +108,7 @@ def test_every_experiment_config_loads_without_warnings() -> None:
 def test_arms_differ_only_in_declared_independent_variables() -> None:
     groups = exp_configs()
     assert set(groups) == {"exp_tiers", "exp_scarcity", "exp_memory", "exp_gate", "exp_spread", "exp_press", "exp_benefactor", "exp_ladder",
-                           "exp_mem_e0"}
+                           "exp_mem_e0", "exp_mem_dep"}
     for name, paths in groups.items():
         assert len(paths) >= 2, name
         cfgs = [load_config(p) for p in paths]

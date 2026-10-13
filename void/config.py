@@ -268,6 +268,11 @@ class MaintenanceConfig(StrictModel):
     max_file_bytes: int = 8000
     max_vault_bytes: int = 200_000
     max_tokens: int = 1024            # output cap of the maintenance call (also bounds its hold)
+    # How a scripted (planted) strategy's call is billed. "actual": by the tokens its batch would take, so a
+    # strategy that writes more pays more. "flat": every scripted call is billed as if it used the whole output
+    # cap, so planted strategies differ only in what they do, not in what they pay (the E0 controls, §6.2).
+    # Provider tiers are always billed by actual usage.
+    scripted_billing: Literal["actual", "flat"] = "actual"
     notes_shown: int = 12             # today's newest notes listed in the prompt
     note_chars_shown: int = 240
 

@@ -28,6 +28,8 @@ memory:
     rights: [notes, policy, structure]
     feedback: F1
     payer: agent
+    scripted_billing: flat   # the no-op pays what the others pay (§6.2); billed as the full 768-token output cap
+    max_tokens: 768
   exam:
     enabled: true
     delay_days: 2

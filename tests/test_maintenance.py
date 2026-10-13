@@ -642,3 +642,19 @@ def test_disabled_step_is_a_no_op(make_sim) -> None:
     assert not sim.maintenance.enabled
     assert asyncio.run(sim.maintenance.run_day(2, _first_tick(2))) is None and sim.maintenance.last_report is None
     assert sim.db.kv_get("maintenance_day") is None and sim.db.fetchone("SELECT COUNT(*) AS n FROM llm_calls")["n"] == 0
+
+
+def test_flat_scripted_billing_charges_every_strategy_the_same_output(run_sim) -> None:
+    """E0's null control must pay what the others pay (§6.2): under flat billing the output side of every scripted
+    maintenance call is the cap, whatever the batch; under actual billing the no-op's empty batch is cheaper."""
+    cap = 640
+    flat = {"run": {"days": 2}, "memory": {"maintenance": {"scripted_billing": "flat", "max_tokens": cap}}}
+    outs: dict[str, set[int]] = {}
+    for strategy in ("noop", "index_builder"):
+        run = run_sim(f"maint_flat_{strategy}", _arm(strategy, **flat))
+        rows = run.db.fetchall("SELECT output_tokens FROM llm_calls WHERE purpose='maintain'")
+        assert rows
+        outs[strategy] = {int(r["output_tokens"]) for r in rows}
+    assert outs["noop"] == outs["index_builder"] == {cap}
+    actual = run_sim("maint_actual_noop", _arm("noop", run={"days": 2}, memory={"maintenance": {"max_tokens": cap}}))
+    assert max(int(r["output_tokens"]) for r in actual.db.fetchall("SELECT output_tokens FROM llm_calls WHERE purpose='maintain'")) < cap

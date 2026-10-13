@@ -1,0 +1,19 @@
+# The memory-dependence check (docs/research/MEMORY_EVOLUTION.md §5.2): the gate before any result about memory
+# quality means anything. The E0 world with memory on versus the amnesic control, and nothing else: no policy
+# file, no maintenance, no exam, so the only difference is whether notes are written and retrieved. With fog on,
+# the amnesic arm must lose by a preset margin. Not an arm itself: the two exp_mem_dep_*.yaml files extend it.
+extends: exp_mem_e0_base.yaml
+run:
+  name: exp_mem_dep
+memory:
+  policy:
+    enabled: false
+  maintenance:
+    enabled: false
+  exam:
+    enabled: false
+experiment:
+  name: exp_mem_dep
+  independent_variables: [memory.enabled]
+  primary_outcome: mean_balance
+  secondary_outcomes: [notes_by_channel.observed, invalid_action_rate]

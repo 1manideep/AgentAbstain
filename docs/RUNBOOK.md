@@ -79,11 +79,18 @@ The thin slice of [docs/research/MEMORY_EVOLUTION.md](research/MEMORY_EVOLUTION.
 
 The six memory commands (`view`, `create`, `str_replace`, `insert`, `delete`, `rename`) match the shape of Anthropic's memory tool; paths are virtual (`/memories/notes/`, `/memories/index/`, `/memories/memory_policy.md`, `/memories/self.md`) and confined to the agent's own vault (`void.memory.commands.resolve_path`). The database row stays authoritative for provenance; every kernel write is hashed into `note_manifest`, and `reindex` believes a file only when the hash matches (a hand edit in Obsidian is admitted as channel `operator`, not hidden).
 
-**E0, the controls before any money is spent** (scripted, free): four arms that differ only in the planted maintenance strategy.
+**The memory-dependence check, first** (scripted, free): the E0 world with memory on versus the amnesic control, nothing else switched on. Section 5.2 of the proposal makes it the gate: unless the amnesic arm loses, no result about memory quality means anything. It does not pass yet; see section 10.4 of the proposal.
 
 ```bash
-for arm in noop index_builder hoarder decoy; do .venv/bin/void run --config configs/exp_mem_e0_$arm.yaml --seeds 1-20 --out runs; done
-.venv/bin/python scripts/compare.py runs/exp_mem_e0        # primary: mean_balance; expect index_builder > noop > hoarder, decoy = noop
+for arm in mem amnesic; do .venv/bin/void run --config configs/exp_mem_dep_$arm.yaml --seeds 1-20 --tick-seconds 0 --out runs; done
+.venv/bin/python scripts/compare.py runs/exp_mem_dep       # primary: mean_balance; the gate needs mem > amnesic
+```
+
+**E0, the controls before any money is spent** (scripted, free): four arms that differ only in the planted maintenance strategy. Scripted maintenance is billed flat (`memory.maintenance.scripted_billing: flat`), so the no-op pays what the others pay.
+
+```bash
+for arm in noop index_builder hoarder decoy; do .venv/bin/void run --config configs/exp_mem_e0_$arm.yaml --seeds 1-20 --tick-seconds 0 --out runs; done
+.venv/bin/python scripts/compare.py runs/exp_mem_e0        # primary: mean_balance; pre-registered: index_builder > noop > hoarder, decoy not above noop
 ```
 
 **The live pilots** (need `GEMINI_API_KEY`; prices in `base.yaml` are list prices to verify before paying; every run is capped by `economy.total_cap_usd`):
