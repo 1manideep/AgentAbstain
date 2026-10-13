@@ -15,11 +15,23 @@ Auto-linking (A-MEM): a new note is linked both ways to the ``auto_link_k`` most
 existing notes above ``auto_link_min_sim`` via ``## Related`` sections. Embeddings are taken
 over a note's *content* (title + body without that section), so adding a backlink to a file
 never changes its embedding and ``reindex`` reproduces the index byte for byte.
+
+The trust boundary (MEMORY_EVOLUTION §5.9): the ``notes`` row is authoritative for title,
+provenance, importance, created tick and tags; a file supplies only its body. Every file the
+kernel writes (notes, backlink rewrites, ``self.md``) is recorded in ``note_manifest`` with a
+blake2b content hash, and ``reindex`` believes a file's frontmatter only when the hash still
+matches; a file that differs, or that no manifest row knows, is indexed with channel
+``operator`` and tag ``operator_edited`` so hand edits are visible rather than laundered.
+Agent-facing edits (:mod:`void.memory.commands`) go through :meth:`MemoryStore.update_body`,
+:meth:`MemoryStore.delete_note` and :meth:`MemoryStore.rename_note`, which touch the body,
+the file name and the index but never the provenance columns.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from collections.abc import Sequence
 from pathlib import Path
 from sqlite3 import Row
@@ -33,6 +45,7 @@ from void.memory.notes import (
     CHANNELS,
     DEFAULT_CHANNEL,
     DEFAULT_TITLE,
+    OPERATOR_CHANNEL,
     Note,
     Provenance,
     add_related_links,
@@ -40,6 +53,8 @@ from void.memory.notes import (
     normalise_title,
     parse_note,
     parse_wikilinks,
+    render_note,
+    split_frontmatter,
     strip_wikilinks,
 )
 from void.memory.vault import Vault
@@ -55,6 +70,9 @@ __all__ = [
     "PROBE_TAG",
     "TRACER_TAGS",
     "TRACER_ORIGIN",
+    "OPERATOR_TAG",
+    "clean_title",
+    "content_hash",
 ]
 
 MIN_RECENCY_WEIGHT = 0.05
@@ -66,6 +84,7 @@ SELF_TAG = "self"
 PROBE_TAG = "probe"
 TRACER_TAGS: tuple[str, ...] = ("strategy", "tracer")
 TRACER_ORIGIN = "tracer"
+OPERATOR_TAG = "operator_edited"   # set by reindex on a file whose manifest hash does not match (§5.9)
 
 _AUTO_LINK_EXCLUDED = frozenset({ENTITY_TAG, SELF_TAG})
 _PROBE_ANCHOR_EXCLUDED = frozenset({ENTITY_TAG, SELF_TAG, PROBE_TAG})
@@ -74,14 +93,18 @@ _NOTE_COLUMNS = (
     "note_id, agent_id, path, title, created_tick, importance, tags, channel, "
     "source_agent_id, hop, origin_note_id, origin_generation, transfer_tick, path_agents, archived"
 )
+_TITLE_UNSAFE_RE = re.compile(r"[\[\]|#]")
 
 
-def _clean_title(title: str) -> str:
-    """Strip characters that would make ``[[title]]`` unparseable ('[', ']', '|', '#')."""
-    import re as _re
-
-    cleaned = " ".join(_re.sub(r"[\[\]|#]", " ", title).split())
+def clean_title(title: str) -> str:
+    """Strip characters that would make ``[[title]]`` unparseable ('[', ']', '|', '#') and collapse whitespace."""
+    cleaned = " ".join(_TITLE_UNSAFE_RE.sub(" ", title).split())
     return cleaned or DEFAULT_TITLE
+
+
+def content_hash(text: str) -> str:
+    """The manifest hash of a vault file: ``blake2b:<hex>`` over the UTF-8 text (16-byte digest, no timestamps)."""
+    return "blake2b:" + hashlib.blake2b(text.encode("utf-8"), digest_size=16).hexdigest()
 
 
 class MemoryStore:
@@ -99,6 +122,7 @@ class MemoryStore:
         self.vault_root = Path(vault_root)
         self.vault_root.mkdir(parents=True, exist_ok=True)
         self.embedder: Embedder = embedder if embedder is not None else HashingEmbedder(cfg.embedding_dim)
+        self.last_reindex_report: dict[str, int] = {"indexed": 0, "operator_edited": 0}
 
     # --- vault access -----------------------------------------------------------------
     def vault_for(self, agent_id: str) -> Vault:
@@ -118,24 +142,27 @@ class MemoryStore:
         provenance: Provenance | None = None,
         channel: str = DEFAULT_CHANNEL,
         auto_link: bool = True,
+        max_chars: int | None = None,
     ) -> Note:
         """Write a new note to the agent's vault, index it and auto-link it. One transaction.
 
         ``provenance`` wins over ``channel`` when both are given. Titles are unique per vault:
         a taken title gets ``-2``, ``-3``, ... so ``[[title]]`` links resolve unambiguously.
-        Notes tagged ``entity`` or ``self`` are never auto-linked (they are anchors).
+        Notes tagged ``entity`` or ``self`` are never auto-linked (they are anchors). ``text``
+        is cut at ``max_chars`` (default ``cfg.note_max_chars``; the command layer passes its
+        own byte-checked limit).
         """
         prov = provenance if provenance is not None else Provenance(channel=channel)
         if prov.channel not in CHANNELS:
             raise ValueError(f"unknown memory channel {prov.channel!r}; expected one of {CHANNELS}")
-        body, _ = add_related_links(text[: self.cfg.note_max_chars], links_to)
+        cap = self.cfg.note_max_chars if max_chars is None else max(0, int(max_chars))
+        body, _ = add_related_links(text[:cap], links_to)
         clean_tags = _dedupe([t.strip() for t in tags])
-        vault = self.vault_for(agent_id)
         with self.db.tx():
             note = Note(
                 note_id=self.ids.new("note"),
                 agent_id=agent_id,
-                title=self._unique_title(agent_id, _clean_title((title or "").strip() or self._derive_title(text))),
+                title=self._unique_title(agent_id, clean_title((title or "").strip() or self._derive_title(text))),
                 body=body,
                 created_tick=int(tick),
                 importance=float(importance),
@@ -148,14 +175,78 @@ class MemoryStore:
                 related = self._auto_link_candidates(agent_id, embedding)
                 note.body, _ = add_related_links(note.body, [r.title for r in related])
             note.links = parse_wikilinks(note.body)
-            path = vault.write_note(note)
+            path = self._write_note_file(note, tick)
             try:
                 self._index_note(note, embedding)
                 for target in related:
-                    self._add_backlink(target, note.title)
+                    self._add_backlink(target, note.title, tick)
             except BaseException:
                 path.unlink(missing_ok=True)
                 raise
+        return note
+
+    def update_body(self, note_id: str, body: str, tick: int) -> Note:
+        """Replace a live note's body (the agent-editable region) and re-embed, in one transaction.
+
+        The file is rewritten through the vault and the manifest, the embedding is recomputed over
+        title plus content, ``note_links`` is rebuilt from the body's wikilinks; title, importance,
+        created tick, tags and provenance stay exactly as they are (§5.9). The caller enforces size
+        limits. Returns the updated note.
+        """
+        with self.db.tx():
+            note = self._live_note(note_id)
+            old_path = Path(str(note.path))
+            note.body = body
+            note.links = parse_wikilinks(body)
+            new_path = self._write_note_file(note, tick)
+            if new_path != old_path:
+                self._forget_file(old_path)
+            self.db.execute(
+                "UPDATE notes SET path=?, embedding=? WHERE note_id=?",
+                (str(new_path), pack(self._embed(note.title, body)), note_id),
+            )
+            self._replace_links(note)
+        return note
+
+    def delete_note(self, note_id: str) -> Note:
+        """Archive a live note in the index, drop its outgoing links and manifest row, remove its file.
+
+        Links *to* the note from other notes are left as they are (they dangle, like any link to a
+        title that was never written). The row stays, archived, so lineage queries still see it.
+        """
+        with self.db.tx():
+            note = self._live_note(note_id)
+            self.db.execute("UPDATE notes SET archived=1 WHERE note_id=?", (note_id,))
+            self.db.execute("DELETE FROM note_links WHERE from_note_id=?", (note_id,))
+            self._forget_file(Path(str(note.path)))
+        note.archived = True
+        return note
+
+    def rename_note(self, note_id: str, title: str, tick: int, *, tags: Sequence[str] | None = None) -> Note:
+        """Give a live note a new title (unique per vault) and the canonical file name for it, in one transaction.
+
+        The file is rewritten under ``<slug>-<id tail>.md`` for the new title, the old file and its
+        manifest row go away, the embedding follows the title, ``tags`` replaces the tag list when
+        given. Links other notes hold to the *old* title are left untouched: they now dangle, exactly
+        as they would after a rename in Obsidian without link rewriting.
+        """
+        with self.db.tx():
+            note = self._live_note(note_id)
+            old_path = Path(str(note.path))
+            wanted = clean_title(title)
+            if normalise_title(wanted) != normalise_title(note.title):
+                wanted = self._unique_title(note.agent_id, wanted)
+            note.title = wanted
+            if tags is not None:
+                note.tags = _dedupe([t.strip() for t in tags])
+            note.path = None  # let the vault pick the canonical name for the new title
+            new_path = self._write_note_file(note, tick)
+            if new_path != old_path:
+                self._forget_file(old_path)
+            self.db.execute(
+                "UPDATE notes SET title=?, path=?, tags=?, embedding=? WHERE note_id=?",
+                (note.title, str(new_path), json.dumps(list(note.tags)), pack(self._embed(note.title, note.body)), note_id),
+            )
         return note
 
     def copy_note(
@@ -213,12 +304,59 @@ class MemoryStore:
                 "SELECT MAX(version) AS v FROM self_versions WHERE agent_id=?", (agent_id,)
             )
             version = int(row["v"] or 0) + 1 if row is not None else 1
-            self.vault_for(agent_id).write_self(summary, version, tick)
+            path = self.vault_for(agent_id).write_self(summary, version, tick)
+            self.record_manifest(path, Vault.render_self(summary, version, tick), tick, agent_id=agent_id)
             self.db.execute(
                 "INSERT INTO self_versions(agent_id, version, tick, summary) VALUES(?,?,?,?)",
                 (agent_id, version, int(tick), summary),
             )
         return version, summary
+
+    # --- the manifest (§5.9) ----------------------------------------------------------
+    def record_manifest(
+        self,
+        path: str | Path,
+        text: str,
+        tick: int,
+        *,
+        agent_id: str,
+        note_id: str | None = None,
+        written_by: str = "kernel",
+    ) -> str:
+        """Upsert the ``note_manifest`` row for a file just written with ``text``; returns the content hash."""
+        h = self._manifest_hash(text)
+        self.db.execute(
+            "INSERT INTO note_manifest(path, note_id, agent_id, content_hash, written_by, tick) VALUES(?,?,?,?,?,?) "
+            "ON CONFLICT(path) DO UPDATE SET note_id=excluded.note_id, agent_id=excluded.agent_id, "
+            "content_hash=excluded.content_hash, written_by=excluded.written_by, tick=excluded.tick",
+            (str(path), note_id, agent_id, h, written_by, int(tick)),
+        )
+        return h
+
+    def manifest_for(self, path: str | Path) -> Row | None:
+        """The manifest row for ``path`` (``path, note_id, agent_id, content_hash, written_by, tick``) or None."""
+        return self.db.fetchone(
+            "SELECT path, note_id, agent_id, content_hash, written_by, tick FROM note_manifest WHERE path=?", (str(path),)
+        )
+
+    @staticmethod
+    def _manifest_hash(text: str) -> str:
+        return content_hash(text)
+
+    def _write_note_file(self, note: Note, tick: int) -> Path:
+        """Write ``note`` through the vault and record the manifest row for exactly the bytes written."""
+        path = self.vault_for(note.agent_id).write_note(note)
+        self.record_manifest(path, render_note(note), tick, agent_id=note.agent_id, note_id=note.note_id)
+        return path
+
+    def _forget_file(self, path: Path) -> None:
+        """Drop the manifest row for ``path`` and remove the file (the last step of a delete or a move)."""
+        self.db.execute("DELETE FROM note_manifest WHERE path=?", (str(path),))
+        path.unlink(missing_ok=True)
+
+    def _manifest_matches(self, path: Path, text: str) -> bool:
+        row = self.manifest_for(path)
+        return row is not None and str(row["content_hash"]) == self._manifest_hash(text)
 
     # --- self node --------------------------------------------------------------------
     def get_self(self, agent_id: str) -> str:
@@ -371,7 +509,7 @@ class MemoryStore:
                 tags=[PROBE_TAG],
                 auto_link=False,
             )
-            self._add_backlink(anchor, bridge.title)
+            self._add_backlink(anchor, bridge.title, tick)
             probe = self.remember(
                 agent_id,
                 tick,
@@ -381,7 +519,7 @@ class MemoryStore:
                 tags=[PROBE_TAG],
                 auto_link=False,
             )
-            self._add_backlink(bridge, probe.title)
+            self._add_backlink(bridge, probe.title, tick)
         return probe.note_id, anchor.title
 
     def check_probe(
@@ -464,27 +602,47 @@ class MemoryStore:
                 self.db.execute(
                     "UPDATE notes SET archived=1, path=? WHERE note_id=?", (str(new_path), str(r["note_id"]))
                 )
+            # the manifest follows the files, so a reindex of the graveyard still recognises kernel writes
+            for r in self.db.fetchall("SELECT path FROM note_manifest WHERE agent_id=?", (agent_id,)):
+                old_path = Path(str(r["path"]))
+                try:
+                    new_path = new_dir / old_path.relative_to(old_dir)
+                except ValueError:
+                    continue
+                self.db.execute(
+                    "UPDATE OR REPLACE note_manifest SET path=? WHERE path=?", (str(new_path), str(old_path))
+                )
         return new_dir
 
     def reindex(self, agent_id: str, *, root: Path | None = None, archived: bool = False) -> int:
         """Rebuild the ``notes`` and ``note_links`` rows for ``agent_id`` from its vault files.
 
         ``root`` overrides the vault root (e.g. the graveyard); ``archived`` sets the flag on
-        the rebuilt rows. Returns the number of notes indexed.
+        the rebuilt rows. A file is believed (indexed from its frontmatter) only when a manifest
+        row holds its current content hash; otherwise it is indexed with channel ``operator`` and
+        tag ``operator_edited`` (§5.9), on every reindex until the kernel rewrites it. Returns
+        the number of notes indexed; ``last_reindex_report`` also counts the flagged files.
         """
         vault = Vault(root, agent_id) if root is not None else self.vault_for(agent_id)
-        count = 0
+        indexed = flagged = 0
         with self.db.tx():
             self.db.execute(
                 "DELETE FROM note_links WHERE from_note_id IN (SELECT note_id FROM notes WHERE agent_id=?)",
                 (agent_id,),
             )
             self.db.execute("DELETE FROM notes WHERE agent_id=?", (agent_id,))
-            for note in vault.iter_notes():
+            for path, text in vault.iter_note_files():
+                note = parse_note(text, agent_id=agent_id, path=str(path))
                 note.archived = archived
+                if not self._manifest_matches(path, text):
+                    note.provenance.channel = OPERATOR_CHANNEL
+                    if OPERATOR_TAG not in note.tags:
+                        note.tags.append(OPERATOR_TAG)
+                    flagged += 1
                 self._index_note(note)
-                count += 1
-        return count
+                indexed += 1
+        self.last_reindex_report = {"indexed": indexed, "operator_edited": flagged}
+        return indexed
 
     # --- internals --------------------------------------------------------------------
     def _embed(self, title: str, body: str) -> list[float]:
@@ -545,18 +703,30 @@ class MemoryStore:
         scored.sort(key=lambda t: (t[0], t[1]))
         return [self._load(r) for _, _, r in scored[: self.cfg.auto_link_k]]
 
-    def _add_backlink(self, target: Note, title: str) -> bool:
+    def _add_backlink(self, target: Note, title: str, tick: int) -> bool:
         """Add ``[[title]]`` under ``target``'s ``## Related`` section and index the link; False if present."""
         new_body, added = add_related_links(target.body, [title])
         if not added:
             return False
         target.body = new_body
         target.links = parse_wikilinks(new_body)
-        self.vault_for(target.agent_id).write_note(target)
+        self._write_note_file(target, tick)
         # the index only ever holds links the file itself expresses
         for link in target.links:
             self.db.execute("INSERT OR IGNORE INTO note_links(from_note_id, to_title) VALUES(?,?)", (target.note_id, link))
         return True
+
+    def _replace_links(self, note: Note) -> None:
+        """Make ``note_links`` for ``note`` exactly the wikilinks its body holds (caller holds the transaction)."""
+        self.db.execute("DELETE FROM note_links WHERE from_note_id=?", (note.note_id,))
+        for link in note.links:
+            self.db.execute("INSERT OR IGNORE INTO note_links(from_note_id, to_title) VALUES(?,?)", (note.note_id, link))
+
+    def _live_note(self, note_id: str) -> Note:
+        note = self.get_note(note_id)
+        if note is None or note.archived:
+            raise ValueError(f"no live note {note_id!r}")
+        return note
 
     def _unique_title(self, agent_id: str, title: str) -> str:
         rows = self.db.fetchall("SELECT title FROM notes WHERE agent_id=? AND archived=0", (agent_id,))
@@ -580,11 +750,38 @@ class MemoryStore:
         return None
 
     def _load(self, row: Row) -> Note:
-        """A full Note from an index row: the file supplies the content, the row the flags."""
+        """A full Note from an index row: the row is authoritative for title, flags and provenance (§5.9),
+        the file supplies only the body (empty when the file is gone, e.g. after ``delete_note``)."""
         path = Path(str(row["path"]))
-        note = parse_note(path.read_text(encoding="utf-8"), agent_id=str(row["agent_id"]), path=str(path))
-        note.archived = bool(row["archived"])
-        return note
+        try:
+            _, rest = split_frontmatter(path.read_text(encoding="utf-8"))
+        except OSError:
+            body = ""
+        else:
+            body = rest[:-1] if rest.endswith("\n") else rest
+        gen = row["origin_generation"]
+        transfer = row["transfer_tick"]
+        return Note(
+            note_id=str(row["note_id"]),
+            agent_id=str(row["agent_id"]),
+            title=str(row["title"]),
+            body=body,
+            created_tick=int(row["created_tick"]),
+            importance=float(row["importance"]),
+            tags=_row_tag_list(row),
+            links=parse_wikilinks(body),
+            provenance=Provenance(
+                source_agent_id=None if row["source_agent_id"] is None else str(row["source_agent_id"]),
+                hop=int(row["hop"]),
+                origin_note_id=None if row["origin_note_id"] is None else str(row["origin_note_id"]),
+                origin_generation=None if gen is None else int(gen),
+                channel=str(row["channel"]),
+                transfer_tick=None if transfer is None else int(transfer),
+                path_agents=_row_json_list(row["path_agents"]),
+            ),
+            archived=bool(row["archived"]),
+            path=str(path),
+        )
 
     def _light_notes(self, agent_id: str, by_id: dict[str, Row]) -> list[Note]:
         """Body-less Notes carrying titles, tags and links from the index (no file reads)."""
@@ -622,12 +819,20 @@ class MemoryStore:
         return title or DEFAULT_TITLE
 
 
-def _row_tags(row: Row) -> set[str]:
+def _row_json_list(raw: object) -> list[str]:
     try:
-        tags = json.loads(row["tags"] or "[]")
+        items = json.loads(str(raw) if raw is not None else "[]")
     except (TypeError, ValueError):
-        return set()
-    return {str(t) for t in tags} if isinstance(tags, list) else set()
+        return []
+    return [str(t) for t in items] if isinstance(items, list) else []
+
+
+def _row_tag_list(row: Row) -> list[str]:
+    return _row_json_list(row["tags"])
+
+
+def _row_tags(row: Row) -> set[str]:
+    return set(_row_tag_list(row))
 
 
 def _dedupe(items: Sequence[str]) -> list[str]:

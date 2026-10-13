@@ -73,19 +73,28 @@ class Vault:
         p = Path(path)
         return parse_note(p.read_text(encoding="utf-8"), agent_id=self.agent_id, path=str(p))
 
-    def iter_notes(self) -> Iterator[Note]:
-        """Every note file in the vault, in a stable (name-sorted) order."""
+    def iter_note_files(self) -> Iterator[tuple[Path, str]]:
+        """Every note file with its exact text, in a stable (name-sorted) order (what ``reindex`` hashes)."""
         if not self.notes_dir.is_dir():
             return
         for p in sorted(self.notes_dir.glob("*.md")):
             if p.is_file():
-                yield self.read_note(p)
+                yield p, p.read_text(encoding="utf-8")
+
+    def iter_notes(self) -> Iterator[Note]:
+        """Every note file in the vault, in a stable (name-sorted) order."""
+        for p, text in self.iter_note_files():
+            yield parse_note(text, agent_id=self.agent_id, path=str(p))
 
     # --- self node --------------------------------------------------------------------
+    @staticmethod
+    def render_self(summary: str, version: int, tick: int) -> str:
+        """The exact text :meth:`write_self` writes (so the store can hash it without reading it back)."""
+        return render_frontmatter({"version": int(version), "tick": int(tick)}) + summary + "\n"
+
     def write_self(self, summary: str, version: int, tick: int) -> Path:
         self.ensure()
-        text = render_frontmatter({"version": int(version), "tick": int(tick)}) + summary + "\n"
-        self.self_path.write_text(text, encoding="utf-8")
+        self.self_path.write_text(self.render_self(summary, version, tick), encoding="utf-8")
         return self.self_path
 
     def read_self(self) -> tuple[str, int]:

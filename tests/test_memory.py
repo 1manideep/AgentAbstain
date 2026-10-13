@@ -556,8 +556,8 @@ def test_retrieve_with_stats_and_notes_by_channel(tmp_path: Path) -> None:
     assert stats["channel_mix"] == {"observed": 3}
     assert stats["mean_age_ticks"] == pytest.approx((20 + 19 + 18) / 3)
     assert s.retrieve("ag_1", query, 30) == got
-    assert s.notes_by_channel(["ag_1"]) == {"observed": 3, "gossip": 1, "inherited": 0, "chronicle": 0, "tracer": 0}
-    assert s.notes_by_channel([]) == {c: 0 for c in ("observed", "gossip", "inherited", "chronicle", "tracer")}
+    assert s.notes_by_channel(["ag_1"]) == {"observed": 3, "gossip": 1, "inherited": 0, "chronicle": 0, "tracer": 0, "operator": 0}
+    assert s.notes_by_channel([]) == {c: 0 for c in ("observed", "gossip", "inherited", "chronicle", "tracer", "operator")}
     empty, estats = s.retrieve_with_stats("ag_none", query, 30)
     assert empty == [] and estats == {"hop_hist": {0: 0, 1: 0, 2: 0}, "mean_age_ticks": 0.0, "channel_mix": {}, "entry_ids": []}
     s.cfg = MemoryConfig(entry_k=2, mode="vector")
@@ -602,3 +602,76 @@ def test_probe_recall_depends_on_mode(tmp_path: Path, mode: str, expected: bool)
     # Probes and bridges are never anchors: a later probe still hangs off A.
     pid2, query2 = s.plant_probe("ag_1", 10)
     assert query2 == a.title and pid2 != pid and s.get_note(a.note_id).links == [bridge_title, "Bridge 10"]
+
+
+# --- v3: the manifest and the kernel-authoritative index (MEMORY_EVOLUTION §5.9) -------------
+
+
+def _manifest(store: MemoryStore) -> dict[str, tuple]:
+    rows = store.db.fetchall("SELECT path, note_id, agent_id, content_hash, written_by, tick FROM note_manifest ORDER BY path")
+    return {r["path"]: (r["note_id"], r["agent_id"], r["content_hash"], r["written_by"], r["tick"]) for r in rows}
+
+
+def test_remember_copy_note_and_revise_self_write_manifest_rows(store: MemoryStore) -> None:
+    from void.memory.store import content_hash
+
+    a = store.remember("ag_1", 3, "eastern node thin little food", title="Thin")
+    b = store.remember("ag_1", 4, "eastern node thin little food again", title="Thin again")  # auto-links into A
+    assert b.links == ["Thin"] and store.get_note(a.note_id).links == ["Thin again"]
+    copy = store.copy_note(a, "ag_2", 7, provenance=Provenance("ag_1", 1, a.note_id, None, "gossip", 7, ["ag_1"]))
+    entity = store.ensure_entity("ag_2", "Node n3", 8, "stub")
+    version, _ = store.revise_self("ag_1", 9, "I am Ada.")
+    rows = _manifest(store)
+    self_path = str(store.vault_for("ag_1").self_path)
+    assert set(rows) == {a.path, b.path, copy.path, entity.path, self_path}
+    # the backlink rewrite re-recorded A at tick 4; every row holds the hash of the bytes on disk, written by the kernel
+    assert rows[a.path] == (a.note_id, "ag_1", content_hash(Path(a.path).read_text()), "kernel", 4)
+    assert rows[b.path][4] == 4 and rows[copy.path] == (copy.note_id, "ag_2", content_hash(Path(copy.path).read_text()), "kernel", 7)
+    assert rows[entity.path][:2] == (entity.note_id, "ag_2") and rows[entity.path][4] == 8
+    assert rows[self_path] == (None, "ag_1", content_hash(Path(self_path).read_text()), "kernel", 9) and version == 1
+    for path, (_, _, h, _, _) in rows.items():
+        assert content_hash(Path(path).read_text()) == h
+    # a second self revision replaces the row (one path, one row)
+    store.revise_self("ag_1", 12, "I trade.")
+    assert _manifest(store)[self_path][4] == 12 and len(_manifest(store)) == 5
+    assert store.manifest_for("/nowhere.md") is None
+
+
+def test_update_body_rename_and_delete_keep_provenance_and_the_manifest_in_step(store: MemoryStore) -> None:
+    from void.memory.store import content_hash
+
+    prov = Provenance("ag_9", 2, "note_origin", 1, "gossip", 5, ["ag_9"])
+    note = store.remember("ag_1", 5, "Bao said [[North node]] is rich", title="Rumour", importance=0.8, tags=["claim"],
+                          provenance=prov, auto_link=False)
+    before = tuple(store.db.fetchone("SELECT * FROM notes WHERE note_id=?", (note.note_id,)))
+    updated = store.update_body(note.note_id, "Bao said [[East node]] is poor", 11)
+    assert updated.body == "Bao said [[East node]] is poor" and updated.links == ["East node"] and updated.path == note.path
+    row = store.db.fetchone("SELECT * FROM notes WHERE note_id=?", (note.note_id,))
+    assert tuple(row)[:7] == before[:7] and row["channel"] == "gossip" and row["source_agent_id"] == "ag_9" and row["hop"] == 2
+    assert row["embedding"] != before[7]
+    assert [r["to_title"] for r in store.db.fetchall("SELECT to_title FROM note_links WHERE from_note_id=?", (note.note_id,))] == ["East node"]
+    assert parse_note(Path(note.path).read_text()).provenance == prov
+    assert _manifest(store)[note.path][2:] == (content_hash(Path(note.path).read_text()), "kernel", 11)
+
+    renamed = store.rename_note(note.note_id, "Checked rumour", 12, tags=["claim", "checked"])
+    assert renamed.title == "Checked rumour" and renamed.tags == ["claim", "checked"] and renamed.body == updated.body
+    assert Path(renamed.path).name == f"checked-rumour-{note.note_id[-6:]}.md" and not Path(note.path).exists()
+    assert set(_manifest(store)) == {renamed.path} and _manifest(store)[renamed.path][4] == 12
+    row = store.db.fetchone("SELECT title, path, tags, channel, importance, created_tick FROM notes WHERE note_id=?", (note.note_id,))
+    assert tuple(row) == ("Checked rumour", renamed.path, '["claim", "checked"]', "gossip", 0.8, 5)
+    # a title another live note holds is made unique, as in remember
+    other = store.remember("ag_1", 13, "x", title="Taken", auto_link=False)
+    assert store.rename_note(note.note_id, "taken", 14).title == "taken-2" and other.title == "Taken"
+    assert store.reindex("ag_1") == 2 and store.last_reindex_report == {"indexed": 2, "operator_edited": 0}
+    assert store.get_note(note.note_id).provenance == prov
+
+    gone = store.delete_note(note.note_id)
+    assert gone.archived and not Path(gone.path).exists() and set(_manifest(store)) == {other.path}
+    assert store.list_notes("ag_1") == [store.get_note(other.note_id)]
+    archived = store.get_note(note.note_id)
+    assert archived is not None and archived.archived and archived.body == "" and archived.provenance == prov
+    assert store.db.fetchall("SELECT * FROM note_links WHERE from_note_id=?", (note.note_id,)) == []
+    with pytest.raises(ValueError):
+        store.update_body(note.note_id, "zombie", 15)
+    with pytest.raises(ValueError):
+        store.delete_note("note_unknown")
