@@ -6,6 +6,7 @@ extends: exp_mem_e0_base.yaml
 run:
   name: exp_mem_dep
 memory:
+  max_retrieved: 4         # as in exp_mem_e0_base.yaml, stated here so the gate's retrieval size is explicit
   policy:
     enabled: false
   maintenance:

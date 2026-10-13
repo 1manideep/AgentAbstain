@@ -324,7 +324,7 @@ class MemoryConfig(StrictModel):
     entry_k: int = 4
     hops: int = 2
     hop_decay: float = 0.6
-    max_retrieved: int = 8
+    max_retrieved: int = 8   # notes retrieved into each decision prompt (the retrieval-size knob; E0 uses 4)
     mode: Literal["graph", "vector"] = "graph"
     inherit_top_k: int = 3
     self_max_words: int = 60
@@ -497,6 +497,8 @@ class VoidConfig(StrictModel):
             raise ValueError("memory.exam.kinds includes 'claim' but world.claim_feedback_p is 0 (nothing to ask about)")
         if m.index_boost < 0:
             raise ValueError("memory.index_boost must be >= 0")
+        if m.max_retrieved < 1:
+            raise ValueError("memory.max_retrieved must be >= 1 (switch retrieval off with memory.enabled: false)")
         return self
 
     def warnings(self) -> list[str]:
