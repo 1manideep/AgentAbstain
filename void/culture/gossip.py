@@ -44,7 +44,9 @@ __all__ = [
 
 GOSSIP_PARAPHRASE_DOWNGRADED = "gossip_paraphrase_downgraded"
 GOSSIP_TAG = "gossip"
-EXCLUDED_TAGS = frozenset({"self", "entity", "probe"})
+# Index files are an agent's own structure (MEMORY_EVOLUTION §5.4): practice travels through the policy file,
+# so neither gossip nor inheritance copies them.
+EXCLUDED_TAGS = frozenset({"self", "entity", "probe", "index"})
 LENGTH_TOLERANCE = 0.30
 
 Paraphraser = Callable[[str, str, int], Awaitable[str | None]]

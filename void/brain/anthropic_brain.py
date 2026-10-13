@@ -153,3 +153,46 @@ class AnthropicBrain:
         text = "".join(getattr(b, "text", "") for b in getattr(resp, "content", []) if getattr(b, "type", "") == "text")
         return BrainResult(None, self._usage(resp), int((time.perf_counter() - t0) * 1000), str(getattr(resp, "stop_reason", "")),
                            text, getattr(resp, "_request_id", None), model=str(getattr(resp, "model", self.tcfg.model)))
+
+    async def complete_json(self, prompt: str, *, schema: dict[str, Any], system: str | None = None,
+                            max_tokens: int = 1024) -> BrainResult:
+        """One structured call constrained by ``schema`` (already strict); the raw JSON text comes back in
+        ``raw_text`` with ``decision=None`` and the caller parses it. Same request shape as :meth:`decide`
+        (refusal fallbacks, effort, cache breakpoint on the system prompt), same error classes, usage read
+        from the response; a refusal is reported as ``refusal:<category>``. Never raises."""
+        output_config: dict[str, Any] = {"format": {"type": "json_schema", "schema": schema}}
+        if self.tcfg.effort:
+            output_config["effort"] = self.tcfg.effort
+        req: dict[str, Any] = {
+            "model": self.tcfg.model,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+            "output_config": output_config,
+        }
+        if system:
+            req["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        t0 = time.perf_counter()
+        async with self.semaphore:
+            try:
+                resp = await asyncio.wait_for(self._call(req), timeout=self.cfg.server.call_timeout_seconds)
+            except (TimeoutError, anthropic.APITimeoutError) as e:
+                return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"timeout: {e}"[:300])
+            except anthropic.RateLimitError as e:
+                return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"rate_limit: {e}")
+            except anthropic.APIStatusError as e:
+                return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"api_{e.status_code}: {e.message}")
+            except anthropic.APIConnectionError as e:
+                return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"connection: {e}")
+            except Exception as e:
+                return BrainResult(None, Usage(), int((time.perf_counter() - t0) * 1000), "error", "", error=f"client: {type(e).__name__}: {e}"[:300])
+        latency = int((time.perf_counter() - t0) * 1000)
+        usage = self._usage(resp)
+        stop = str(getattr(resp, "stop_reason", "") or "")
+        request_id = getattr(resp, "_request_id", None)
+        model = str(getattr(resp, "model", self.tcfg.model))
+        text = "".join(getattr(b, "text", "") for b in getattr(resp, "content", []) if getattr(b, "type", "") == "text")
+        if stop == "refusal":
+            details = getattr(resp, "stop_details", None)
+            cat = getattr(details, "category", None) if details is not None else None
+            return BrainResult(None, usage, latency, stop, text, request_id, error=f"refusal:{cat}", model=model)
+        return BrainResult(None, usage, latency, stop, text, request_id, model=model)

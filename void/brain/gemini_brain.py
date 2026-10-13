@@ -214,3 +214,23 @@ class GeminiBrain:
         return BrainResult(None, self._usage(resp), int((time.perf_counter() - t0) * 1000), stop, self._text(resp),
                            getattr(resp, "response_id", None), error=(f"refusal:{category}" if stop == "refusal" else None),
                            model=str(getattr(resp, "model_version", None) or self.tcfg.model))
+
+    async def complete_json(self, prompt: str, *, schema: dict[str, Any], system: str | None = None,
+                            max_tokens: int = 1024) -> BrainResult:
+        """One ``response_json_schema``-constrained call (the maintenance step); the raw JSON text comes back in
+        ``raw_text`` with ``decision=None`` and the caller parses it. ``system`` goes in ``system_instruction``;
+        usage, finish reasons and error classes are those of :meth:`decide`; a refusal or block is reported as
+        ``refusal:<category>``. Never raises."""
+        t0 = time.perf_counter()
+        async with self.semaphore:
+            try:
+                resp = await asyncio.wait_for(
+                    self._call(prompt, None, max_tokens=max_tokens, json_schema=schema, system=system),
+                    timeout=self.cfg.server.call_timeout_seconds,
+                )
+            except Exception as e:
+                return self._errored(t0, e)
+        stop, category = self._finish(resp)
+        return BrainResult(None, self._usage(resp), int((time.perf_counter() - t0) * 1000), stop, self._text(resp),
+                           getattr(resp, "response_id", None), error=(f"refusal:{category}" if stop == "refusal" else None),
+                           model=str(getattr(resp, "model_version", None) or self.tcfg.model))
