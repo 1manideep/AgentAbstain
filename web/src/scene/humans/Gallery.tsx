@@ -4,8 +4,9 @@
  *
  *   ?clip=walk      force one clip
  *   ?still=1        freeze at t = 0.4 s (`?t=1.2` picks the time)
- *   ?moves=1        one preset (`?preset=3`) seven times, one per clip, each
- *                   frozen at a representative moment (the "moves" strip)
+ *   ?moves=1        one preset (`?preset=3`) once per clip, each frozen at a
+ *                   representative moment (the "moves" strip): the eight base
+ *                   states on a raised back row, the thirteen gestures in front
  *   ?tier=4fd1c5    trim colour (hex without #)
  *
  * Query parameters may sit before or after the hash.
@@ -16,6 +17,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { AnimationMixer, Group, LoopOnce, type AnimationAction } from 'three'
 import { gpuProfile } from '../gpu'
 import { buildClips, CLIP_DURATION, CLIP_LOOPS, CLIP_NAMES, type ClipName } from './clips'
+import { BACK_ROW_Y, BACK_ROW_Z, layoutFor, type Params } from './galleryLayout'
 import { buildHumanoid, type Humanoid } from './humanoid'
 import { PRESETS } from './presets'
 
@@ -29,14 +31,6 @@ const MOVE_T: Record<ClipName, number> = {
   shake: 0.4, cheer: 0.55, slump: 0.9, wave: 0.6,
 }
 
-interface Params {
-  clip: ClipName | null
-  still: boolean
-  t: number
-  moves: boolean
-  preset: number
-  tier: string | null
-}
 
 function isClip(v: string | null): v is ClipName {
   return v !== null && (CLIP_NAMES as readonly string[]).includes(v)
@@ -75,7 +69,7 @@ interface Entry {
   yaw: number
 }
 
-function makeEntry(presetIdx: number, x: number, label: string, fixed: ClipName | null, freezeT: number, tier: string): Entry {
+function makeEntry(presetIdx: number, x: number, label: string, fixed: ClipName | null, freezeT: number, tier: string, y = 0, z = 0): Entry {
   const preset = PRESETS[presetIdx]!
   const h = buildHumanoid(preset)
   const clips = buildClips(h.bones, preset)
@@ -91,7 +85,7 @@ function makeEntry(presetIdx: number, x: number, label: string, fixed: ClipName 
   }
   h.materials.trim.color.set(tier)
   h.materials.trim.emissive.set(tier)
-  h.root.position.set(x, 0, 0)
+  h.root.position.set(x, y, z)
   return { label, x, h, mixer, actions, fixed, freezeT, current: null, frozen: false, yaw: 0 }
 }
 
@@ -112,28 +106,6 @@ function play(e: Entry, clip: ClipName, fade: number): void {
   e.current = clip
 }
 
-interface Slot {
-  label: string
-  x: number
-  height: number
-}
-
-/** Static layout: positions, labels and heights derive from the params alone. */
-function layoutFor(params: Params): { spacing: number; width: number; slots: Slot[] } {
-  const slots: Slot[] = []
-  if (params.moves) {
-    const spacing = 2.25
-    const n = CLIP_NAMES.length
-    const h = PRESETS[params.preset]!.height
-    for (let i = 0; i < n; i++) slots.push({ label: CLIP_NAMES[i]!, x: (i - (n - 1) / 2) * spacing, height: h })
-    return { spacing, width: spacing * (n - 1) + 3.2, slots }
-  }
-  const spacing = 1.38
-  const n = PRESETS.length
-  for (let i = 0; i < n; i++) slots.push({ label: PRESETS[i]!.name, x: (i - (n - 1) / 2) * spacing, height: PRESETS[i]!.height })
-  return { spacing, width: spacing * (n - 1) + 2.2, slots }
-}
-
 function Characters({ params }: { params: Params }) {
   const group = useMemo(() => new Group(), [])
   const entries = useRef<Entry[]>([])
@@ -145,8 +117,8 @@ function Characters({ params }: { params: Params }) {
     layout.slots.forEach((slot, i) => {
       const tier = params.tier ?? TIERS[i % TIERS.length]!
       if (params.moves) {
-        const clip = CLIP_NAMES[i]!
-        list.push(makeEntry(params.preset, slot.x, clip, clip, MOVE_T[clip], tier))
+        const clip = slot.label as ClipName
+        list.push(makeEntry(params.preset, slot.x, clip, clip, MOVE_T[clip], tier, slot.y, slot.z))
       } else list.push(makeEntry(i, slot.x, slot.label, null, params.t, tier))
     })
     for (const e of list) group.add(e.h.root)
@@ -167,10 +139,16 @@ function Characters({ params }: { params: Params }) {
     const fov = 30
     const half = layout.width / 2
     const dist = half / (Math.tan((fov * Math.PI) / 360) * aspect) + 1.5
-    camera.position.set(0, 1.9, Math.max(6, dist))
-    camera.lookAt(0, 0.95, 0)
+    if (params.moves) {
+      // two rows: aim between them, a little above the front row's heads so the platform row reads clearly
+      camera.position.set(0, 2.7, Math.max(6, dist))
+      camera.lookAt(0, 2.25, BACK_ROW_Z / 2)
+    } else {
+      camera.position.set(0, 1.9, Math.max(6, dist))
+      camera.lookAt(0, 0.95, 0)
+    }
     camera.updateProjectionMatrix()
-  }, [camera, size.width, size.height, layout])
+  }, [camera, size.width, size.height, layout, params.moves])
 
   useFrame((state, delta) => {
     const dt = Math.min(0.1, delta)
@@ -201,12 +179,18 @@ function Characters({ params }: { params: Params }) {
   return (
     <group>
       <primitive object={group} />
+      {params.moves && (
+        <mesh position={[0, BACK_ROW_Y / 2, BACK_ROW_Z]}>
+          <boxGeometry args={[layout.width, BACK_ROW_Y, 1.9]} />
+          <meshStandardMaterial color="#535c74" roughness={0.9} />
+        </mesh>
+      )}
       {layout.slots.map((slot) => (
         <group key={slot.label + slot.x}>
-          <Text font={FONT_URL} fontSize={0.2} color="#eef1f8" anchorX="center" anchorY="bottom" outlineWidth={0.012} outlineColor="#0a0d14" position={[slot.x, slot.height + 0.32, 0]}>
-            {slot.label}
+          <Text font={FONT_URL} fontSize={0.2} color="#eef1f8" anchorX="center" anchorY="bottom" outlineWidth={0.012} outlineColor="#0a0d14" position={[slot.x, slot.y + slot.height + 0.32, slot.z]}>
+            {slot.label.replace('_', ' ')}
           </Text>
-          <mesh position={[slot.x, 0.005, 0.05]} rotation-x={-Math.PI / 2} renderOrder={1}>
+          <mesh position={[slot.x, slot.y + 0.005, slot.z + 0.05]} rotation-x={-Math.PI / 2} renderOrder={1}>
             <circleGeometry args={[0.55, 20]} />
             <meshBasicMaterial color="#000000" transparent opacity={0.28} depthWrite={false} />
           </mesh>

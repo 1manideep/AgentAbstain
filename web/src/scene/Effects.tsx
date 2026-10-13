@@ -33,15 +33,18 @@ import type { EventMsg } from '../protocol'
 import { isEventKind } from '../protocol'
 import { history } from '../state/history'
 import { useStore } from '../state/store'
-import { BUBBLE_FONT, BUBBLE_LINE_HEIGHT, BUBBLE_WIDTH, clampBubbleText } from './bubbleText'
+import { BUBBLE_LINE_HEIGHT, clampBubbleText, clampNoteText } from './bubbleText'
+import { BUBBLE_MS, bubbleStyle, MARK_MS, NOTE_MS, type BubbleKind } from './bubbleStyle'
 import { fxQueue } from './fx'
 import { nodePulse } from './Nodes'
 import { mirror, perSlot, registerSystem, SYS_EFFECTS, type FrameCtx } from './sceneState'
 
 export const FONT_URL = '/fonts/InstrumentSans-Regular.ttf'
-const BUBBLE_MS = 3000
 const FADE_MS = 300
-const MAX_VISIBLE_BUBBLES = 4
+const MAX_VISIBLE_BUBBLES = 6
+const MAINTENANCE_MS = 3000
+/** A mark (✗) sits beside the head, offset along the camera's right vector, so it never covers a speech bubble. */
+const MARK_SIDE = 0.75
 const BUBBLE_MAX_DIST = 35
 const SPEAK_COOLDOWN_MS = 1500
 const BUBBLE_PAD = 0.14
@@ -59,6 +62,10 @@ interface TroikaText {
 
 interface Bubble {
   agentId: string
+  kind: BubbleKind
+  /** The kernel recorded at least one false claim in this speech. */
+  lied: boolean
+  ttlMs: number
   text: string
   born: number
   /** bumped when the text changes so the memoised view re-renders */
@@ -127,8 +134,10 @@ const arcs: Arc[] = []
 const bursts: Burst[] = []
 const dummy = new Object3D()
 const viewDir = new Vector3()
+const camRight = new Vector3()
 
-const BubbleView = memo(function BubbleView({ bubble, text }: { bubble: Bubble; text: string }) {
+const BubbleView = memo(function BubbleView({ bubble, text, kind }: { bubble: Bubble; text: string; kind: BubbleKind }) {
+  const style = bubbleStyle(kind)
   const setGroup = useCallback(
     (g: Group | null) => {
       bubble.group = g
@@ -150,13 +159,13 @@ const BubbleView = memo(function BubbleView({ bubble, text }: { bubble: Bubble; 
     <group ref={setGroup} visible={false}>
       <Text
         font={FONT_URL}
-        fontSize={BUBBLE_FONT}
-        maxWidth={BUBBLE_WIDTH}
+        fontSize={style.fontSize}
+        maxWidth={style.maxWidth}
         lineHeight={BUBBLE_LINE_HEIGHT}
         textAlign="center"
         anchorX="center"
         anchorY="middle"
-        color="#f3f6ff"
+        color={style.ink}
         fillOpacity={0}
         outlineWidth={0}
         onSync={onSync}
@@ -217,7 +226,7 @@ const HoverTag = memo(function HoverTag() {
 })
 
 /** Rounded-rectangle backdrop, one instance per visible bubble, per-instance alpha. */
-function makeBackdrop(capacity: number): { mesh: InstancedMesh; alpha: InstancedBufferAttribute } {
+function makeBackdrop(capacity: number): { mesh: InstancedMesh; alpha: InstancedBufferAttribute; tint: InstancedBufferAttribute } {
   const w = 1
   const h = 1
   const r = 0.16
@@ -235,25 +244,29 @@ function makeBackdrop(capacity: number): { mesh: InstancedMesh; alpha: Instanced
   const alpha = new InstancedBufferAttribute(new Float32Array(capacity), 1)
   alpha.setUsage(DynamicDrawUsage)
   geom.setAttribute('aAlpha', alpha)
+  const tint = new InstancedBufferAttribute(new Float32Array(capacity * 3), 3)
+  tint.setUsage(DynamicDrawUsage)
+  geom.setAttribute('aTint', tint)
   const mat = new ShaderMaterial({
     transparent: true,
     depthWrite: false,
     vertexShader: /* glsl */ `
-      attribute float aAlpha; varying float vAlpha;
+      attribute float aAlpha; attribute vec3 aTint; varying float vAlpha; varying vec3 vTint;
       void main() {
         vAlpha = aAlpha;
+        vTint = aTint;
         gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
       }`,
     fragmentShader: /* glsl */ `
-      varying float vAlpha;
-      void main() { gl_FragColor = vec4(0.04, 0.06, 0.1, 0.82 * vAlpha); }`,
+      varying float vAlpha; varying vec3 vTint;
+      void main() { gl_FragColor = vec4(vTint, vAlpha); }`,
   })
   const mesh = new InstancedMesh(geom, mat, capacity)
   mesh.instanceMatrix.setUsage(DynamicDrawUsage)
   mesh.frustumCulled = false
   mesh.count = 0
   mesh.renderOrder = 11
-  return { mesh, alpha }
+  return { mesh, alpha, tint }
 }
 
 export function Effects() {
@@ -342,6 +355,25 @@ export function Effects() {
       bursts.push({ x, y, z, t0: now, dur, r: c.r, g: c.g, b: c.b, spread, lift, gravity })
     }
 
+    /** One bubble per (agent, kind): refresh it, or add one; true when the rendered set must change. */
+    const upsertBubble = (agentId: string, kind: BubbleKind, text: string, ttlMs: number, now: number, lied: boolean): boolean => {
+      const mine = bubbleState.list.find((b) => b.agentId === agentId && b.kind === kind)
+      if (mine) {
+        mine.born = now
+        mine.ttlMs = ttlMs
+        const changed = mine.text !== text || mine.lied !== lied
+        if (changed) {
+          mine.text = text
+          mine.lied = lied
+          mine.rev++
+          mine.w = mine.h = 0
+        }
+        return changed
+      }
+      bubbleState.list.push({ agentId, kind, lied, ttlMs, text, born: now, rev: 0, group: null, troika: null, w: 0, h: 0, dist: 0, x: 0, y: 0, z: 0, ok: false })
+      return true
+    }
+
     const fire = (e: EventMsg, ctx: FrameCtx) => {
       const { now } = ctx
       if (isEventKind(e, 'talk')) {
@@ -352,20 +384,30 @@ export function Effects() {
         const last = bubbleState.lastSpoke.get(speaker)
         if (last !== undefined && now - last < SPEAK_COOLDOWN_MS / 1000) return
         bubbleState.lastSpoke.set(speaker, now)
-        const text = clampBubbleText(e.payload.text)
-        const mine = bubbleState.list.find((b) => b.agentId === speaker)
-        if (mine) {
-          mine.born = now
-          if (mine.text !== text) {
-            mine.text = text
-            mine.rev++
-            mine.w = mine.h = 0
-            dirtyBubbles = true
-          }
-          return
+        const lied = Number(e.payload.claims_false ?? 0) > 0
+        if (upsertBubble(speaker, 'speech', clampBubbleText(e.payload.text), BUBBLE_MS, now, lied)) dirtyBubbles = true
+        return
+      }
+      if (e.kind === 'remember' || e.kind === 'revise_self' || e.kind === 'maintenance') {
+        const p = e.payload as Record<string, unknown>
+        const id = (typeof p.agent_id === 'string' && p.agent_id) || e.agent_id
+        if (!id) return
+        let text: string
+        let ttl = NOTE_MS
+        if (e.kind === 'remember') text = clampNoteText(p.title)
+        else if (e.kind === 'revise_self') text = clampNoteText('self')
+        else {
+          const n = Number(p.commands ?? p.ok ?? 0)
+          text = `✎ tidying memory (${Number.isFinite(n) ? n : 0} ${n === 1 ? 'change' : 'changes'})`
+          ttl = MAINTENANCE_MS
         }
-        bubbleState.list.push({ agentId: speaker, text, born: now, rev: 0, group: null, troika: null, w: 0, h: 0, dist: 0, x: 0, y: 0, z: 0, ok: false })
-        dirtyBubbles = true
+        if (upsertBubble(id, 'note', text, ttl, now, false)) dirtyBubbles = true
+        return
+      }
+      if (e.kind === 'claim_feedback') {
+        const p = e.payload as Record<string, unknown>
+        const id = (typeof p.listener_id === 'string' && p.listener_id) || e.agent_id
+        if (id && upsertBubble(id, 'mark', '✗', MARK_MS, now, false)) dirtyBubbles = true
         return
       }
       if (isEventKind(e, 'transfer')) {
@@ -429,7 +471,7 @@ export function Effects() {
       const list = bubbleState.list
       for (let i = list.length - 1; i >= 0; i--) {
         const b = list[i]!
-        if ((now - b.born) * 1000 > BUBBLE_MS) {
+        if ((now - b.born) * 1000 > b.ttlMs) {
           list.splice(i, 1)
           dirtyBubbles = true
           continue
@@ -440,9 +482,15 @@ export function Effects() {
           b.dist = Infinity
           continue
         }
+        const st = bubbleStyle(b.kind, b.lied)
         b.x = p.x
-        b.y = p.y + 2.9
+        b.y = p.y + st.lift
         b.z = p.z
+        if (b.kind === 'mark') {
+          camRight.set(1, 0, 0).applyQuaternion(camera.quaternion)
+          b.x += camRight.x * MARK_SIDE
+          b.z += camRight.z * MARK_SIDE
+        }
         const dx = camera.position.x - b.x
         const dy = camera.position.y - b.y
         const dz = camera.position.z - b.z
@@ -453,6 +501,7 @@ export function Effects() {
       for (const b of list) if (b.group) b.group.visible = false
       let shown = 0
       const alphaArr = backdrop.alpha.array as Float32Array
+      const tintArr = backdrop.tint.array as Float32Array
       if (camera) {
         while (shown < MAX_VISIBLE_BUBBLES) {
           let best: Bubble | null = null
@@ -462,25 +511,32 @@ export function Effects() {
           }
           if (!best) break
           const b = best
+          const st = bubbleStyle(b.kind, b.lied)
           const age = (now - b.born) * 1000
           const fin = Math.min(1, age / FADE_MS)
-          const fout = age > BUBBLE_MS - FADE_MS ? (BUBBLE_MS - age) / FADE_MS : 1
+          const fout = age > b.ttlMs - FADE_MS ? (b.ttlMs - age) / FADE_MS : 1
           const o = Math.max(0, Math.min(fin, fout))
           const g = b.group!
           g.visible = true
           g.position.set(b.x, b.y + Math.min(1, age / 600) * 0.12, b.z)
           g.quaternion.copy(camera.quaternion)
+          // a mark pops in: overshoot then settle (no bounce under reduced motion)
+          const pop = b.kind === 'mark' && !ctx.reducedMotion ? 0.6 + 0.4 * Math.min(1, age / 180) + 0.25 * Math.max(0, 1 - Math.abs(age - 180) / 160) : 1
+          g.scale.setScalar(pop)
           if (b.troika) b.troika.fillOpacity = o
           // backdrop: same billboard, slightly behind the text along the view ray, sized to the measured block
           viewDir.set(b.x - camera.position.x, g.position.y - camera.position.y, b.z - camera.position.z).normalize()
           dummy.position.copy(g.position).addScaledVector(viewDir, 0.04)
           dummy.quaternion.copy(camera.quaternion)
-          const w = (b.w > 0 ? b.w : BUBBLE_WIDTH) + BUBBLE_PAD * 2
-          const h = (b.h > 0 ? b.h : BUBBLE_FONT * BUBBLE_LINE_HEIGHT) + BUBBLE_PAD * 1.6
+          const w = ((b.w > 0 ? b.w : st.maxWidth) + BUBBLE_PAD * 2) * pop
+          const h = ((b.h > 0 ? b.h : st.fontSize * BUBBLE_LINE_HEIGHT) + BUBBLE_PAD * 1.6) * pop
           dummy.scale.set(w, h, 1)
           dummy.updateMatrix()
           backdrop.mesh.setMatrixAt(shown, dummy.matrix)
-          alphaArr[shown] = o
+          alphaArr[shown] = o * st.bgAlpha
+          tintArr[shown * 3] = st.bg[0]
+          tintArr[shown * 3 + 1] = st.bg[1]
+          tintArr[shown * 3 + 2] = st.bg[2]
           shown++
         }
       }
@@ -488,6 +544,7 @@ export function Effects() {
       if (shown > 0) {
         backdrop.mesh.instanceMatrix.needsUpdate = true
         backdrop.alpha.needsUpdate = true
+        backdrop.tint.needsUpdate = true
       }
       if (dirtyBubbles) {
         dirtyBubbles = false
@@ -587,7 +644,7 @@ export function Effects() {
   return (
     <group>
       {bubbles.map((b) => (
-        <BubbleView key={b.agentId} bubble={b} text={b.text} />
+        <BubbleView key={`${b.agentId}:${b.kind}`} bubble={b} text={b.text} kind={b.kind} />
       ))}
       <primitive object={backdrop.mesh} />
       <HoverTag />

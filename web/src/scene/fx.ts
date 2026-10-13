@@ -17,6 +17,10 @@ export const FX_KINDS: ReadonlySet<string> = new Set([
   'forage',
   'gadget_verified',
   'epoch',
+  'remember',
+  'revise_self',
+  'maintenance',
+  'claim_feedback',
 ])
 
 interface Node {
