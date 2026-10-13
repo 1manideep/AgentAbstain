@@ -14,27 +14,9 @@ import { AnimationClip, Bone, Euler, Quaternion, QuaternionKeyframeTrack, Vector
 import { BONE_INDEX, BONE_NAMES, type BoneName } from './humanoid'
 import type { Preset } from './presets'
 
-export type ClipName = 'idle' | 'walk' | 'sleep' | 'degenerate' | 'dead' | 'talk' | 'forage'
-export const CLIP_NAMES: readonly ClipName[] = ['idle', 'walk', 'sleep', 'degenerate', 'dead', 'talk', 'forage']
-/** Whether the clip loops (first and last keyframes are equal) or clamps at its end. */
-export const CLIP_LOOPS: Readonly<Record<ClipName, boolean>> = {
-  idle: true,
-  walk: true,
-  sleep: true,
-  degenerate: true,
-  dead: false,
-  talk: false,
-  forage: true,
-}
-export const CLIP_DURATION: Readonly<Record<ClipName, number>> = {
-  idle: 6,
-  walk: 1,
-  sleep: 4,
-  degenerate: 1.6,
-  dead: 1.4,
-  talk: 1.2,
-  forage: 1.5,
-}
+export { CLIP_DURATION, CLIP_LOOPS, CLIP_NAMES } from './clipNames'
+export type { ClipName } from './clipNames'
+import { CLIP_DURATION, CLIP_LOOPS, type ClipName } from './clipNames'
 
 const TAU = Math.PI * 2
 const N = BONE_NAMES.length
@@ -415,13 +397,31 @@ export function buildClips(bones: Record<BoneName, Bone>, preset: Preset): Recor
   const u = preset.height / 7.5
   const h = bones.hips.position
   const c: Ctx = { u, hipsRest: [h.x, h.y, h.z], thigh: 1.75 * u, shin: 1.7 * u }
+  // Placeholders: until a clip has its own pose function it plays the relaxed idle (looping) or a
+  // short idle hold (one-shot), so every name in CLIP_NAMES is always a valid action.
+  const placeholder = (name: ClipName): AnimationClip =>
+    sampled(name, CLIP_DURATION[name], 8, idlePose, c, CLIP_LOOPS[name])
   return {
     idle: sampled('idle', CLIP_DURATION.idle, 8, idlePose, c, true),
+    idle_fidget: placeholder('idle_fidget'),
+    idle_guard: placeholder('idle_guard'),
     walk: sampled('walk', CLIP_DURATION.walk, 24, walkPose, c, true),
+    walk_brisk: sampled('walk_brisk', CLIP_DURATION.walk_brisk, 24, walkPose, c, true),
     sleep: sampled('sleep', CLIP_DURATION.sleep, 8, sleepPose, c, true),
     degenerate: stepped('degenerate', CLIP_DURATION.degenerate, 20, degeneratePose, c),
     dead: keyed('dead', deadKeys(c), c),
     talk: sampled('talk', CLIP_DURATION.talk, 20, talkPose, c, false),
     forage: sampled('forage', CLIP_DURATION.forage, 16, foragePose, c, true),
+    write: placeholder('write'),
+    read: placeholder('read'),
+    give: placeholder('give'),
+    receive: placeholder('receive'),
+    tinker: placeholder('tinker'),
+    summon: placeholder('summon'),
+    think: placeholder('think'),
+    shake: placeholder('shake'),
+    cheer: placeholder('cheer'),
+    slump: placeholder('slump'),
+    wave: placeholder('wave'),
   }
 }

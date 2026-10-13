@@ -23,7 +23,11 @@ const FONT_URL = '/fonts/InstrumentSans-Regular.ttf'
 const CYCLE_S = 3
 const TIERS = ['#4fd1c5', '#f6ad55', '#a0aec0']
 /** Representative freeze time per clip for the moves strip. */
-const MOVE_T: Record<ClipName, number> = { idle: 2.9, walk: 0.1, sleep: 1.0, degenerate: 0.62, dead: 1.4, talk: 0.55, forage: 0.75 }
+const MOVE_T: Record<ClipName, number> = {
+  idle: 2.9, idle_fidget: 1.6, idle_guard: 2.0, walk: 0.1, walk_brisk: 0.1, sleep: 1.0, degenerate: 0.62, dead: 1.4,
+  talk: 0.55, forage: 0.75, write: 0.9, read: 1.2, give: 0.7, receive: 0.6, tinker: 0.9, summon: 0.8, think: 1.4,
+  shake: 0.4, cheer: 0.55, slump: 0.9, wave: 0.6,
+}
 
 interface Params {
   clip: ClipName | null
