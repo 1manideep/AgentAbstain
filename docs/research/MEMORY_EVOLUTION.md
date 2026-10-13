@@ -52,7 +52,7 @@
 
 **The six things that could sink it** (section 8 has all of them):
 1. Prior work. The review found the combination partially scooped, not taken. Two full texts it could not read (TerraLingua's newborn context and DarwinX's cross-generation memory) could still contain a heritable memory practice under selection. Mitigation: read both before any submission, and present the work as a protocol transplant with named baselines (6.13).
-2. Memory does not pay in this world. The free scripted gate has already found this once (10.4): amnesic agents out-earn agents with memory, because retrieved notes more than double the prompt and keep pointing at the same spent node. It must pass before any paid memory experiment. A live pilot showing no difference between default and self-edited memory is the second form of this risk, and the gate at week 8 exists for it.
+2. Memory does not pay in this world. The free scripted gate has already found this once (10.4): amnesic agents out-earn agents with memory, because retrieved notes more than double the prompt while the world never makes an agent travel to a node it cannot see. It must pass before any paid memory experiment. A live pilot showing no difference between default and self-edited memory is the second form of this risk, and the gate at week 8 exists for it.
 3. Effects appear on one model family and vanish on another.
 4. A proxy reward is gamed in ways that also corrupt the measurement. Mitigation: two exams, one never rewarded.
 5. Ten agents and short lives give too few generations to see a ratchet (Figure 6). Mitigation: the discrete-generation protocol (E3a), which buys generation depth directly, then a long-horizon experiment, both priced in.
@@ -776,14 +776,23 @@ The first E0 run billed scripted maintenance by output length, so the no-op paid
 | Decision-call cost | +$0.093 [0.083, 0.103], higher in every seed |
 | Input tokens per decision | 249 without memory, 649 with |
 
-Two mechanisms explain it. First, retrieval is swamped. Under fog an agent often sees no worthwhile node, and then its eight retrieved notes are near-duplicates about the node it just emptied ("Foraging at node n1 on day 3", six times), so memory sends it back to a spent node. This is limitation L3 (no consolidation) showing up as a measured cost. Second, the price of remembering is high: retrieved notes more than double the prompt, so memory must raise foraging income by about 19% to break even, and it raises it by about 5%. A free sweep at 10 seeds of node capacity (12 to 40), regrowth (0.2 to 0.4) and view radius (8 to 12) did not change the picture: in all four settings the amnesic arm won on balance, and memory's effect on foraging was indistinguishable from zero.
+Why, corrected after a second, deeper measurement (2026-10-13). An earlier version of this paragraph said memory "sends the agent back to a spent node". A follow-up that logged what every retrieved note could tell the agent showed that is not what happens. The world simply never makes these agents need memory:
+- Every agent, in both arms, foraged at exactly one node for the whole run (118 of 118 agents across 20 seeds).
+- A forage takes about one unit (0.985 on average) from a node that holds 40 and regrows 0.4 per tick, so depletion almost never bites.
+- In 92% of decisions an agent sees exactly one node, and in 99.9% the retrieved notes place no node the agent cannot already see. The 151 decisions with no node in sight all belong to agents that had not found a node yet, so there was nothing to remember.
+- The price of remembering is high: retrieved notes more than double the prompt, so memory must raise foraging income by about 19% to break even, and it raises it by about 5%. That small gain comes from a shift in the action mix, not from navigation.
+
+A free sweep at 10 seeds of node capacity (12 to 40), regrowth (0.2 to 0.4) and view radius (8 to 12) did not change the picture: in all four settings the amnesic arm won on balance.
+
+*First fix attempt (decision 19, scripted brain plus 4 retrieved notes), 20 paired seeds:* the scripted brain now keeps the newest status per node, skips nodes it last saw empty, and writes a correction note when sight contradicts memory; the amnesic arm is bit-identical to before. Retrieving 4 notes instead of 8 halves the price of memory (463 instead of 649 input tokens per decision), but the benefit does not move. Memory on versus amnesic: **−$0.030 [−0.049, −0.013]**, amnesic still ahead in 15 of 20 seeds. E0: index builder versus no-op is a tie (−$0.005 [−0.028, 0.019]); the hoarder's loss is no longer significant at 4 notes. An independent check reproduced both results and confirmed that the brain change contributes nothing in this world, because there is never a remembered node to walk to. Scripted-brain changes alone cannot pass G0 here.
 
 *What this means.* G0 is not passed, so by the rule in 10.2 no paid memory experiment should run yet. The live scarcity pilot does not depend on memory and can go ahead. The E1 pilot should wait. This is the cheapest possible place to have found the problem: a paid E1 in this world would very likely have returned "memory does not matter", for a reason that has nothing to do with agent-authored practice.
 
-*Recommended fix, in order* (decision 19 in section 12):
-1. Make retrieval surface the latest state of each node rather than many copies of one, either by de-duplicating near-identical titles in kernel retrieval or by having the scripted brain take the newest status per node and skip nodes it last saw empty. The first changes E1's arm `a`, so it is a design decision, not a bug fix.
-2. Lower the price of memory: retrieve 4 notes instead of 8, or cap retrieved note length, and re-measure the break-even.
-3. Re-run the dependence check, then E0. Only then the E1 pilot.
+*Next fix: make the world need memory* (decision 4's documented fallback, now triggered because the dependence check is weak):
+1. **Veins** (5.2): a random node pays several times more for a short window and is visible only nearby, so remembering and sharing where it was pays.
+2. **Real depletion**: nodes that run dry and regrow slowly, with fewer nodes than agents, so agents must move between known nodes, and an agent that remembers where they are walks straight there while an amnesic one wanders.
+3. Keep 4 retrieved notes in E0 and the dependence check, and state the gate at that setting.
+4. Re-run the dependence check, then E0. Only then the E1 pilot.
 
 The stages sum to roughly the full programme in 6.12. Small differences come from seed counts on the replications and from pilot seeds being reused in S2.
 
@@ -835,7 +844,7 @@ Each has my default. Reply with numbers and changes; I will update the document.
 | 16 | Adopt the review's baselines (6.13) | all ten; only the free ones; none | All ten. They add $411 to the cheap-tier programme (about a quarter), and without them a reviewer can attribute any effect to a published mechanism |
 | 17 | Framing | "a new kind of experiment"; "the Vallinder-Hughes protocol transplanted to memory practice, under a cognition-priced economy" | The second. It is what the evidence supports, and it makes E3a the cleanest first inheritance result |
 | 18 | Selection level | individual only; individual and group | Both, with group selection as an exploratory contrast inside E3 at no extra runs |
-| 19 | Making memory matter (10.4) | change kernel retrieval (affects E1's arm `a`); change only the scripted brain's use of memory; make memory cheaper; redesign the world | Scripted brain first, plus 4 retrieved notes instead of 8, because neither touches the live baseline's design. Change kernel retrieval only if that is not enough |
+| 19 | Making memory matter (10.4) | change kernel retrieval (affects E1's arm `a`); change only the scripted brain's use of memory; make memory cheaper; redesign the world | **Tried, not enough** (10.4): the scripted-brain change and 4 retrieved notes halve the cost of memory but the world never needs it. Now: redesign the world (veins and real depletion, decision 4's fallback) before touching kernel retrieval, which would change E1's arm `a` |
 
 ---
 
