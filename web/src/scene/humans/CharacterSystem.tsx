@@ -2,26 +2,76 @@
  * Draws visible agents as procedural humanoids (see humanoid.ts / clips.ts)
  * in place of the instanced capsule bodies. Runs as a scene system at SYS_RIG:
  * up to `rigState.maxRigged` present slots get a puppet (a humanoid for the
- * agent's preset, an AnimationMixer and one action per clip); the per-slot
- * weight vector the capsule path computes (perSlot.weights: idle, walk, sleep,
- * degenerate, dead) drives the clip weights, `talk` is a one-shot fired from
- * talk events at the render tick, and `forage` loops while the agent forages
- * standing still. Slots drawn here are marked in `rigState.riggedSlots` so
- * Agents.tsx skips their capsule (the shadow blob and halo are still drawn
- * there). A loaded GLB rig (Rig.tsx) takes precedence: while it is active the
- * puppets stay hidden. Nothing here allocates per frame in steady state.
+ * agent's preset, an AnimationMixer and one action per clip).
+ *
+ * Base states. The per-slot weights the capsule path computes (perSlot.weights:
+ * idle, walk, sleep, degenerate, dead) drive the base clips; the agent's
+ * personality (roster traits) and stress split idle into idle / idle_fidget /
+ * idle_guard and walk into walk / walk_brisk (behaviour.ts `styleFor`,
+ * `splitBase`), and set the idle and stride time scales.
+ *
+ * Behaviour. World events become gestures through behaviour.ts `gestureFor`
+ * (talk, give/receive, write while remembering or maintaining, read the
+ * chronicle, tinker with gadgets, summon the weather, shake at a lie found out,
+ * slump at a failure, cheer at a windfall, wave at birth), folded into each
+ * puppet's GestureState by priority. One-shots play once with an attack and
+ * release envelope from their own action time; holds loop for their hold and
+ * fade. Walking cancels standing holds and plays the rest on top at reduced
+ * weight. The forage loop still runs while the agent forages standing still.
+ * A gesture may name someone to face: a standing agent turns to them along the
+ * shortest arc and turns back afterwards; idle agents near a speaker glance at
+ * them with the head; industrious agents lean forward a little.
+ *
+ * Slots drawn here are marked in `rigState.riggedSlots` so Agents.tsx skips
+ * their capsule (the shadow blob and halo are still drawn there). A loaded GLB
+ * rig (Rig.tsx) takes precedence: while it is active the puppets stay hidden.
+ * Nothing here allocates per frame in steady state.
  */
 import type { ThreeEvent } from '@react-three/fiber'
 import { useEffect, useMemo } from 'react'
-import { AnimationMixer, Color, Group, LoopOnce, type AnimationAction, type AnimationClip, type Object3D } from 'three'
+import { AnimationMixer, Color, Group, LoopOnce, Quaternion, Vector3, type AnimationAction, type AnimationClip, type Object3D } from 'three'
 import { isEventKind, type EventMsg } from '../../protocol'
 import type { EventRing } from '../../state/events'
 import { history } from '../../state/history'
 import { useStore } from '../../state/store'
-import { FxQueue } from '../fx'
 import { gpuProfile } from '../gpu'
 import { rigState } from '../rigState'
 import { mirror, perSlot, registerSystem, sampled, slotColor, SYS_RIG, type FrameCtx } from '../sceneState'
+import {
+  applyGesture,
+  BEHAVIOUR_KINDS,
+  BRISK_RATIO,
+  cancelStandingHolds,
+  envelope,
+  FACE_DEFAULT,
+  FACE_RANGE,
+  FACE_RATE,
+  facingYaw,
+  finishCurrent,
+  GestureQueue,
+  gestureFor,
+  gestureScale,
+  GLANCE_RANGE,
+  HEAD_RATE,
+  headYawFor,
+  HOLD_ATTACK,
+  HOLD_RELEASE,
+  makeSplit,
+  makeStyle,
+  NO_GESTURE,
+  RETURN_RATE,
+  SHOT_ATTACK,
+  SHOT_RELEASE,
+  splitBase,
+  STAND_VEL,
+  styleFor,
+  targetYawTo,
+  walkTimeScale,
+  type BaseSplit,
+  type GestureState,
+  type Style,
+} from './behaviour'
+import { GESTURE_CLIPS } from './clipNames'
 import { buildClips, CLIP_DURATION, CLIP_LOOPS, CLIP_NAMES, type ClipName } from './clips'
 import { buildHumanoid, type Humanoid } from './humanoid'
 import { PRESETS, presetIndexFor } from './presets'
@@ -33,8 +83,15 @@ const W_DEGEN = 3
 const W_DEAD = 4
 /** How long a forage event keeps the forage loop going (s). */
 const FORAGE_HOLD = 3.2
-/** World units covered by one walk cycle at timeScale 1. */
-const STRIDE = 1.3
+/** How long a talk keeps the speaker interesting to nearby idle agents (s). */
+const SPEAK_GLANCE = 2.2
+/** A one-shot that never advanced (a hidden puppet) is released after its clip duration plus this (s). */
+const SHOT_GRACE = 1.5
+/** Gestures other than forage, whose weights the controller sets every frame. */
+const GESTURES: readonly ClipName[] = GESTURE_CLIPS.filter((c) => c !== 'forage')
+const Y_AXIS = new Vector3(0, 1, 0)
+const X_AXIS = new Vector3(1, 0, 0)
+const qScratch = new Quaternion()
 
 /**
  * Characters are on unless `?rig=0`, or the renderer is a software rasteriser
@@ -64,6 +121,16 @@ interface Puppet {
   forageW: number
   forageUntil: number
   deadArmed: boolean
+  gesture: GestureState
+  /** Agent to face, and until when (ctx.now seconds). */
+  faceId: string | null
+  faceUntil: number
+  /** Rendered heading (snapshot convention); NaN until the first frame. */
+  yaw: number
+  /** Smoothed head yaw offset for glances (rad). */
+  headYaw: number
+  style: Style
+  split: BaseSplit
 }
 
 const clipCache = new Map<number, Record<ClipName, AnimationClip>>()
@@ -94,10 +161,13 @@ function makePuppet(preset: number): Puppet {
       a.clampWhenFinished = true
     }
     a.setEffectiveWeight(0)
-    if (name !== 'talk') a.play()
+    if (CLIP_LOOPS[name]) a.play()
     actions[name] = a
   }
-  return { h, preset, mixer, actions, slot: -1, id: '', name: '', forageW: 0, forageUntil: 0, deadArmed: false }
+  return {
+    h, preset, mixer, actions, slot: -1, id: '', name: '', forageW: 0, forageUntil: 0, deadArmed: false,
+    gesture: NO_GESTURE, faceId: null, faceUntil: 0, yaw: Number.NaN, headYaw: 0, style: makeStyle(), split: makeSplit(),
+  }
 }
 
 /** Hash for the degeneration jitter (same as the capsule path). */
@@ -120,7 +190,7 @@ const tint = new Color()
 let eventRing: EventRing | null = null
 let ringCursor = 0
 let lastTick = -1
-const queue = new FxQueue()
+const queue = new GestureQueue(BEHAVIOUR_KINDS)
 
 function* ringEvents(): Generator<EventMsg> {
   const r = eventRing
@@ -138,7 +208,7 @@ function pollEvents(): void {
   let abs = ringCursor > r.oldestAbs ? ringCursor : r.oldestAbs
   for (; abs < r.total; abs++) {
     const e = r.atAbs(abs)
-    if (e && (e.kind === 'talk' || e.kind === 'forage')) queue.push(e)
+    if (e && BEHAVIOUR_KINDS.has(e.kind)) queue.push(e)
   }
   ringCursor = r.total
 }
@@ -167,6 +237,8 @@ function CharacterLayer() {
   useEffect(() => {
     const free: Puppet[] = []
     let bySlot: Array<Puppet | null> = new Array<Puppet | null>(sampled.out.capacity).fill(null)
+    /** ctx.now until which the agent in each slot counts as speaking (for glances). */
+    let speakingUntil = new Float64Array(sampled.out.capacity)
     let assignedCount = 0
     let curNow = 0
 
@@ -190,13 +262,18 @@ function CharacterLayer() {
       pup.forageW = 0
       pup.forageUntil = 0
       pup.deadArmed = false
+      pup.gesture = NO_GESTURE
+      pup.faceId = null
+      pup.faceUntil = 0
+      pup.yaw = Number.NaN
+      pup.headYaw = 0
       pup.h.root.visible = true
       pup.h.root.userData.slot = slot
       for (const name of CLIP_NAMES) {
         const a = pup.actions[name]
         a.reset()
         a.setEffectiveWeight(0)
-        if (name !== 'talk') a.play()
+        if (CLIP_LOOPS[name]) a.play()
         else a.stop()
       }
       pup.mixer.setTime(perSlot.phase[slot]! * 4) // desynchronise idle cycles across agents
@@ -217,23 +294,40 @@ function CharacterLayer() {
       for (let s = 0; s < bySlot.length; s++) if (bySlot[s]) release(bySlot[s]!)
     }
 
-    const fire = (e: EventMsg) => {
-      if (isEventKind(e, 'talk')) {
-        const s = history.agentIndex.get(e.payload.speaker_id)
-        const pup = s === undefined ? null : bySlot[s]
-        if (!pup) return
-        const talk = pup.actions.talk
-        if (!talk.isRunning()) {
-          talk.reset()
-          talk.setEffectiveWeight(0)
-          talk.play()
-        }
-        return
+    /** Install a new gesture state, starting the clip of a one-shot that just became current. */
+    const setGesture = (pup: Puppet, next: GestureState) => {
+      const cur = next.current
+      if (cur !== null && cur !== pup.gesture.current && !CLIP_LOOPS[cur.clip]) {
+        const a = pup.actions[cur.clip]
+        a.reset()
+        a.setEffectiveWeight(0)
+        a.play()
       }
+      pup.gesture = next
+    }
+
+    const fire = (e: EventMsg) => {
       if (isEventKind(e, 'forage')) {
         const s = history.agentIndex.get(e.payload.agent_id)
         const pup = s === undefined ? null : bySlot[s]
         if (pup) pup.forageUntil = curNow + FORAGE_HOLD
+        return
+      }
+      if (isEventKind(e, 'talk')) {
+        const s = history.agentIndex.get(e.payload.speaker_id)
+        if (s !== undefined && s < speakingUntil.length) speakingUntil[s] = curNow + SPEAK_GLANCE
+      }
+      const gestures = gestureFor(e)
+      for (let i = 0; i < gestures.length; i++) {
+        const g = gestures[i]!
+        const s = history.agentIndex.get(g.agentId)
+        const pup = s === undefined ? null : bySlot[s]
+        if (!pup) continue
+        if (g.faceId !== undefined) {
+          pup.faceId = g.faceId
+          pup.faceUntil = curNow + (g.faceFor ?? FACE_DEFAULT)
+        }
+        setGesture(pup, applyGesture(pup.gesture, g, curNow))
       }
     }
 
@@ -263,11 +357,31 @@ function CharacterLayer() {
       }
       const root = pup.h.root
       root.position.set(x, y, z)
-      root.rotation.set(0, Math.PI / 2 - out.heading[s]!, 0)
       root.scale.setScalar(sc)
+      const vel = Math.hypot(out.vx[s]!, out.vy[s]!) * speed
+      const standing = vel < STAND_VEL && wx < 0.5 && ws < 0.5
+
+      // facing: a standing agent turns to whoever its gesture named, then back to its snapshot heading
+      const heading = out.heading[s]!
+      if (Number.isNaN(pup.yaw) || !standing) pup.yaw = heading
+      let faceTarget = heading
+      let faceRate = RETURN_RATE
+      if (standing && pup.faceId !== null && now < pup.faceUntil) {
+        const ts = history.agentIndex.get(pup.faceId)
+        if (ts !== undefined && ts < out.count && out.present[ts] && out.ids[ts] === pup.faceId) {
+          const tx = out.x[ts]!
+          const tz = out.y[ts]!
+          const d = Math.hypot(tx - x0, tz - z0)
+          if (d > 1e-3 && d <= FACE_RANGE) {
+            faceTarget = targetYawTo(x0, z0, tx, tz)
+            faceRate = FACE_RATE
+          }
+        }
+      } else if (now >= pup.faceUntil) pup.faceId = null
+      pup.yaw = facingYaw(pup.yaw, faceTarget, dt, faceRate)
+      root.rotation.set(0, Math.PI / 2 - pup.yaw, 0)
 
       // forage: loops while a forage happened recently (or the last action is a forage) and the agent stands
-      const vel = Math.hypot(out.vx[s]!, out.vy[s]!) * speed
       const stat = useStore.getState().agentStats.get(id)
       const foraging =
         pup.forageUntil > now ||
@@ -276,25 +390,60 @@ function CharacterLayer() {
       pup.forageW += (wantForage - pup.forageW) * (1 - Math.exp(-dt / 0.25))
       const fw = pup.forageW
 
-      // talk: one-shot envelope from the action's own time
-      const talk = pup.actions.talk
-      let tw = 0
-      if (talk.isRunning()) {
-        const t = talk.time
-        const d = CLIP_DURATION.talk
-        tw = Math.max(0, Math.min(1, t / 0.15, (d - t) / 0.25))
-      } else if (talk.paused) talk.stop()
-
-      const g = Math.max(tw, fw)
+      // gestures: the dead and the sleeping do not gesture; walking cancels the standing holds
       const A = pup.actions
-      A.idle.setEffectiveWeight(wi * (1 - g))
-      A.walk.setEffectiveWeight(ww * (1 - g))
+      if (wx > 0.5 || ws > 0.5) {
+        if (pup.gesture !== NO_GESTURE) pup.gesture = NO_GESTURE
+      } else if (ww > 0.5) {
+        const next = cancelStandingHolds(pup.gesture, now)
+        if (next !== pup.gesture) setGesture(pup, next)
+      }
+      let gw = 0
+      let cur = pup.gesture.current
+      if (cur !== null) {
+        if (CLIP_LOOPS[cur.clip]) {
+          const t = now - cur.start
+          if (t >= cur.hold) setGesture(pup, finishCurrent(pup.gesture, now))
+          else gw = envelope(t, cur.hold, HOLD_ATTACK, HOLD_RELEASE)
+        } else {
+          const a = A[cur.clip]
+          const d = CLIP_DURATION[cur.clip]
+          if ((!a.isRunning() && a.time > 0) || now - cur.start > d + SHOT_GRACE) {
+            if (a.paused) a.stop()
+            setGesture(pup, finishCurrent(pup.gesture, now))
+          } else gw = envelope(a.time, d, SHOT_ATTACK, SHOT_RELEASE)
+        }
+        cur = pup.gesture.current
+      }
+      gw *= gestureScale(ww, reducedMotion) * (1 - ws)
+
+      // personality: split idle and walk by style, time scales from curiosity and industriousness
+      const style = styleFor(mirror.rosterById.get(id)?.traits, out.stress[s]!, pup.style)
+      const sp = splitBase(wi, ww, style, pup.split)
+      const g = Math.max(gw, fw)
+      A.idle.setEffectiveWeight(sp.idle * (1 - g))
+      A.idle_fidget.setEffectiveWeight(sp.fidget * (1 - g))
+      A.idle_guard.setEffectiveWeight(sp.guard * (1 - g))
+      A.walk.setEffectiveWeight(sp.walk * (1 - g))
+      A.walk_brisk.setEffectiveWeight(sp.brisk * (1 - g))
       A.sleep.setEffectiveWeight(ws * (1 - g))
       A.degenerate.setEffectiveWeight(wd * (1 - g))
-      A.dead.setEffectiveWeight(wx * (1 - tw))
-      A.forage.setEffectiveWeight(fw * (1 - tw))
-      A.talk.setEffectiveWeight(tw)
-      if (ww > 0.001) A.walk.setEffectiveTimeScale(Math.max(0.55, Math.min(1.9, vel / STRIDE)))
+      A.dead.setEffectiveWeight(wx * (1 - gw))
+      A.forage.setEffectiveWeight(fw * (1 - gw))
+      for (let i = 0; i < GESTURES.length; i++) {
+        const name = GESTURES[i]!
+        A[name].setEffectiveWeight(cur !== null && cur.clip === name ? gw : 0)
+      }
+      A.idle.setEffectiveTimeScale(style.idleTimeScale)
+      A.idle_fidget.setEffectiveTimeScale(style.idleTimeScale)
+      A.idle_guard.setEffectiveTimeScale(style.idleTimeScale)
+      if (ww > 0.001) {
+        const ts = walkTimeScale(vel, style)
+        A.walk.setEffectiveTimeScale(ts)
+        // the brisk loop is shorter: run it faster by the ratio and lock its phase to the walk so the legs agree
+        A.walk_brisk.setEffectiveTimeScale(ts / BRISK_RATIO)
+        A.walk_brisk.time = (A.walk.time / CLIP_DURATION.walk) * CLIP_DURATION.walk_brisk
+      }
       // the collapse plays once when the agent dies (dead clip clamps at its end)
       if (wx > 0.02) {
         if (!pup.deadArmed) {
@@ -333,6 +482,25 @@ function CharacterLayer() {
       m.trim.transparent = !opaque
 
       pup.mixer.update(dt * (speed <= 0 ? 1 : Math.max(0.5, Math.min(2, speed))))
+
+      // post-mixer: an idle agent glances at a nearby speaker; industrious agents lean into their work
+      let glance = 0
+      if (standing && wi > 0.5 && gw < 0.5) {
+        let best = GLANCE_RANGE
+        for (let o = 0; o < out.count && o < speakingUntil.length; o++) {
+          if (o === s || !out.present[o] || speakingUntil[o]! <= now) continue
+          const d = Math.hypot(out.x[o]! - x0, out.y[o]! - z0)
+          if (d < best && d > 1e-3) {
+            best = d
+            glance = headYawFor(x0, z0, pup.yaw, out.x[o]!, out.y[o]!)
+          }
+        }
+      }
+      pup.headYaw += (glance - pup.headYaw) * (1 - Math.exp(-dt * HEAD_RATE))
+      if (Math.abs(pup.headYaw) > 1e-4) pup.h.bones.head.quaternion.multiply(qScratch.setFromAxisAngle(Y_AXIS, pup.headYaw * (1 - ws)))
+      if (!reducedMotion && Math.abs(style.leanForward) > 1e-4) {
+        pup.h.bones.spine.quaternion.multiply(qScratch.setFromAxisAngle(X_AXIS, style.leanForward * (wi + ww) * (1 - wx)))
+      }
     }
 
     const system = (ctx: FrameCtx) => {
@@ -346,6 +514,9 @@ function CharacterLayer() {
         const grown = new Array<Puppet | null>(out.capacity).fill(null)
         for (let i = 0; i < bySlot.length; i++) grown[i] = bySlot[i]!
         bySlot = grown
+        const until = new Float64Array(out.capacity)
+        until.set(speakingUntil)
+        speakingUntil = until
       }
       // scrubbing backwards re-arms the effects we will see again
       if (lastTick >= 0 && out.tick < lastTick - 1) queue.reseed(ringEvents(), out.tick)
