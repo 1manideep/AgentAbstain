@@ -57,7 +57,7 @@ from void.memory.store import ENTITY_TAG, PROBE_TAG, MemoryStore, clean_title, c
 
 __all__ = [
     "ROOT", "NOTES_DIR", "INDEX_DIR", "POLICY_PATH", "SELF_PATH", "AGENT_TAG", "INDEX_TAG", "CommandName", "MemoryCommand",
-    "CommandResult", "VaultPath", "PathError", "resolve_path", "content_hash", "title_from_name", "virtual_path",
+    "CommandResult", "VaultPath", "PathError", "resolve_path", "MAX_FILE_TEXT", "content_hash", "title_from_name", "virtual_path",
     "MemoryCommands",
 ]
 

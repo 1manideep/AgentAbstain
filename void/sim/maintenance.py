@@ -246,7 +246,10 @@ class Maintenance:
                   ) -> tuple[BrainResult, MaintenanceResponse]:
         """A planted strategy's batch with synthetic usage, metered like a scripted decision."""
         tier = self.sim.cfg.tiers[rec.model_tier]
-        response = plan(tier.maintenance_strategy or "noop", ctx, self.sim.rng.stream("maintain", rec.agent_id, day))
+        try:
+            response = plan(tier.maintenance_strategy or "noop", ctx, self.sim.rng.stream("maintain", rec.agent_id, day))
+        except ValueError as e:  # a planted strategy built an invalid command: the call is paid, nothing is applied
+            response = MaintenanceResponse(reflection=f"strategy error: {type(e).__name__}"[:MAX_REFLECTION_CHARS], commands=[])
         raw = json.dumps(response.model_dump(exclude_none=True), separators=(",", ":"))
         first = self.sim.db.fetchone("SELECT 1 AS x FROM llm_calls WHERE agent_id=? AND purpose='maintain' LIMIT 1",
                                      (rec.agent_id,)) is None

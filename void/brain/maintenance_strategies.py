@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 from void.config import MaintenanceStrategy
 from void.ids import slugify
-from void.memory.commands import INDEX_DIR, NOTES_DIR, POLICY_PATH, MemoryCommand
+from void.memory.commands import INDEX_DIR, MAX_FILE_TEXT, NOTES_DIR, POLICY_PATH, MemoryCommand
 
 if TYPE_CHECKING:
     from void.sim.maintenance import MaintenanceResponse
@@ -150,7 +150,7 @@ def index_body(ctx: StrategyContext, node_id: str, x: float, y: float, bucket: s
     lines = [f"# Node {node_id}", f"Position ({x:.0f}, {y:.0f}). Last seen {bucket} on day {ctx.day}.", "", "## Related",
              f"- [[Node {node_id}]]"]
     lines += [f"- [[{t}]]" for t in _titles_mentioning(ctx.notes, node_id)]
-    return "\n".join(lines)
+    return _cut_bytes("\n".join(lines), min(int(ctx.max_file_bytes), MAX_FILE_TEXT))
 
 
 def _titles_mentioning(notes: list[dict[str, Any]], node_id: str) -> list[str]:
@@ -217,8 +217,11 @@ def _hoarder(ctx: StrategyContext, rng: random.Random) -> Plan:
         return "hoarder: no notes right, nothing copied", []
     cmds: list[MemoryCommand] = []
     parts: list[str] = []
+    limit = min(int(ctx.max_file_bytes), MAX_FILE_TEXT)
     for n in _by_age(ctx.new_notes):
-        body = str(n.get("body", ""))
+        if "agent" in set(n.get("tags", ())):
+            continue  # its own copies and everything-files are not recopied (growth stays linear in the day's notes)
+        body = _cut_bytes(str(n.get("body", "")), limit)
         if not body.strip():
             continue
         stem = posixpath.basename(str(n.get("path", "note.md")))
@@ -228,7 +231,7 @@ def _hoarder(ctx: StrategyContext, rng: random.Random) -> Plan:
         cmds.append(MemoryCommand(command="create", path=f"{NOTES_DIR}/{name}", file_text=body))
         parts.append(f"## {n.get('title', '')}\n{body}")
     if parts:
-        everything = _cut_bytes("\n\n".join(parts), ctx.max_file_bytes)
+        everything = _cut_bytes("\n\n".join(parts), limit)
         cmds.append(MemoryCommand(command="create", path=f"{NOTES_DIR}/everything-day{ctx.day}.md", file_text=everything))
     return f"hoarder: copied {len(parts)} notes from day {ctx.day} and appended them to one file", cmds
 
@@ -278,7 +281,8 @@ def _summarize(ctx: StrategyContext, rng: random.Random) -> Plan:
         lines += ["", "## New notes"] + [f"- [[{t}]]" for t in titles[:MAX_SUMMARY_TITLES]]
     else:
         lines += ["", "No new notes today."]
-    cmd = MemoryCommand(command="create", path=f"{NOTES_DIR}/day-{ctx.day}-summary.md", file_text="\n".join(lines))
+    text = _cut_bytes("\n".join(lines), min(int(ctx.max_file_bytes), MAX_FILE_TEXT))
+    cmd = MemoryCommand(command="create", path=f"{NOTES_DIR}/day-{ctx.day}-summary.md", file_text=text)
     return f"summarize: one summary note for day {ctx.day} with {len(titles)} new titles", [cmd]
 
 

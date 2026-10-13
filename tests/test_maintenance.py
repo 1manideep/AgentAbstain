@@ -181,6 +181,15 @@ def test_hoarder_copies_every_new_note_and_appends_everything() -> None:
     big = _ctx(new_notes=[{"path": f"{NOTES_DIR}/big-ffffff.md", "title": "Big", "body": "é" * 3000, "tick": 5, "tags": []}], max_file_bytes=4000)
     rb = plan("hoarder", big, random.Random(1))
     assert len((rb.commands[-1].file_text or "").encode("utf-8")) <= 4000
+    # regression: yesterday's everything-file (agent-written, grown past the cap by auto-links) is never recopied,
+    # and an oversized note body is cut to the limit instead of raising inside the tick
+    grown = _ctx(new_notes=[
+        {"path": f"{NOTES_DIR}/everything-day1-aaaaaa.md", "title": "everything-day1", "body": "x" * 9000, "tick": 13, "tags": ["agent"]},
+        {"path": f"{NOTES_DIR}/huge-bbbbbb.md", "title": "Huge", "body": "y" * 9000, "tick": 14, "tags": ["resources"]},
+    ])
+    rg = plan("hoarder", grown, random.Random(1))
+    assert [c.path for c in rg.commands if "copy-of-everything" in (c.path or "")] == []
+    assert all(len(c.file_text or "") <= 8000 for c in rg.commands) and len(rg.commands) == 2
 
 
 def test_decoy_rewrites_the_whole_policy_with_jargon_only() -> None:
