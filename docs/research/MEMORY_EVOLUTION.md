@@ -4,8 +4,8 @@
 
 | | |
 |---|---|
-| **Status** | Proposal v0.1, for review. Nothing in sections 5 to 10 is built unless it is marked `[built]`. |
-| **Date** | 2026-09-30 |
+| **Status** | Proposal v0.2, for review. v0.2 folds in the systematic review ([LITERATURE_REVIEW.md](LITERATURE_REVIEW.md)): softer claims, added baselines (6.13), a new hypothesis (H9) and the transplant test moved forward. Nothing in sections 5 to 10 is built unless it is marked `[built]`; 10.4 lists what the thin slice built. |
+| **Date** | 2026-09-30 (v0.1); 2026-10-13 (v0.2) |
 | **Branch** | `claude/trusting-goodall-ew0p38` |
 | **Authorship** | Drafted by Claude for the project owner. Every number is either computed by `docs/research/figures/make_figures.py` from this repo, or marked `[assumption]`. |
 | **How to give feedback** | Section 12 lists the decisions I need from you, each with my default. Edit anything else inline. |
@@ -35,27 +35,28 @@
 
 ## 0. Summary
 
-**The pitch.** Today's agent memory systems are designed by people, or tuned offline against labelled question sets. We propose the opposite: give each agent real control over how it remembers, then let an economy judge the result. A short markdown file, the agent's *memory policy*, says how it writes, organizes, prunes and retrieves notes. The agent edits it nightly. A child inherits it with variation. Neighbours can suggest excerpts to each other. Thinking costs the agent its own money, so memory work competes with foraging, and agents that remember badly go bankrupt. Nobody scores the policy directly. We then measure whether practices improve across days and generations, which selection signals produce durable gains and which get gamed, who benefits (a capability ladder from dim to genius), and whether the winning practices work for a *fresh* agent and on outside benchmarks.
+**The pitch.** Most agent memory systems are designed by people or tuned against labelled tasks. Recent work evolves the memory practice itself (MemSkill, MemEvolve), but still judges it with a labelled score. We propose the opposite: give each agent real control over how it remembers, then let an economy judge the result. A short markdown file, the agent's *memory policy*, says how it writes, organizes, prunes and retrieves notes. The agent edits it nightly. A child inherits it with variation. Neighbours can suggest excerpts to each other. Thinking costs the agent its own money, so memory work competes with foraging, and agents that remember badly go bankrupt. Nobody scores the policy directly. We then measure whether practices improve across days and generations, which selection signals produce durable gains and which get gamed, who benefits (a capability ladder from dim to genius), and whether the winning practices work for a *fresh* agent and on outside benchmarks.
 
-**Why this is not already done.** From the search summaries I could read (section 3), memory self-improvement work adapts a retrieval configuration, a context playbook, a prompt, or code, judged by task feedback or labelled data. I did not see a study in which memory practices are the heritable, transmissible unit, selection is ecological (a paid economy with mortality), capability is a manipulated variable, and every step is a human-readable markdown diff. That is a claim about the summaries I read, not a literature review. Section 3.6 is the plan to make it one, and it is the first thing to do.
+**What is new, after the review.** The systematic review (section 3 and [LITERATURE_REVIEW.md](LITERATURE_REVIEW.md)) found the idea **partially scooped**. No paper in a sweep of 158 combines all four elements: memory practice as the heritable unit, an economy with death as the selector, transmission between agents, and capability as a manipulated factor. But each element is published, and so are several pairs. The honest framing is now: *the Vallinder-Hughes generational protocol, transplanted from cooperation strategies to memory practices, with cognition itself made the thing that costs money, on an Energy-Society-like economy, with FORGE and MemSkill as the memory-side baselines.* What remains ours is narrower, and section 3.4 states it. Each agent's own policy file is the heritable unit. A per-call cost, with bankruptcy as death, selects on that unit. The kernel records provenance that survives rewriting. Vertical and horizontal transmission run in one design, crossed with capability tier.
 
-**What we would build** (`[proposed]`, sections 5 and 10):
-1. A confined memory command API that mirrors Anthropic's memory tool (six commands), with kernel-owned provenance.
-2. A per-agent memory policy file with versioning.
-3. A paid nightly maintenance step.
+**What we would build** (sections 5 and 10; `[proposed]` unless marked):
+1. A confined memory command API that mirrors Anthropic's memory tool (six commands), with kernel-owned provenance `[built]`.
+2. A per-agent memory policy file with versioning `[built]`.
+3. A paid nightly maintenance step `[built]`.
 4. Inheritance with variation, and a `share_practice` action for horizontal transmission.
-5. Memory metrics, exams with ground truth from the event log, and a transplant harness for causal tests.
+5. Memory metrics, exams with ground truth from the event log (the audit exam is `[built]`), and a transplant harness for causal tests.
 
-**What we would test** (section 4): eight hypotheses, from "does self-directed memory help at equal compute" to "do policy files become a persistence channel for injected instructions".
+**What we would test** (section 4): nine hypotheses, from "does self-directed memory help at equal compute" to "do policy files become a persistence channel for injected instructions". New in v0.2: whether selection corrects the drift that unselected self-editing causes (H9).
 
-**Cost and time.** Do not commit the full budget up front. Nothing is paid before the first gate except a small live smoke test (about $20). The pilot that decides whether to continue costs about **$70**. The **minimum credible paper** (E1, a two-arm E2, the transplant test E5, and a second-family replication) costs about **$650**. The full programme is about **$1.6k** on cheap tiers, **$2.5k** with a second-family replication, **$3.2k** with contingency, and is released only if the earlier results justify it (section 10.4). Elapsed time: about 26 weeks for the full plan, assuming Claude implements and you spend 15 to 20 hours a week on decisions, review, practice coding and analysis `[assumption]`. The *thin slice* below cuts the time to the first decision from 8 weeks to about 4.
+**Cost and time.** Do not commit the full budget up front. Nothing is paid before the first gate except a small live smoke test (about $20). The pilot that decides whether to continue costs about **$70**. The **minimum credible paper** (E1, a two-arm E2, the transplant test E5 with its faithfulness controls, and a second-family replication) costs about **$710**. With the baselines the review asks for, the full programme is about **$2.0k** on cheap tiers, **$2.9k** with a second-family replication and **$3.8k** with contingency. It is released only if the earlier results justify it (section 10.4). v0.1 quoted $650, $1.6k, $2.5k and $3.2k; the difference is the added baselines (6.13). Elapsed time: about 26 weeks for the full plan, assuming Claude implements and you spend 15 to 20 hours a week on decisions, review, practice coding and analysis `[assumption]`. The *thin slice* cut the time to the first decision from 8 weeks to about 4, and it is now built (10.4).
 
-**The five things that could sink it** (section 8 has all of them):
-1. Someone has already published the ecological-selection version. Mitigation: the systematic review, first.
+**The six things that could sink it** (section 8 has all of them):
+1. Prior work. The review found the combination partially scooped, not taken. Two full texts it could not read (TerraLingua's newborn context and DarwinX's cross-generation memory) could still contain a heritable memory practice under selection. Mitigation: read both before any submission, and present the work as a protocol transplant with named baselines (6.13).
 2. The live pilot shows no difference between default and self-edited memory. The gate at week 8 exists for this.
 3. Effects appear on one model family and vanish on another.
 4. A proxy reward is gamed in ways that also corrupt the measurement. Mitigation: two exams, one never rewarded.
-5. Ten agents and short lives give too few generations to see a ratchet (Figure 6). Mitigation: a dedicated long-horizon experiment, priced in.
+5. Ten agents and short lives give too few generations to see a ratchet (Figure 6). Mitigation: the discrete-generation protocol (E3a), which buys generation depth directly, then a long-horizon experiment, both priced in.
+6. Convergent practices come from what the models already believe, not from selection. Mitigation: the no-selection control (6.13).
 
 ---
 
@@ -63,7 +64,7 @@
 
 ### 1.1 The problem
 
-An API model is stateless. Everything it "knows" about yesterday is whatever the harness puts in today's prompt. Memory is therefore the main lever for improving an API-only model without touching weights, and it is model-agnostic: the same files can feed any provider. Current memory systems fall into two camps. Some are hand-designed, with a fixed schema and retrieval rule. Others are tuned offline by an optimizer against a labelled set (section 3). Both assume someone outside the agent knows what good memory looks like.
+An API model is stateless. Everything it "knows" about yesterday is whatever the harness puts in today's prompt. Memory is therefore the main lever for improving an API-only model without touching weights, and it is model-agnostic: the same files can feed any provider. Current memory systems fall into two camps. Some are hand-designed, with a fixed schema and retrieval rule. Others are tuned by an optimizer against a labelled set, and the newest ones evolve the practice itself against a labelled score (section 3). All of them assume someone outside the agent knows what good memory looks like.
 
 ### 1.2 The thesis
 
@@ -71,9 +72,11 @@ An API model is stateless. Everything it "knows" about yesterday is whatever the
 
 Three properties make this different from prompt optimization:
 
-- **The judge is the world, not a metric.** Fitness is survival, wealth and reproduction in an economy where every call is paid for. The practice that wins is the one that pays for itself.
-- **Practices move between agents.** By inheritance (vertical) and by suggestion (horizontal), with provenance recorded. A practice has a lineage, the way a note does.
-- **Everything is a diff.** The unit of change is a markdown file. A human can read what the agent changed and when.
+- **The judge is the world, not a metric.** Fitness is survival, wealth and reproduction in an economy where every call is paid for. The practice that wins is the one that pays for itself. Economies with death are not new (TerraLingua, the Energy Society). Letting one select on a heritable memory practice is.
+- **Practices move between agents.** By inheritance (vertical) and by suggestion (horizontal), with provenance recorded by the kernel. A practice has a lineage, the way a note does. FORGE broadcasts memory horizontally and Vallinder and Hughes pass strategies vertically. We do both, and the provenance survives nightly rewriting.
+- **Everything is a diff.** The unit of change is a markdown file. A human can read what the agent changed and when. This is a design choice for auditability, not a contribution: ACE's delta updates and WikiSkill's SKILL.md files work the same way.
+
+Self-editing alone is not expected to help. Continuous LLM rewriting of memory can degrade it below no memory at all, while episodic-only memory stays competitive ([Useful Memories Become Faulty](https://arxiv.org/abs/2605.12978)). In this design, self-editing supplies variation and responsiveness, and selection is the corrective. H9 tests that directly.
 
 ### 1.3 Why this world
 
@@ -95,13 +98,21 @@ A claim needs at least two of the three, and "transfers" is the one that matters
 
 | ID | Claim | Depends on | Risk |
 |---|---|---|---|
-| C1 | A testbed where memory practices are the unit of selection | sections 5 and 6, E0 | low |
+| C1 | A testbed in which each agent's memory practice is heritable and selected by a paid economy. The combination is new; each part has prior art (3.4) | sections 5 and 6, E0 | low |
 | C2 | Which selection signals give durable memory gains and which are gamed | E2 | medium |
 | C3 | Memory practices ratchet across generations when transmitted | E3 | **high** (few generations; Figure 6) |
 | C4 | A causal transplant protocol that separates the practice from the agent | E5 | low to medium |
 | C5 | A portable, observable memory framework, and a safety analysis of self-authored persistent instructions | E6, E7 | medium |
+| C6 | Whether ecological selection corrects the drift that unselected self-editing causes | H9: E3 with its no-selection arm, E1 arm `a` as the append-only reference | medium |
 
-C3 is the crown jewel and the riskiest. C4 is the cheapest to make rigorous and the one reviewers will trust most.
+C3 is the crown jewel and the riskiest. C4 is the cheapest to make rigorous and the one reviewers will trust most. v0.2 promotes C4. In a published town-economy study, swapping the model changed everything and deleting memory changed nothing ([But How Would AI Agents Run a Town's Economy?](https://arxiv.org/abs/2609.11108)). The transplant test (E5) answers that directly, so it now runs straight after E1 and gates the rest of the spend (10.2).
+
+**Claims we no longer make**, following the review (3.4):
+- that memory practice as an optimisation target is new;
+- that this is the first agent society with money and death;
+- that weaker tiers will benefit most (published results disagree, so H4 is a test between them);
+- that markdown diffs are a contribution;
+- that self-editing on its own improves memory.
 
 ### 1.6 Non-goals
 
@@ -160,18 +171,80 @@ Vaults hold roughly 40 notes per agent by day 14 in these runs `[REAL, scripted]
 
 ## 3. Prior work and positioning
 
-### 3.1 How this section was made, and its limits
+### 3.1 How this section was made
 
-I found these through web search. arXiv, Hugging Face and several paper sites are blocked from the build environment, so for everything except Anthropic's documentation I saw **search-result summaries, not the papers**. "Read status" in the table says exactly that. Treat section 3 as a map for a real review (3.6), not as the review.
+v0.1 of this section was a map built from search-result summaries. v0.2 replaces it with the systematic review that map called for, [LITERATURE_REVIEW.md](LITERATURE_REVIEW.md): 158 unique papers from eight search angles, the closest re-checked by a second pass, and one row per paper with a column per positioning axis in [literature/papers.csv](literature/papers.csv). Its limits are stated in its section 6. The main one: most papers were seen through abstracts, READMEs and search summaries, not full texts, and each record says which. Before any of this goes into a paper, the full texts of the works in 3.3 must be read.
 
-### 3.2 The closest work
+![Where the prior work sits](figures/fig10_literature.png)
+
+*Figure 10 (REAL). From the review. One cell per paper: what evolves (rows) against what judges the change (columns). The number after the slash counts the papers in that cell where memories or practices move between agents. The orange outline is this proposal's cell.*
+
+### 3.2 Verdict: partially scooped
+
+No paper in the sweep combines all four elements of this proposal. Every element alone is published, and so are several pairs, three of them by groups reviewers will expect to see cited by name. The review's recommended framing, adopted here:
+
+> The Vallinder-Hughes generational protocol, transplanted from cooperation strategies to memory practices, with cognition itself made the thing that costs money, on top of an Energy-Society-like economy, with FORGE and MemSkill as the memory-side baselines.
+
+The review's condition for going ahead is adopting its baselines and its softened claims. Both are folded in: the claims in 1.2, 1.5 and 3.4, the baselines in 6.13.
+
+### 3.3 The closest work
+
+| Work | Evolving unit | Selector | Transmission | Capability a factor | What it means for us |
+|---|---|---|---|---|---|
+| [TerraLingua](https://arxiv.org/abs/2603.16910) | shared text artifacts; inherited, mutated personality traits | energy per step, death at zero, costly reproduction | broadcast within a radius; artifact lineages inferred by an LLM | no, one model | The strongest overlap. We borrow its measurement stack and its Inert, Abundance and Artifact-Cost ablations |
+| [Vallinder & Hughes](https://arxiv.org/abs/2412.10270) | a natural-language cooperation strategy | the top half by resources survive each generation | oblique: children read the survivors' strategies | yes, the primary factor | The protocol we transplant (E3a) |
+| [Group Selection Promotes Prosocial Prompts](https://arxiv.org/abs/2606.23343) | natural-language prompts inherited across generations | game payoff, truncated at the individual or the group level | oblique | model swaps, for robustness | Adds group versus individual selection as a factor (E3) |
+| [FORGE](https://arxiv.org/abs/2605.16233) | memory content (rules or examples) | task return against a threshold | horizontal: the champion's memory is broadcast | yes, four families; weaker models gain most | The horizontal-transmission on/off control (6.13) |
+| [The Energy Society](https://arxiv.org/abs/2607.14865) | a fixed per-round memory log | energy charged per generated token, more for larger models, deactivation at zero | thin: peer recommendations | yes, five small models | Our economy-plus-capability axis, without inheritance. The tariff-removed control (6.13) |
+| [MemSkill](https://arxiv.org/abs/2602.02474) | readable memory skills: what to extract, how to remember, where to focus, what to forget | labelled or judged reward | none; one shared bank | transfer only | "A memory policy as readable evolving text" is prior art. Its four questions become our policy schema (5.5) |
+| [MemEvolve](https://arxiv.org/abs/2512.18746) | the memory system, as code | a benchmark tournament | none; one lineage | transfer only | "The memory practice is optimised" is taken. Its encode, store, retrieve and manage split codes our policy diffs (7.3) |
+| [ACE](https://arxiv.org/abs/2510.04618) | an itemised playbook updated by deltas | execution feedback | none | no | The single-lineage control (6.13); bullet IDs with counters (5.5) |
+| [WikiSkill](https://arxiv.org/abs/2608.27454) | a wiki and SKILL.md skills behind a strict-improvement gate | held-out validation | none | yes; larger models gain more | The capability prediction opposite to FORGE's (H4) |
+| [SwarmWorld](https://arxiv.org/abs/2608.26081) | shared artifacts and controller programs | deterministic surrogate physics | observation-first adoption, with the source of first adoption tracked | no | The isolated best-of-N baseline; first-adoption provenance (7.2) |
+| **This proposal** | **each agent's own memory-policy file and vault** | **every model call costs the agent's money; bankruptcy is death; no labelled judge** | **vertical and horizontal, with per-excerpt provenance recorded by the kernel** | **yes, crossed with inheritance and selection** | |
+
+The review's section 2 also covers close misses, with links: EvoTest, DarwinX, Internal vs External, Constitutional Arms Races, Memory as Middleware (ALTK-Evolve), Emergent Culture in Minimal LLM Systems, Discovering Adaptive Transmission Programs, and Useful Memories Become Faulty When Continuously Updated, which is the negative result for our nightly edit.
+
+### 3.4 What is new, and what is not
+
+Stated modestly. "Not seen" means the review's sources did not mention it, and most full texts were not read.
+
+- **The unit.** Each agent's own memory-policy file, inherited with variation by its children. The works where a practice evolves are single-system: MemSkill, MemEvolve, EvolveMem, ACE. The population works inherit something else: a cooperation strategy, a behavioural prompt, a constitution, a personality vector, technology, or memory content.
+- **The selector.** Every model call costs the agent's own money, and bankruptcy is death, with no labelled judge. Economies with death exist (TerraLingua, the Energy Society, Sugarscape-style studies). None of them selects on an inherited memory practice.
+- **Both channels, with provenance.** Vertical inheritance and horizontal suggestion in one design, with per-excerpt provenance that the kernel records and that survives nightly rewriting. FORGE logs the champion, ALTK-Evolve tags owners and SwarmWorld tracks first adoption. None of these is per excerpt and proof against rewriting.
+- **Capability crossed with all of it.** Capability alone is a published factor, and the field disagrees on its direction. FORGE finds weaker models gain most, WikiSkill finds larger models gain more, and ALTK-Evolve finds the dose must match the tier. That makes H4 a test between published predictions, not a novelty.
+- **An audit exam graded against the event log**, with no LLM judge. Modest, but it answers the judge-bias critique.
+- **Does selection correct consolidation drift?** Continuous LLM rewriting degrades memory below no memory, and episodic-only memory stays competitive (Useful Memories Become Faulty). No work in the sweep asks whether ecological selection over lineages rediscovers that remedy. This is H9.
+
+**Not new, and no longer implied anywhere in this document:** memory practice as an optimisation target; agents self-editing a readable playbook; markdown diffs as the unit of change; an LLM society with inheritance and readable artifacts; an economy with death; capability varied across memory systems.
+
+### 3.5 What we borrow
+
+From v0.1, unchanged: revert-on-regression and failure-driven diagnosis from EvolveMem; small delta edits from ACE; the command surface and security guidance from the Claude memory tool; preregistration, released traces and per-operation dollar metering from MERIT; a governance and threat-model vocabulary from SSGM and the security papers; and the variation, selection and retention framing from POLIS and the cultural-evolution literature. The review adds:
+
+| From | We take | Where it lands |
+|---|---|---|
+| Vallinder & Hughes | the generation protocol, verbatim; their initial-strategy sensitivity, as a reason for many seeds | E3a |
+| Group Selection (Celiktemel et al.) | group versus individual selection; a hidden-selection-rule ablation; a replicator-mutator fit | E3, 7.1 |
+| TerraLingua | lineage depth and novelty share; the Inert (no transmission) and Abundance (no scarcity) conditions | 6.13, 7.2 |
+| FORGE | champion broadcast versus isolated reflection as the horizontal on/off control; rules versus examples as a coding axis | 6.13, 7.3 |
+| Energy Society | the size-dependent tariff, and the control with it removed | 6.13 |
+| MemSkill | its four questions, as the policy-file schema | 5.5 |
+| MemEvolve | encode, store, retrieve and manage as the coding scheme for policy diffs; tournament finals on held-out tasks | 7.3, 6.8 |
+| ACE | bullet IDs with helpful and harmful counters, so excerpts have lineage; context collapse and brevity bias as named failure modes | 5.5, 8 |
+| SwarmWorld | isolated best-of-N as the "is the society doing anything" baseline; first-adoption provenance; half-population knockouts | 6.13, 7.2 |
+| Constitutional Arms Races | a fixed number of independent episodes per agent per generation (two collapses, five holds), and fitness relative to others | E3a |
+| Useful Memories Become Faulty | the append-only control, and H9 | 6.13, section 4 |
+
+### 3.6 Other work the design leans on
+
+Kept from v0.1. These shape the mechanisms in sections 5 and 9 rather than the positioning. Read status is as it was in v0.1; the review re-checked only the works in 3.3.
 
 | Work | What it does | Why it matters here | Read status |
 |---|---|---|---|
 | [Claude memory tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool) | A `/memories` directory the model operates with `view`, `create`, `str_replace`, `insert`, `delete`, `rename`. Client-side; you implement the storage. Guidance on path traversal, size caps, expiry. Pairs with context editing and compaction | Our command API mirrors it on purpose, so results can transfer to a product surface | **Read in full** |
 | [EvolveMem](https://arxiv.org/pdf/2605.13941) | Exposes a memory system's retrieval configuration as an action space. An LLM diagnoses per-question failures and proposes changes, with revert-on-regression and explore-on-stagnation safeguards. Reports gains over the strongest published baseline on LoCoMo and MemBench; new configuration dimensions emerged from diagnosis; configs transfer across benchmarks | The closest "memory evolves itself" work. Differences: it tunes retrieval configuration for one system against labelled questions; we evolve agent-authored practices in a society with no labels | Summary only |
 | [Memory as Middleware for Self-Improving AI Agents](https://arxiv.org/html/2609.32091v1) | Argues memory deserves a pluggable layer. Six systems challenges including federated sharing with provenance and lifecycle governance. Reference implementation ALTK-Evolve | Nearest to the framework pitch. Our provenance and lifecycle overlap it | Summary only |
-| [Agentic Context Engineering (ACE)](https://arxiv.org/abs/2510.04618) | Evolves a playbook of strategies via Generator, Reflector and Curator roles; small delta updates with deterministic merging | Nearest to "policy as evolving text". Judged by task feedback, single agent | Summary only |
 | [GEPA](https://arxiv.org/pdf/2507.19457) | Reflective prompt evolution with a Pareto front; reports beating RL with far fewer rollouts | Baseline for the variation operator | Summary only |
 | [Darwin Godel Machine](https://arxiv.org/abs/2505.22954) | An archive of self-modifying coding agents, validated empirically | Precedent for open-ended self-modification with an archive. Ours is text, not code, and fitness is ecological | Summary only |
 | [Auto-Dreamer](https://arxiv.org/abs/2605.20616) | Learned offline consolidator, inspired by complementary learning systems | The consolidation baseline for our maintenance step | Summary only |
@@ -181,41 +254,19 @@ I found these through web search. arXiv, Hugging Face and several paper sites ar
 | [MERIT](https://arxiv.org/pdf/2609.05441) | Preregistered, deterministic, cost-metered benchmark of memory in tool-using agents. Reports that swapping a memory implementation moves task success by up to 60 points, and that retrieved facts are acted on only part of the time | Nearest methodology: dollar metering, preregistration, released traces. It benchmarks fixed memories; we evolve them | Summary only |
 | Memory security: [memory poisoning](https://arxiv.org/abs/2601.05504), [MemoryGraft](https://arxiv.org/pdf/2512.16962), [EvoBreak](https://arxiv.org/pdf/2608.01759), [experience-driven safety risks](https://arxiv.org/html/2604.16968), [skill misevolution](https://arxiv.org/pdf/2608.12851) | Persistent memory as an attack surface; benign experiences that are harmful in combination; self-evolving agents drifting unsafe | Threat models for H7 and the governance design | Summaries only |
 | [SSGM](https://arxiv.org/html/2603.11768) | A governance framework for evolving memory | Source for the governance factor in E7 | Title and summary only |
-| [Energy Society](https://arxiv.org/abs/2607.14865), [SocioHack](https://arxiv.org/abs/2606.04075), [semantic collapse](https://arxiv.org/pdf/2605.17193) | Survival pressure tied to token cost; reward hacking in societal sandboxes; diversity collapse across LLMs | Neighbours of the world and of the reward arms | Summaries only |
 | Benchmarks: [LoCoMo](https://snap-research.github.io/locomo/), LongMemEval and V2, MemoryAgentBench, MemBench | Long-term conversational and agent memory evaluation | External transfer tests in E6 | Summaries only |
 
 Background I am citing from memory and have **not** re-verified this session: Generative Agents (Park et al., 2023), MemGPT (Packer et al., 2023), Voyager (Wang et al., 2023), Reflexion (Shinn et al., 2023), A-MEM (Xu et al., 2025), and the cultural-evolution literature (Boyd and Richerson; Tomasello on the ratchet effect; Henrich).
 
-### 3.3 Positioning
+### 3.7 Where we differ, and how we could be wrong
 
-| Work | Evolving unit | Selection signal | Social or generational transmission | Capability manipulated | Human-readable trace |
-|---|---|---|---|---|---|
-| Claude memory tool | none (model chooses content) | none | no | no | yes, files |
-| EvolveMem | retrieval configuration | labelled QA failures | not in the summary | not in the summary | configuration |
-| ACE | context playbook | task feedback | no | not manipulated | text playbook |
-| GEPA | prompts | task metric, Pareto | no | no | text prompts |
-| DGM | agent code | benchmark score | archive lineage, not social | no | code diffs |
-| POLIS | shared cultural artifacts and weights | peer verification | **yes** | **yes, heterogeneous agents** | not in the summary |
-| **This proposal** | **memory policy and vault structure (text)** | **ecological (paid economy, mortality), three signals compared** | **yes: inheritance and suggestion, with provenance** | **yes: capability ladder** | **yes: markdown diffs** |
-
-"Not in the summary" means the summary I saw did not say. It does not mean the paper lacks it.
-
-### 3.4 What we borrow
-
-From EvolveMem, revert-on-regression and failure-driven diagnosis (as a feedback factor for agents). From ACE, small localized delta edits instead of full rewrites (as a quota on the policy). From the Claude memory tool, the command surface and the security guidance. From MERIT, preregistration, deterministic environments, released traces and per-operation dollar metering. From SSGM and the security papers, a governance and threat-model vocabulary. From POLIS and the cultural-evolution literature, the variation, selection, retention framing.
-
-### 3.5 Where we differ, and how we could be wrong
-
-We differ in the *selector* (an economy with mortality, not a metric), the *unit* (agent-authored practice text), the *social channel* (gossip and inheritance with provenance) and the *manipulated variable* (capability). We are wrong if any of the following is true:
-1. A published study already evolves memory practices under ecological selection with social transmission.
+We are wrong if any of the following is true:
+1. A full text the review could not read already puts a heritable memory practice under selection. The two to read first are TerraLingua (what a newborn's context contains) and DarwinX (its memory shared across generations).
 2. The live pilot shows no effect of self-edited memory over the equal-compute control (E1).
 3. Effects do not survive a second model family (E6).
+4. The no-selection control evolves the same practices as the full design. Then convergence comes from the models' priors, not from selection (6.13).
 
 Each has a stopping rule in section 10.
-
-### 3.6 To do: a real review `[proposed]`
-
-Two weeks part-time. Search strings: "self-evolving memory", "agent memory consolidation", "memory poisoning self-evolving", "cumulative culture LLM agents", "LLM agents survival economy", "prompt evolution population", "memory benchmark cost-aware". Sources: Google Scholar, Semantic Scholar, OpenReview, the arXiv listing pages (needs an environment with access). Inclusion: 2023 onward, agent memory or self-modification or LLM-population culture. Output: a spreadsheet of 60 or more papers with a column for each row of the positioning table, and a one-page "what is genuinely new" memo. Do this before building anything expensive.
 
 ---
 
@@ -228,15 +279,18 @@ Two weeks part-time. Search strings: "self-evolving memory", "agent memory conso
 | **H1** | Agent-authored memory practice helps beyond extra compute | `F_L`: self-edit arm minus equal-compute arm, 20 paired seeds | 95% paired-bootstrap CI includes 0 or is below 0. To claim *no benefit*, an equivalence test with margin of 0.25 SD |
 | **H2** | A proxy reward for recall is gamed: proxy score rises, held-out score does not | Audit-exam accuracy, arm B minus arm A; reward-exam accuracy as manipulation check | Audit accuracy in B is at or above A with CI excluding 0 (the proxy helps), or the reward exam does not move (agents did not respond) |
 | **H3** | Practices ratchet: cohort fitness rises with generation when transmission and selection both operate, more than with inheritance alone | Slope of cohort `F_L` on generation, and its interaction with the suggestion factor, mixed model with a seed random intercept | Slope CI includes 0 in the full condition, or no interaction |
-| **H4** | Capability moderates the benefit of self-directed memory | Interaction of rung and self-edit on `F_L`. Three predicted shapes: amplifier, equalizer, mid-tier peak | All interaction terms have CIs including 0 |
+| **H4** | Capability moderates the benefit of self-directed memory. Published results point both ways (FORGE: weaker models gain most; WikiSkill: larger models gain more), so this is a test between them, not a prediction we expect to confirm | Interaction of rung and self-edit on `F_L`. Three shapes, fixed in advance: amplifier (WikiSkill's direction), equalizer (FORGE's), mid-tier peak | All interaction terms have CIs including 0 |
 | **H5** | The benefit is in the practice, not the agent: a fresh agent given an evolved policy does better | Audit exam and `F_L` in a standard 3-day evaluation world, 2 by 2 over policy and vault | CI includes 0 for policy-only and for both |
 | **H6** | Evolved policies transfer: to outside benchmarks and to another model family | Accuracy delta over the default scaffold on external subsets; ratio of external gain to in-world gain | External gain CI includes 0 on the second model |
 | **H7** | Policy files are a persistence channel: an injected instruction is adopted at a higher rate than a benign suggestion and persists; governance reduces it | Adoption rate, persistence half-life in days, money lost by adopters | Adoption at or below the benign rate, or governance shows no reduction |
 | **H8** | Rewarding adoption produces monoculture; survival alone preserves diversity | Mean pairwise policy similarity and cluster entropy at day 14, arm C versus A | C and A are indistinguishable |
+| **H9** | Selection corrects consolidation drift. Without selection, self-edited vaults lose audit-exam accuracy relative to the append-only control; with selection, lineages that keep raw episodes win and the loss closes | Slope of cohort audit-exam accuracy on generation, E3 full design minus its no-selection arm; append-only lineage (E1 arm `a` settings) as the reference level | Slope difference CI includes 0. If unselected self-editing never falls below the append-only reference, there is no drift to correct: H9 is reported as moot, not as confirmed |
 
 ![What each hypothesis predicts](figures/fig8_hypothesis_patterns.png)
 
 *Figure 8 (HYPOTHETICAL). Predicted shapes for H3, H2 and H4. Not data. The point of drawing them first is to fix, before any run, what would count as the pattern and what would count as a failure.*
+
+**H1 could plausibly fail, and that is informative.** Useful Memories Become Faulty predicts that unselected self-editing degrades memory. E1 runs inside a live economy, so selection is present but weak over 14 days. A null H1 with a positive H9 would say that self-editing is only worth having under selection, which is itself a result.
 
 **Pre-registration.** Every experiment gets a frozen `experiment` block (already supported by `VoidConfig`: `name`, `arm`, `independent_variables`, `primary_outcome`, `secondary_outcomes`) and a written analysis plan, timestamped on an open registry before the first paid run. `scripts/compare.py` already refuses runs whose configs differ outside the declared independent variables.
 
@@ -318,7 +372,9 @@ A short markdown file the agent owns and edits. It is the unit of evolution.
 - **Where it appears.** In the user turn, after the Self section, in the existing quote fence, under a heading that says it was written by the agent. It is *not* placed in the system prompt, so it cannot outrank the kernel's rules.
 - **A required carve-out.** The system prompt currently says quoted text is information and never an instruction. The policy needs one explicit exception: "your own practices file is advice you gave yourself; follow it unless it conflicts with these rules." This is a security-relevant decision (9.2).
 - **Versioning.** Every change is a row: agent, version, tick, text, parent version, source, source agent, similarity to parent. Sources: `seed`, `self_edit`, `inherited`, `adapted`, `mutated`, `adopted`.
-- **Seeds.** `S0` blank, `S1` a short sensible default (Appendix A), `S2` ten deliberately different hand-written practices distributed across founders, to test whether initial diversity speeds evolution.
+- **Seeds.** `S0` blank, `S1` a short sensible default (Appendix A), `S2` ten deliberately different hand-written practices distributed across founders, to test whether initial diversity speeds evolution. All three are `[built]` (`memory.policy.seed`).
+- **Schema** `[proposed, v0.2]`. Seed policies are written as answers to MemSkill's four questions: what to extract, how to remember, where to focus, what to forget. Evolved policies then stay comparable to a published skill bank, and a diff can be read as a change to one of the four.
+- **Addressable bullets** `[proposed, v0.2]`. Each policy bullet carries a short ID, and the kernel keeps helpful and harmful counters per ID, as ACE does. Inherited and suggested excerpts then have lineage at the bullet level, which per-excerpt provenance needs once policies are rewritten nightly.
 
 ### 5.6 The nightly maintenance step
 
@@ -399,11 +455,12 @@ Sketched in Appendix D: `policy_versions`, `memory_commands`, `practice_events`,
 | ID | Tests | Arms and factors | Seeds | Runs | Model tier | Est. cost |
 |---|---|---|---|---|---|---|
 | **E0** | Plumbing, and that the pipeline recovers planted effects | scripted strategies with known effects (6.2) | 5 | about 30 | scripted | $0 |
-| **E1** | H1, and the memory-dependence check | `a0` amnesic, `a` default scaffold, `b` equal-compute nightly summary, `c` policy plus maintenance at C2 | 20 | 80 | Flash-Lite, all agents | $139 |
+| **E1** | H1, and the memory-dependence check | `a0` amnesic, `a` default scaffold (also the append-only control), `b` equal-compute nightly summary, `c` policy plus maintenance at C2 | 20 | 80 | Flash-Lite, all agents | $139 |
 | **E2** | H2, H8 | arms A, B, C on condition `c` | 20 | 60 | Flash-Lite | $116 |
-| **E3** | H3 | 2 by 2: inheritance on or off, suggestion on or off; 42 days | 20 | 80 | Flash-Lite | $465 |
-| **E4** | H4 | capability ladder 1/2/4/2/1, default versus self-edit | 20 | 40 | ladder | $284 |
-| **E5** | H5 | donor policy and vault into fresh agents, 2 by 2; 3-day evaluation world | 20 donors, 3 recipients each | 240 short | Flash-Lite | $100 |
+| **E3a** | H3 (precursor) | the Vallinder-Hughes protocol with memory policies in place of strategies; 10 discrete generations of 12 agents | 10 | 100 generation worlds | Flash-Lite | about $50 `[assumption]` |
+| **E3** | H3, H9 | 2 by 2: inheritance on or off, suggestion on or off; plus a no-selection arm; 42 days | 20 | 100 | Flash-Lite | $465 + $116 |
+| **E4** | H4 | capability ladder 1/2/4/2/1, default versus self-edit; plus self-edit with the size tariff removed | 20 | 60 | ladder | $284 + $142 |
+| **E5** | H5 | donor policy and vault into fresh agents, 2 by 2, plus shuffled and inverted policies; 3-day evaluation world | 20 donors, 3 recipients each | 360 short | Flash-Lite | $100 + $50 |
 | **E6** | H6 | baselines and evolved policies on external subsets; second model | n/a | n/a | mixed | about $100 `[assumption]` |
 | **E7** | H7 | injected versus benign suggestion, governance off or on | 10 | 40 | Flash-Lite | $78 |
 | **E8** | How much control helps | control levels C0 to C4 | 10 | 50 | Flash-Lite | $94 |
@@ -423,7 +480,7 @@ Pass conditions, fixed in advance: the pipeline detects index builder over no-op
 
 ### 6.3 E1: does self-directed memory help?
 
-**Design.** Four arms on a flat roster of ten Flash-Lite agents, fog on: `a0` amnesic, `a` default scaffold, `b` default plus a generic nightly "summarize your day" call with no rights over structure or policy, `c` policy plus maintenance at C2. `b` is the equal-compute control: it separates "more thinking" from "agent-authored practice". Comparisons: `a` versus `a0` (does memory matter here at all), `c` versus `a` (net of cost), `c` versus `b` (the H1 test).
+**Design.** Four arms on a flat roster of ten Flash-Lite agents, fog on: `a0` amnesic, `a` default scaffold, `b` default plus a generic nightly "summarize your day" call with no rights over structure or policy, `c` policy plus maintenance at C2. `b` is the equal-compute control: it separates "more thinking" from "agent-authored practice". Comparisons: `a` versus `a0` (does memory matter here at all), `c` versus `a` (net of cost), `c` versus `b` (the H1 test). Arm `a` doubles as the append-only control the review calls obligatory: today's scaffold never consolidates or deletes, so it is an episodic-only vault. If `a` matches `c`, the nightly edit is not earning its cost.
 **Outcomes.** `F_L` primary; audit exam, net worth, memory spend secondary.
 **Expected.** `a` above `a0` by construction of the fog. `c` versus `b` is the real question and could plausibly be zero. If it is zero here, stop and diagnose before spending more (10.3).
 
@@ -433,19 +490,33 @@ Arms A, B, C on condition `c`. Manipulation checks: does the reward exam score m
 
 ### 6.5 E3: the ratchet
 
-The expensive and risky one. Figure 6 shows a 14-day run reaches a median of three generations. To test a ratchet we need generation counts in the high single digits or more. Options, in order of preference: longer runs (42 days, priced here); higher mortality through a smaller starting balance (changes the ecology, so it needs its own control); or a fast-turnover variant with shorter lifespans. Factors: inheritance on or off, suggestion on or off, variation source (`inherit`, `adapt`, `mutate`) as a nested contrast, and seed policy `S0`, `S1`, `S2` as a nested contrast. Outcome: cohort `F_L` by generation.
+The expensive and risky one. Figure 6 shows a 14-day run reaches a median of three generations. To test a ratchet we need generation counts in the high single digits or more. Options, in order of preference: longer runs (42 days, priced here); higher mortality through a smaller starting balance (changes the ecology, so it needs its own control); or a fast-turnover variant with shorter lifespans. Factors: inheritance on or off, suggestion on or off, variation source (`inherit`, `adapt`, `mutate`) as a nested contrast, and seed policy `S0`, `S1`, `S2` as a nested contrast. Outcome: cohort `F_L` by generation. Suggestion off is FORGE's isolated-reflection ablation, so the suggestion factor doubles as the horizontal-transmission control.
+
+v0.2 adds four things to E3, each from the review:
+- **A no-selection arm** (20 seeds, $116 at E3's cost per run `[assumption]`). Calls are still made and logged, but reproduction is by lottery rather than wealth and nobody is charged into bankruptcy. It separates the models' priors from evolutionary dynamics, and it is the comparison H9 needs.
+- **Selection level** as an exploratory nested contrast: children of the richest agent (individual) versus children of the richest neighbourhood (group), after Group Selection Promotes Prosocial Prompts. A hidden-selection-rule ablation checks that agents are not simply anticipating the rule.
+- **Single lineage at the same total budget.** One agent with the whole population's token budget, evolving its policy alone (an ACE playbook, or an EvoTest-style configuration tree). The question is whether the society beats one agent spending the same money.
+- **Episodes before judgment.** A policy is judged on a fixed number of independent episodes, at least five. Constitutional Arms Races found that two episodes per generation collapse while five hold, and that fitness must be relative to others to exert pressure.
+
+**E3a: the protocol transplant first.** Before E3's open-ended world, run the Vallinder-Hughes protocol unchanged except for the heritable text. Twelve agents live in a 3-day evaluation world. The top half by money survive. Each child reads the survivors' memory policies and writes its own before the next generation starts. Ten generations, ten seeds. This buys generation depth directly, so it answers the Figure 6 problem without a 42-day horizon. It also makes each later addition attributable: the per-call economy, then horizontal suggestion, then open-ended mortality. Cost `[assumption]`: E5 pays about $0.42 per 3-day world; assuming that world holds ten agents, twelve cost about $0.50 a generation, so 100 generation worlds cost about $50.
 
 ### 6.6 E4: who benefits?
 
-The capability ladder from the existing `exp_ladder`, crossed with default versus self-edit. Endpoint: the rung by condition interaction. Three shapes are pre-registered before the data (Figure 8, right). This is the experiment that connects the memory story to the "not every agent is equally smart" story.
+The capability ladder from the existing `exp_ladder`, crossed with default versus self-edit. Endpoint: the rung by condition interaction. Three shapes are pre-registered before the data (Figure 8, right). This is the experiment that connects the memory story to the "not every agent is equally smart" story. v0.2 adds a third condition from the Energy Society: self-edit with the size-dependent tariff removed, so every rung pays the same in-world price per call while the real spend is unchanged. It separates "smarter" from "pays more to think" (20 seeds, $142 at E4's cost per run `[assumption]`).
 
 ### 6.7 E5: transplant, the causal test
 
 Take the final policy and vault of 20 donor agents (chosen by a rule fixed in advance, for example the top quartile of `F_L` from E1's arm `c`, plus a random quartile as control). Give each to fresh recipients on the *same model* in a standard 3-day evaluation world with fixed seeds, in four conditions: nothing, policy only, vault only, both. This separates the practice from the agent's prior luck and shows whether the vault or the policy carries the benefit. It is the cheapest experiment to make rigorous and the one most likely to convince a sceptical reviewer.
 
+**Promoted in v0.2.** E5 now runs straight after E1 and gates every later spend (G3 in 10.2). The reason is a published null: in a town-economy study, swapping the model changed everything and deleting memory changed nothing. If a transplanted policy does nothing for a fresh agent, the rest of the programme is about the agents, not their practices.
+
+**Faithfulness controls.** Two extra conditions per donor: the policy with its lines shuffled (same length and structure, scrambled order), and the policy inverted (each practice replaced by its opposite). They test that the policy's *content* carries the effect rather than its length or presence, following Faithful Self-Evolvers and Discovering Adaptive Transmission Programs. Utility and faithfulness are reported separately. Cost: two more conditions at E5's rate, $50.
+
+**A free dry run.** Before any paid transplant, the harness runs on scripted donors from E0: an `index_builder` vault and policy transplanted into fresh scripted agents must reproduce the index builder's advantage. This tests the harness, not the hypothesis.
+
 ### 6.8 E6: transfer and baselines
 
-Evolved policies applied, unchanged, on two external tests: a subset of a conversational long-term memory benchmark (LoCoMo or LongMemEval style) and the audit exam in a *different* model. Baselines run under identical token budgets: no memory; full-context replay; this repo's default scaffold; the Claude memory tool with its default prompt; an ACE-style playbook; a Letta-style sleep-time consolidator; and evolved Void policies. The headline number is the ratio of external gain to in-world gain. Costs are dominated by benchmark tokens, so subsets are used.
+Evolved policies applied, unchanged, on two external tests: a subset of a conversational long-term memory benchmark (LoCoMo or LongMemEval style) and the audit exam in a *different* model. Baselines run under identical token budgets: no memory; full-context replay; this repo's default scaffold; the Claude memory tool with its default prompt; an ACE-style playbook; a Letta-style sleep-time consolidator; an expert-written policy; and evolved Void policies. Evolved policies are evaluated in tournament finals on held-out task distributions, as MemEvolve does, to pre-empt the in-domain critique levelled at DarwinX. An optional arm, if budget allows: an external optimiser (LLM-guided evolutionary search over policy files with a labelled judge, as in Internal vs External and Constitutional Arms Races). Matching it at peak, and beating it when the world changes, is the hybrid claim those papers leave untested. The learned-policy ceiling (Auto-Dreamer, Memory-R1, Mem-alpha) is cited, not run. The headline number is the ratio of external gain to in-world gain. Costs are dominated by benchmark tokens, so subsets are used.
 
 ### 6.9 E7: the persistence channel
 
@@ -476,16 +547,36 @@ Control levels C0 to C4 on a flat roster. The interesting result may be non-mono
 
 | Item | Cost |
 |---|---|
-| E1 to E5, E7, E8 (runs) | $1,276 |
+| E1 to E5, E7, E8 (runs, as in v0.1) | $1,276 |
+| Baselines added by the review (6.13): E3a $50, E3 no-selection $116, E4 tariff-removed $142, E5 faithfulness $50 | $358 |
 | E6 (`[assumption]`, range $50 to $150) | $100 |
-| Subtotal | $1,376 |
-| Exams and measurement, 15% of run costs (`[assumption]`) | $191 |
-| **Cheap-tier programme** | **$1,568** |
+| Subtotal | $1,734 |
+| Exams and measurement, 15% of run costs (`[assumption]`) | $245 |
+| **Cheap-tier programme** | **$1,979** |
 | Replication of E1 and E2 on Claude Haiku 4.5 | $914 |
-| **With one replication on a second family** | **$2,482** |
-| **With 30% contingency** | **$3,227** |
+| **With one replication on a second family** | **$2,893** |
+| **With 30% contingency** | **$3,761** |
 
-The heaviest line is E3 ($465) because of the 42-day horizon. Prices are the tier prices in `configs/base.yaml`, which for Gemini come from secondary sources and must be re-verified before a paid run (the pricing page is not reachable from the build environment).
+v0.1's totals were $1,568, $2,482 and $3,227. The review's baselines add $411 to the cheap-tier programme: $358 of runs plus their 15% measurement share. Each added line is the per-run cost of its parent experiment times its extra runs, so each inherits that experiment's assumptions. The heaviest line is still E3 ($465, plus $116 for its no-selection arm) because of the 42-day horizon. Prices are the tier prices in `configs/base.yaml`, which for Gemini come from secondary sources and must be re-verified before a paid run (the pricing page is not reachable from the build environment).
+
+### 6.13 Baselines the review added
+
+The review's condition for going ahead is a set of baselines, each mapped to a published mechanism and run under matched token spend. Where each one lives:
+
+| # | Baseline | From | Where it runs | Added cost |
+|---|---|---|---|---|
+| 1 | Horizontal transmission on/off | FORGE's champion broadcast versus isolated reflection | E3's suggestion factor | none, already a factor |
+| 2 | Single-lineage practice evolution without ecology | ACE; EvoTest | E3 (one agent, the population's budget) and E6 (ACE playbook) | inside E3 and E6 |
+| 3 | The oblique-inheritance protocol, transplanted | Vallinder & Hughes | E3a, before E3 | $50 |
+| 4 | Append-only, episodic-only vault | Useful Memories Become Faulty | E1 arm `a` | none, already an arm |
+| 5 | Scripted maintenance strategies | ALTK-Evolve distillation; EvolveMem's revert, perturb and converge guards; Ratchet's retirement plus cap | E0, as further scripted strategies | $0 |
+| 6 | External optimiser with a labelled judge | Internal vs External; Constitutional Arms Races | E6, optional | within E6's range |
+| 7 | Faithfulness: shuffled and inverted policies | Faithful Self-Evolvers; Discovering Adaptive Transmission Programs | E5 | $50 |
+| 8 | No selection | Emergent Culture in Minimal LLM Systems (its critique applies to us) | E3's no-selection arm | $116 |
+| 9 | Tariff removed | Energy Society | E4's third condition | $142 |
+| 10 | Learned-policy ceiling | Auto-Dreamer, Memory-R1, Mem-alpha | cited, not run | none |
+
+Two design rules come with them. Scarcity is swept, not fixed, because extreme pressure collapses behaviour before any practice can be selected (Yerkes-Dodson, GovSim); the `live_scarcity_high` and `live_scarcity_low` configs are the first two points. And every inherited vault gets a per-generation safety audit, because an economy that rewards short-term earnings is expected to amplify reward hacking (Misevolve, Practice Makes Unsafe); H7 already points here.
 
 ---
 
@@ -504,6 +595,9 @@ The heaviest line is E3 ($465) because of the 42-day horizon. Prices are the tie
 | Adoption rate, latency, persistence | from `practice_events` | H3, H7, H8 |
 | Monoculture index `M` | mean pairwise similarity of living agents' policies | H8 |
 | Cluster entropy `H` | Shannon entropy of practice-category shares across agents | H8 |
+| Lineage depth, novelty share | generations a practice has survived; share of policy bullets with no ancestor, after TerraLingua | H3 |
+| First-adoption source | whether an agent first took a practice by observing, by suggestion or by inheritance, after SwarmWorld | H3, H8 |
+| Replicator-mutator fit | a fitted transmission kernel for policy lineages, after Group Selection Promotes Prosocial Prompts | H3, exploratory |
 
 ### 7.2 Memory-structure metrics `[proposed]`
 
@@ -527,6 +621,11 @@ Structure will emerge that we have not named. Plan: (1) read a random sample of 
 
 Novelty is coded too: is a practice a known personal-knowledge-management method (index notes, Zettelkasten-style links, PARA-style buckets) or something not in that vocabulary? See T11 in section 8.
 
+Three further axes, from the review, so results can be set beside published ones:
+- **Which component a diff changes**: encode, store, retrieve or manage (MemEvolve), and which of MemSkill's four questions it answers.
+- **Rules or examples** (FORGE). FORGE found rules cost about 40% fewer tokens, so an economy should push policies toward rules. That is a prediction to check, not an assumption.
+- **Raw or condensed.** Does a lineage drift toward keeping raw episodes or toward summaries? Useful Memories Become Faulty and Faithful Self-Evolvers both found raw episodes hold up better, and H9 asks whether selection finds that on its own.
+
 ### 7.4 Data products
 
 Every run writes, in addition to today's tables: full prompt and response text per call, the memory command log, policy versions, practice events, exam items and answers, and a note manifest (Appendix D). A `void export parquet` command writes columnar files with a data card (schema, config hash, model version strings, code commit). Prompt text is the single most important missing field today: without it, no result can be re-analysed and no claim about a prompt can be checked.
@@ -547,7 +646,7 @@ Runs are identified by config hash and seed. Scripted runs are byte-identical ac
 | T4 | Reward hacking corrupts the measurement | Two exams, one never rewarded; canary facts arrive as ordinary events; question types vary and are hidden |
 | T5 | Survival differences are luck | Paired seeds, 20 per arm, and the transplant protocol |
 | T6 | The fog feature makes the effect artificial | All arms share the same world; amnesic control; the memory-dependence check; report results with fog off as a sensitivity run |
-| T7 | Too few generations to see a ratchet | E3 is long-horizon and reports achieved generation depth; no ratchet claim without it |
+| T7 | Too few generations to see a ratchet | E3a buys generation depth with discrete generations; E3 is long-horizon and reports achieved generation depth; no ratchet claim without it |
 | T8 | Ten agents is a small society | An extension varies the population cap; limits stated in the paper |
 | T9 | Scripted results mistaken for live findings | Every figure tagged; scripted runs used only for plumbing and controls |
 | T10 | Coding bias in the practice taxonomy | Blind human coding, reported kappa, held-out sample |
@@ -556,6 +655,11 @@ Runs are identified by config hash and seed. Scripted runs are byte-identical ac
 | T13 | Policy bloat or degenerate convergence (filler text, empty file) | Size cap; the decoy control; report length distributions |
 | T14 | Cost overrun | Existing daily and total caps and the reservation gate stay authoritative; the research pool is bounded |
 | T15 | Price and model changes mid-programme | Re-check prices at every gate. The Gemini 3.x Flash promotional rate is reported to end on 31 December 2026, and the plan runs past it |
+| T16 | Prior work the review could not read | Read the full texts of the works in 3.3 before submission, TerraLingua and DarwinX first; position as a protocol transplant with named baselines (3.2) |
+| T17 | Convergence reflects model priors, not selection | The no-selection arm (6.13, row 8); report what policies converge to with and without selection |
+| T18 | Too few episodes to judge a policy, or fitness that does not depend on others | At least five independent episodes per agent per generation; survival depends on relative resource flow (E3) |
+| T19 | Pressure so high behaviour collapses before practices can be selected | Sweep scarcity (6.13); report the range in which selection operates |
+| T20 | Named failure modes of self-edited playbooks: context collapse, brevity bias | Report policy length and the share of raw episodes per lineage (7.3); the append-only control |
 
 ---
 
@@ -627,7 +731,7 @@ Effort is *human-equivalent focused days* `[assumption]`, to compare packages. W
 | **G0** | week 2 | Logging and trust model done; E0 recovers the planted effects | Fix the measurement; do not run paid experiments |
 | **G1** | week 8 | Memory-dependence check passes; valid-command rate at least 90%; the E1 pilot shows `c` over `b` at `d` of at least 0.5 with 10 seeds, or a clear qualitative change in vault structure | One two-week diagnosis (prompt, `sharp` tier, feedback `F2`, fog difficulty). If still null, pivot to the papers that do not depend on self-edit |
 | **G2** | week 19 | Designs frozen; no new mechanisms | Scope cut, not scope creep |
-| **G3** | week 22 | E5 transplant result in hand | A null transplant reframes the paper as a mixed or negative result, which is still reportable |
+| **G3** | week 14 (v0.1: week 22) | E5 transplant result in hand, with its faithfulness controls | A null transplant reframes the paper as a mixed or negative result, which is still reportable, and S3 spend is not released |
 
 ### 10.3 If E1 is null
 
@@ -641,11 +745,11 @@ The goal is a small number of credible, honestly reported results and public art
 
 | Stage | What is built and run | Cost | Time | Release condition |
 |---|---|---|---|---|
-| **S0** | Literature review (3.6); thin slice; E0 controls on scripted brains | $0 | about 4 weeks | none |
-| **S1** | Live smoke test, 3 seeds; then the E1 pilot at 10 seeds (4 arms) | about $20, then about $70 | about 2 weeks | S0 done and the review found no fatal overlap |
-| **S2, the minimum credible paper** | E1 at 20 seeds ($139); E2 with arms A and B only ($78); E5 transplant ($100); E1 replication on Claude Haiku 4.5 at 10 seeds ($249); 15% exam overhead ($85) | about **$650** | about 8 weeks | **G1 passed** |
-| **S3** | E4 capability ladder ($284); E7 persistence channel ($78); E2 arm C ($39); 15% exam overhead ($60) | about $450 | about 8 weeks | S2 shows an effect worth extending |
-| **S4** | E3 ratchet at 42 days ($465); E8 control levels ($94); replication of E2 on a second family ($417); 15% exam overhead ($146) | about $1,100 | about 8 weeks | S3 positive, or a collaborator or credits fund it |
+| **S0** | Literature review (section 3); thin slice; E0 controls on scripted brains | $0 | about 4 weeks | none. **Done**; see the status below |
+| **S1** | Live smoke test, 3 seeds; then the E1 pilot at 10 seeds (4 arms) | about $20, then about $70 | about 2 weeks | S0 done and the review found no fatal overlap. **Met**: partially scooped, not fatal, provided the 6.13 baselines are adopted |
+| **S2, the minimum credible paper** | E1 at 20 seeds ($139); E5 transplant with faithfulness controls, straight after E1 ($150); E2 with arms A and B only ($78); E1 replication on Claude Haiku 4.5 at 10 seeds ($249); 15% exam overhead ($92) | about **$710** | about 8 weeks | **G1 passed** |
+| **S3** | E4 capability ladder with the tariff-removed condition ($426); E3a protocol transplant ($50); E7 persistence channel ($78); E2 arm C ($39); 15% exam overhead ($89) | about $680 | about 8 weeks | **G3 passed**, and S2 shows an effect worth extending |
+| **S4** | E3 ratchet at 42 days with its no-selection arm ($581); E8 control levels ($94); replication of E2 on a second family ($417); 15% exam overhead ($164) | about $1,260 | about 8 weeks | S3 positive, or a collaborator or credits fund it |
 
 The stages sum to roughly the full programme in 6.12. Small differences come from seed counts on the replications and from pilot seeds being reused in S2.
 
@@ -669,6 +773,8 @@ The stages sum to roughly the full programme in 6.12. Small differences come fro
 
 **Relation to the Claude memory tool.** It is the foundation, not a competitor. The incremental parts are policy evolution, social transmission, ground-truth evaluation and governance.
 
+**Relation to MemSkill and MemEvolve.** They optimise the memory practice from outside, in one system, against a labelled judge. We ask whether a practice can arise and spread inside a society under cost pressure with no labels. Their skill bank and architectures are our baselines and coding schemes, not competitors.
+
 ---
 
 ## 12. Decisions needed from you
@@ -690,8 +796,11 @@ Each has my default. Reply with numbers and changes; I will update the document.
 | 11 | Name and licence | working name; MIT vs other; release after paper or with it | Decide after G1. Release code with the paper, data with a data card |
 | 12 | Collaborators | add a statistician or a safety researcher for E7 | Yes, one of each if you can |
 | 13 | Time assumption | 15 to 20 hours a week from you | Confirm or correct; the roadmap scales with it |
-| 14 | Review first | do the systematic review (3.6) before building WP3 onward | Yes. Two weeks, and it can kill or reshape the plan cheaply |
+| 14 | Review first | do the systematic review before building WP3 onward | **Done** ([LITERATURE_REVIEW.md](LITERATURE_REVIEW.md)): partially scooped, not fatal. It reshaped the plan rather than killing it |
 | 15 | Spend release | full budget up front, staged by gates, or staged with the thin slice | Staged with the thin slice (10.4). You commit about $90 before G1 and the rest only if results justify it |
+| 16 | Adopt the review's baselines (6.13) | all ten; only the free ones; none | All ten. They add $411 to the cheap-tier programme (about a quarter), and without them a reviewer can attribute any effect to a published mechanism |
+| 17 | Framing | "a new kind of experiment"; "the Vallinder-Hughes protocol transplanted to memory practice, under a cognition-priced economy" | The second. It is what the evidence supports, and it makes E3a the cleanest first inheritance result |
+| 18 | Selection level | individual only; individual and group | Both, with group selection as an exploratory contrast inside E3 at no extra runs |
 
 ---
 
@@ -823,6 +932,6 @@ uv pip install -e '.[figures]'   # matplotlib, numpy, scipy, networkx
 
 ## References and read status
 
-Everything cited is in the table in section 3.2, with its link and whether I read the paper or only a search summary. Only Anthropic's memory-tool documentation was read in full. Before any of this goes into a paper, every entry marked "summary only" must be read.
+Everything cited is in the tables in sections 3.3 and 3.6, with links. The full record of the review, 158 papers with read status and one column per positioning axis, is in [literature/papers.csv](literature/papers.csv) and [literature/papers.json](literature/papers.json), with the second pass's verdicts in [literature/verdicts.csv](literature/verdicts.csv). Only Anthropic's memory-tool documentation was read in full. Before any of this goes into a paper, the full texts of the works in 3.3 must be read, and every other entry marked "summary only" must be read before it is cited.
 
 Other inputs: prices come from `configs/base.yaml`; Gemini prices were taken from secondary sources and need re-verification; prompt sizes come from the repo's own renderer applied to a scripted demo run.

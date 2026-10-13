@@ -1,6 +1,6 @@
 # Prior work on evolving agent memory: a systematic sweep
 
-**Status:** the systematic review that section 3.6 of [MEMORY_EVOLUTION.md](MEMORY_EVOLUTION.md) called for, run from inside the build environment on 2026-10-08 and 2026-10-13. It is a *map with verified landmarks*, not a reading of every paper: 158 unique papers were collected across eight search angles, the closest were re-checked by a second pass, and a positioning memo was written from the verified records. Every limit of the method is stated in section 6. The record of every paper is in [literature/papers.csv](literature/papers.csv) (one row per paper, one column per positioning axis) and [literature/papers.json](literature/papers.json).
+**Status:** the systematic review that section 3.6 of the proposal's v0.1 called for. Its changes are folded into v0.2 of [MEMORY_EVOLUTION.md](MEMORY_EVOLUTION.md) (sections 1, 3, 4, 6.13 and 10.4). It was run from inside the build environment on 2026-10-08 and 2026-10-13. It is a *map with verified landmarks*, not a reading of every paper: 158 unique papers were collected across eight search angles, the closest were re-checked by a second pass, and a positioning memo was written from the verified records. Every limit of the method is stated in section 6. The record of every paper is in [literature/papers.csv](literature/papers.csv) (one row per paper, one column per positioning axis) and [literature/papers.json](literature/papers.json).
 
 ![Where the prior work sits](figures/fig10_literature.png)
 
