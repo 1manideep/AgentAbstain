@@ -18,3 +18,7 @@ web/dist/
 
 # agent worktrees (git worktree checkouts used by parallel implementers)
 .claude/worktrees/
+
+# stray TypeScript emit (the web sources are .ts/.tsx; Vite would resolve a stale .js first)
+web/src/**/*.js
+web/vite.config.js
