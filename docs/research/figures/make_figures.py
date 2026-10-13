@@ -587,9 +587,9 @@ def fig_literature(papers_path: Path) -> dict[str, object]:
     pr = rows.index("prompt/playbook")
     pc = cols.index("ecological (survival/economy)")
     ax.add_patch(FancyBboxPatch((pc - 0.47, pr - 0.47), 0.94, 0.94, boxstyle="round,pad=0.0,rounding_size=0.08", fill=False, ec=ORANGE, lw=2.4))
-    ax.annotate("this proposal: a memory practice,\nheritable and transmissible,\nselected by an economy", xy=(pc + 0.47, pr + 0.1),
-                xytext=(pc - 0.5, pr + 2.55), fontsize=8.8, color=ORANGE, ha="center", va="center",
-                arrowprops={"arrowstyle": "-|>", "color": ORANGE, "lw": 1.3, "connectionstyle": "arc3,rad=-0.25"})
+    ax.annotate("this proposal: a memory practice,\nheritable and transmissible,\nselected by an economy", xy=(pc - 0.3, pr + 0.47),
+                xytext=(pc - 1.0, pr + 2.55), fontsize=8.8, color=ORANGE, ha="center", va="center",
+                arrowprops={"arrowstyle": "-|>", "color": ORANGE, "lw": 1.3, "connectionstyle": "arc3,rad=0.2"})
     ax.set_xticks(range(len(cols)))
     ax.set_xticklabels([lab for _, lab in SIGNAL_COLS], fontsize=8.8)
     ax.set_yticks(range(len(rows)))
