@@ -3,8 +3,9 @@
 Rules (DESIGN §9.1, v2 reservation model):
 
 * ``gate`` runs before a call with a *hold* (the worst case for this call). It passes only if
-  the agent holds the hold and both caps have room for ``spent + reserved + hold``; on pass
-  the hold is reserved. Neither ``gate`` nor ``meter`` changes agent status: bankruptcy is a
+  the agent holds the hold and both caps have room for ``spent + reserved + cap_hold``; on pass
+  ``cap_hold`` is reserved. ``cap_hold`` is the call's real-dollar worst case (``pricing.hold_parts``);
+  it equals the hold for scripted tiers and when a caller passes none. Neither ``gate`` nor ``meter`` changes agent status: bankruptcy is a
   single end-of-tick decision in ``lifecycle``.
 * ``meter`` runs after the call with the provider's reported usage (or the hold when usage
   is unknown). It releases the reservation, adds the real cost to the caps and debits the
@@ -14,6 +15,11 @@ Rules (DESIGN §9.1, v2 reservation model):
 * Kernel wallets (``spawn_pool``, ``house``, ``chronicle``, ``research_pool``) live in ``world_kv`` and get
   ledger rows like agents do, so money is conserved across the whole run.
 * ``charged_call`` is the single choke point for any LLM call.
+* Every reservation is also written to ``world_kv`` (``reserved_inflight``) before the call leaves, and
+  released in the same transaction that meters it. A hold still outstanding when the process died (or when
+  a tick failed) belongs to a call that may have been billed but was never metered: ``book_unmetered``
+  books it as spend (ledger kind ``inflight_lost``, estimated), so a crash can never make real money
+  disappear from ``spend_total`` and from the cross-run budget that reads it.
 """
 
 from __future__ import annotations
@@ -26,7 +32,7 @@ from typing import Any
 from void.brain.base import BrainResult, Usage
 from void.config import TierConfig, VoidConfig, usd_to_micro
 from void.db import Database
-from void.economy.pricing import hold_micro, real_cost_micro, world_cost_micro
+from void.economy.pricing import hold_parts, real_cost_micro, world_cost_micro
 from void.ids import IdFactory
 
 __all__ = ["Wallet", "GateResult", "MeterResult", "InsufficientFunds", "KERNEL_WALLETS", "ChargedCall"]
@@ -44,6 +50,7 @@ class GateResult:
     reason: str  # ok | insufficient | daily_cap | total_cap
     hold: int
     balance: int
+    cap_hold: int | None = None  # what was (or would have been) reserved against the caps; None: the hold
 
 
 @dataclass(frozen=True)
@@ -80,6 +87,7 @@ class Wallet:
                              ("research_pool", usd_to_micro(cfg.economy.research_pool_usd)), ("house_debt", 0)):
             if db.kv_get(key) is None:
                 db.kv_set(key, initial)
+        self.book_unmetered("process ended with calls in flight")
 
     # --- kernel-owned totals ----------------------------------------------------------------
     @property
@@ -103,9 +111,31 @@ class Wallet:
         self._reserved_today = 0
 
     def clear_reservations(self) -> None:
-        """Called at the end of every tick: any hold not released by a meter is dropped."""
+        """Called at the end of every tick: any hold not released by a meter is dropped (a failed tick books
+        its outstanding holds with :meth:`book_unmetered` first)."""
         self._reserved_today = 0
         self._reserved_total = 0
+        if self.reserved_inflight:
+            self.db.kv_set("reserved_inflight", 0)
+
+    @property
+    def reserved_inflight(self) -> int:
+        return int(self.db.kv_get("reserved_inflight", 0) or 0)
+
+    def book_unmetered(self, why: str) -> int:
+        """Book every outstanding durable reservation as real spend (an estimate: the provider's usage is
+        unknown) and return the amount. Called when a run is opened and when a tick fails."""
+        lost = self.reserved_inflight
+        if lost <= 0:
+            return 0
+        tick = int(self.db.kv_get("tick", 0) or 0)
+        with self.db.tx():
+            self.db.kv_set("spend_today", self.spend_today + lost)
+            self.db.kv_set("spend_total", self.spend_total + lost)
+            self.db.kv_set("reserved_inflight", 0)
+            self._ledger("house", tick, 0, self.balance("house"), "inflight_lost", None,
+                         {"real_cost": lost, "estimated": 1, "why": why})
+        return lost
 
     # --- balances ---------------------------------------------------------------------------
     def balance(self, wallet_id: str) -> int:
@@ -171,22 +201,31 @@ class Wallet:
         return True
 
     # --- gate and meter -----------------------------------------------------------------------
-    def hold_for(self, tier: TierConfig, prompt_tokens: int, system_tokens: int = 0) -> int:
-        return hold_micro(tier, self.cfg.economy, prompt_tokens, system_tokens)
+    def hold_for(self, tier: TierConfig, prompt_tokens: int, system_tokens: int = 0, *, schema_tokens: int = 0) -> int:
+        """The balance hold of one call (``pricing.hold_parts``)."""
+        return hold_parts(tier, self.cfg.economy, prompt_tokens, system_tokens, schema_tokens=schema_tokens)[0]
 
-    def gate(self, wallet_id: str, hold: int) -> GateResult:
+    def holds_for(self, tier: TierConfig, prompt_tokens: int, system_tokens: int = 0, *, schema_tokens: int = 0) -> tuple[int, int]:
+        """``(hold, cap_hold)`` of one call (``pricing.hold_parts``): pass both to :meth:`gate` and :meth:`meter`."""
+        return hold_parts(tier, self.cfg.economy, prompt_tokens, system_tokens, schema_tokens=schema_tokens)
+
+    def gate(self, wallet_id: str, hold: int, *, cap_hold: int | None = None) -> GateResult:
+        cap = hold if cap_hold is None else int(cap_hold)
         bal = self.balance(wallet_id)
         if bal < hold:
-            return GateResult(False, "insufficient", hold, bal)
-        if self.spend_total + self._reserved_total + hold > self.total_cap:
-            return GateResult(False, "total_cap", hold, bal)
-        if self.spend_today + self._reserved_today + hold > self.daily_cap:
-            return GateResult(False, "daily_cap", hold, bal)
-        self._reserved_today += hold
-        self._reserved_total += hold
-        return GateResult(True, "ok", hold, bal)
+            return GateResult(False, "insufficient", hold, bal, cap)
+        if self.spend_total + self._reserved_total + cap > self.total_cap:
+            return GateResult(False, "total_cap", hold, bal, cap)
+        if self.spend_today + self._reserved_today + cap > self.daily_cap:
+            return GateResult(False, "daily_cap", hold, bal, cap)
+        self._reserved_today += cap
+        self._reserved_total += cap
+        # durable before the call leaves the process (autocommits outside a transaction)
+        self.db.kv_set("reserved_inflight", self.reserved_inflight + cap)
+        return GateResult(True, "ok", hold, bal, cap)
 
     def release(self, hold: int) -> None:
+        """Drop an in-memory reservation (``meter`` releases the durable one in its own transaction)."""
         self._reserved_today = max(0, self._reserved_today - hold)
         self._reserved_total = max(0, self._reserved_total - hold)
 
@@ -194,14 +233,16 @@ class Wallet:
         return self.spend_today + self._reserved_today + n_calls * hold <= self.daily_cap
 
     def meter(self, wallet_id: str, tier: TierConfig, usage: Usage | None, tick: int, ref: str, hold: int,
-              *, purpose: str = "decide") -> MeterResult:
-        """Charge a finished call. ``usage=None`` means unknown: the hold is charged as an estimate."""
+              *, purpose: str = "decide", cap_hold: int | None = None) -> MeterResult:
+        """Charge a finished call. ``usage=None`` means unknown: the worst cases are charged as an estimate (the
+        cap hold as real cost, the hold as world cost). ``cap_hold`` must be what :meth:`gate` reserved."""
         if self.db._depth != 0:
             raise RuntimeError("Wallet.meter must run outside a transaction so the real-money record commits immediately")
-        self.release(hold)
+        cap = hold if cap_hold is None else int(cap_hold)
+        self.release(cap)
         estimated = usage is None
         if usage is None:
-            real = world = hold
+            real, world = cap, hold
         else:
             real = real_cost_micro(usage, tier, self.cfg.tiers)
             world = world_cost_micro(usage, tier, self.cfg.economy, self.cfg.tiers)
@@ -212,8 +253,12 @@ class Wallet:
             payload.update({"in": usage.input_tokens, "out": usage.output_tokens,
                             "cr": usage.cache_read_tokens, "cw": usage.cache_write_tokens})
             if len(usage.attempts) > 1 or (usage.attempts and usage.attempts[0][0] not in ("", tier.model)):
+                # an attempt with no output that a fallback followed was declined before any output; it is metered
+                # at full rates here (conservative) and flagged so the provider's invoice can be reconciled
                 payload["attempts"] = [{"model": m, "in": a.input_tokens, "out": a.output_tokens, "cr": a.cache_read_tokens,
-                                        "cw": a.cache_write_tokens} for m, a in usage.attempts]
+                                        "cw": a.cache_write_tokens,
+                                        **({"declined_pre_output": 1} if a.output_tokens == 0 and i < len(usage.attempts) - 1 else {})}
+                                       for i, (m, a) in enumerate(usage.attempts)]
         with self.db.tx():
             bal = self.balance(wallet_id)
             charged = min(world, bal)
@@ -238,12 +283,16 @@ class Wallet:
                     self._ledger("house", tick, -unfunded, -debt, "overrun_unfunded", ref, {"agent": wallet_id})
             self.db.kv_set("spend_today", self.spend_today + real)
             self.db.kv_set("spend_total", self.spend_total + real)
+            self.db.kv_set("reserved_inflight", max(0, self.reserved_inflight - cap))
         return MeterResult(real_cost=real, world_cost=world, balance_after=new_bal, overrun=overrun, estimated=estimated)
 
     async def charged_call(self, wallet_id: str, tier: TierConfig, hold: int, tick: int, ref: str,
-                           call: Callable[[], Awaitable[BrainResult]], *, purpose: str = "decide") -> ChargedCall:
+                           call: Callable[[], Awaitable[BrainResult]], *, purpose: str = "decide",
+                           cap_hold: int | None = None) -> ChargedCall:
         """gate -> call -> meter. The only sanctioned way to spend money on a model."""
-        g = self.gate(wallet_id, hold)
+        if self.db._depth != 0:  # checked before any money moves: meter would refuse after the call was billed
+            raise RuntimeError("Wallet.charged_call must run outside a transaction so the real-money record commits immediately")
+        g = self.gate(wallet_id, hold, cap_hold=cap_hold)
         if not g.ok:
             return ChargedCall(g, None, None, hold)
         try:
@@ -253,7 +302,7 @@ class Wallet:
         unknown = result.error is not None and (result.error.startswith("timeout") or result.error.startswith("connection")
                                                 or result.error.startswith("exception"))
         usage: Usage | None = None if unknown else result.usage
-        m = self.meter(wallet_id, tier, usage, tick, ref, hold, purpose=purpose)
+        m = self.meter(wallet_id, tier, usage, tick, ref, hold, purpose=purpose, cap_hold=cap_hold)
         return ChargedCall(g, result, m, hold)
 
     # --- reporting ----------------------------------------------------------------------------

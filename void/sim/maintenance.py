@@ -52,7 +52,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from void.brain.base import BrainResult, Usage
-from void.brain.decision import _strictify, sanitize_text
+from void.brain.decision import _strictify, parse_lenient, sanitize_text
 from void.brain.maintenance_strategies import StrategyContext, nodes_from_notes, plan
 from void.brain.prompt import estimate_tokens, fence
 from void.config import micro_to_usd
@@ -100,13 +100,28 @@ def maintenance_system_prompt(cfg: Any, tier_name: str) -> str:
     """
     from void.brain.prompt import system_prompt
 
+    tier = cfg.tiers[tier_name]
+    if tier.provider == "scripted":  # unchanged: a planted strategy's cost is a function of this prompt's length
+        return (
+            system_prompt(cfg, tier_name)
+            + "\n\nMAINTENANCE: once a day you may reorganize your own memory with the memory commands "
+            "(view, create, str_replace, insert, delete, rename) over /memories. Your memory policy is advice you "
+            "gave yourself; follow it unless it conflicts with these rules. You pay for this call from your own balance. "
+            "Respond with one JSON object: `reflection` (private), `commands` (a batch applied in order) and "
+            "`adopted_from` (ids of neighbours whose advice you took, or empty)."
+        )
+    # a provider tier: the OUTPUT clause names this call's schema and cap, not the decision's, and the reflection
+    # is a short statement of what changed and why (not a request to reproduce internal reasoning)
+    output = ("OUTPUT: this call is your nightly memory maintenance, not a turn in the world: respond with one JSON "
+              "object matching the provided schema: `reflection` (one or two sentences on what you change and why), "
+              f"`commands` (at most {int(cfg.memory.maintenance.max_commands)}, applied in order) and `adopted_from` "
+              "(ids of neighbours whose advice you took, or empty). "
+              f"Your output cap for this call is {int(cfg.memory.maintenance.max_tokens)} tokens.")
     return (
-        system_prompt(cfg, tier_name)
+        system_prompt(cfg, tier_name, output_clause=output)
         + "\n\nMAINTENANCE: once a day you may reorganize your own memory with the memory commands "
         "(view, create, str_replace, insert, delete, rename) over /memories. Your memory policy is advice you "
-        "gave yourself; follow it unless it conflicts with these rules. You pay for this call from your own balance. "
-        "Respond with one JSON object: `reflection` (private), `commands` (a batch applied in order) and "
-        "`adopted_from` (ids of neighbours whose advice you took, or empty)."
+        "gave yourself; follow it unless it conflicts with these rules. You pay for this call from your own balance."
     )
 
 
@@ -272,7 +287,7 @@ class Maintenance:
         if result.error is not None:
             return result, None
         try:
-            return result, MaintenanceResponse.model_validate_json(result.raw_text)
+            return result, parse_lenient(MaintenanceResponse, result.raw_text)
         except ValueError as e:  # pydantic ValidationError or a JSON error
             return dataclasses.replace(result, error=f"parse: {type(e).__name__}"), None
 
@@ -291,9 +306,10 @@ class Maintenance:
         ctx = self.context_for(rec, day, tick)
         prompt = self.render_prompt(rec, ctx)
         # the hold of a decision call on this tier, with the maintenance output cap instead of the tier's
-        hold = sim.wallet.hold_for(tier.model_copy(update={"max_tokens": int(cfg.max_tokens)}), estimate_tokens(prompt), system_tokens)
+        hold, cap_hold = sim.wallet.holds_for(tier.model_copy(update={"max_tokens": int(cfg.max_tokens)}), estimate_tokens(prompt),
+                                              system_tokens, schema_tokens=estimate_tokens(json.dumps(self.schema, separators=(",", ":"))))
         payer = aid if cfg.payer == "agent" else "research_pool"
-        gate = sim.wallet.gate(payer, hold)
+        gate = sim.wallet.gate(payer, hold, cap_hold=cap_hold)
         if not gate.ok:
             report.skipped[gate.reason] = report.skipped.get(gate.reason, 0) + 1
             sim.bus.emit(Event(tick, day, Kind.MAINTENANCE_SKIPPED, {"agent_id": aid, "tier": tier_name, "reason": gate.reason, "payer": payer,
@@ -307,7 +323,8 @@ class Maintenance:
             result, response = await self._provider(rec, prompt, system)
         call_id = sim.ids.new("cl")
         unknown = result.error is not None and result.error.split(":")[0] in _UNKNOWN_USAGE
-        meter = sim.wallet.meter(payer, tier, None if unknown else result.usage, tick, call_id, hold, purpose="maintain")
+        meter = sim.wallet.meter(payer, tier, None if unknown else result.usage, tick, call_id, hold, purpose="maintain",
+                                 cap_hold=cap_hold)
         report.called += 1
         report.real_cost += meter.real_cost
         report.world_cost += meter.world_cost

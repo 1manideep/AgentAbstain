@@ -29,7 +29,7 @@ import time
 from typing import Any
 
 from void.brain.base import BrainResult, Sampling, Usage
-from void.brain.decision import Decision, strict_json_schema
+from void.brain.decision import Decision, parse_lenient, strict_json_schema
 from void.brain.prompt import render_observation, system_prompt
 from void.config import TierConfig, VoidConfig
 from void.types import Observation
@@ -194,7 +194,7 @@ class GeminiBrain:
         if stop == "refusal":
             return BrainResult(None, usage, latency, stop, text, request_id, error=f"refusal:{category}", model=model)
         try:
-            decision = Decision.model_validate_json(text)
+            decision = parse_lenient(Decision, text)
         except Exception as e:  # pydantic ValidationError or json error
             return BrainResult(None, usage, latency, stop, text, request_id, error=f"parse: {type(e).__name__}", model=model)
         return BrainResult(decision, usage, latency, stop, text, request_id, model=model)

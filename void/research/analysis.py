@@ -392,7 +392,8 @@ def _probe_recall_replay(run_dir: str | Path) -> float | None:
 # --- the audit exam (exp_mem_*) -------------------------------------------------------------------------
 def exam_counts(run_dir: str | Path, tier: str | None = None) -> tuple[int, int, int] | None:
     """``(asked, correct, abstained)`` over every graded audit-exam answer (optionally the agents of one tier);
-    None when the run has no exam rows."""
+    None when the run has no exam rows. An item whose paid call returned no usable answer (a refusal, a reply
+    cut off at max_tokens, an API error: ``call_id`` set, ``answer`` NULL) measured nothing and is not graded."""
     sql = ("SELECT COUNT(*) AS n, COALESCE(SUM(a.correct), 0) AS c, COALESCE(SUM(a.abstained), 0) AS ab "
            "FROM exam_answers a JOIN exam_items i ON i.item_id = a.item_id")
     params: tuple[Any, ...] = ()
@@ -401,6 +402,7 @@ def exam_counts(run_dir: str | Path, tier: str | None = None) -> tuple[int, int,
         params = (tier,)
     else:
         sql += " WHERE i.exam='audit'"
+    sql += " AND NOT (a.call_id IS NOT NULL AND a.answer IS NULL)"
     with connect(run_dir) as db:
         row = db.execute(sql, params).fetchone()
     asked = int(row["n"]) if row is not None else 0

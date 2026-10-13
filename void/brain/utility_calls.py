@@ -1,7 +1,8 @@
 """Metered, gated utility calls: LLM gossip paraphrase and LLM chronicle writing (DESIGN §11).
 
 Both go through ``Wallet.charged_call`` so they reserve, are metered from real usage and count
-toward the caps. A gated-out call returns ``None`` and the caller falls back to the template.
+toward the caps. A gated-out call returns ``None`` and the caller falls back to the template; so does a
+call that failed, was refused or stopped at its output cap (the brains report those as errors).
 Any provider brain that sets ``is_llm = True`` and implements ``complete_text`` can serve them;
 scripted tiers never trigger a paid call.
 """
@@ -17,7 +18,14 @@ from void.brain.prompt import estimate_tokens, fence
 if TYPE_CHECKING:
     from void.sim.loop import Simulation
 
-__all__ = ["complete_text", "complete_json", "make_paraphraser", "make_chronicle_writer", "is_llm", "chronicle_tier"]
+__all__ = ["complete_text", "complete_json", "make_paraphraser", "make_chronicle_writer", "is_llm", "chronicle_tier",
+           "PARAPHRASE_MAX_TOKENS", "CHRONICLE_MAX_TOKENS"]
+
+# Output caps of the two text calls. Models that think by default count their thinking toward the cap, so a cap
+# sized for one sentence (or one column) alone ends the call at max_tokens before any text; these leave room
+# for thinking at a low effort. The hold of each call is computed for exactly this cap.
+PARAPHRASE_MAX_TOKENS = 1024
+CHRONICLE_MAX_TOKENS = 2048
 
 
 def is_llm(brain: Brain | None) -> bool:
@@ -66,9 +74,11 @@ def make_paraphraser(sim: Simulation) -> Callable[[str, str, int], Awaitable[str
         prompt = ("Restate the following remembered note in one sentence, keeping every [[wikilink]] exactly as written, "
                   "as if retelling it from memory. Reply with the sentence only.\n\n" + fence(text))
         tier = sim.cfg.tiers[rec.model_tier]
-        hold = sim.wallet.hold_for(tier, estimate_tokens(prompt))
+        hold, cap_hold = sim.wallet.holds_for(tier.model_copy(update={"max_tokens": PARAPHRASE_MAX_TOKENS}), estimate_tokens(prompt))
         ref = sim.ids.new("cl")
-        cc = await sim.wallet.charged_call(listener_id, tier, hold, tick, ref, lambda: complete_text(brain, prompt, max_tokens=200), purpose="gossip")
+        cc = await sim.wallet.charged_call(listener_id, tier, hold, tick, ref,
+                                           lambda: complete_text(brain, prompt, max_tokens=PARAPHRASE_MAX_TOKENS), purpose="gossip",
+                                           cap_hold=cap_hold)
         _record(sim, listener_id, rec.model_tier, "gossip", cc, tick, ref)
         if cc.result is None or cc.result.error or not cc.result.raw_text.strip():
             return None
@@ -99,9 +109,11 @@ def make_chronicle_writer(sim: Simulation) -> Callable[[str], Awaitable[str | No
                   "column in plain prose. Keep every name and number exactly; add nothing that is not in the bulletin; "
                   "keep the first line as the headline.\n\n" + fence(markdown))
         tier = sim.cfg.tiers[tier_name]
-        hold = sim.wallet.hold_for(tier, estimate_tokens(prompt))
+        hold, cap_hold = sim.wallet.holds_for(tier.model_copy(update={"max_tokens": CHRONICLE_MAX_TOKENS}), estimate_tokens(prompt))
         ref = sim.ids.new("cl")
-        cc = await sim.wallet.charged_call("chronicle", tier, hold, sim.clock.tick, ref, lambda: complete_text(brain, prompt, max_tokens=700), purpose="chronicle")
+        cc = await sim.wallet.charged_call("chronicle", tier, hold, sim.clock.tick, ref,
+                                           lambda: complete_text(brain, prompt, max_tokens=CHRONICLE_MAX_TOKENS), purpose="chronicle",
+                                           cap_hold=cap_hold)
         _record(sim, "chronicle", tier_name, "chronicle", cc, sim.clock.tick, ref)
         if cc.result is None or cc.result.error or not cc.result.raw_text.strip():
             return None

@@ -34,8 +34,11 @@ kind ``exam_call``) and logged in ``llm_calls`` with the examined agent as ``age
 when ``run.log_prompts``. An empty pool fails the gate: the item is recorded as abstained with no call.
 
 Grading: ``correct`` is an exact match with the truth after whitespace and case normalisation; an answer
-that is not one of the options is wrong, not abstained; a refusal, error or unparseable reply abstains with
-its reason in the event payload. Every item emits ``EXAM_ASKED`` and ``EXAM_ANSWERED`` (operator
+that is not one of the options is wrong, not abstained; a refusal, error, reply cut off at ``max_tokens``
+or unparseable reply is stored as abstained (no answer) with its reason in the event payload, and is marked
+``failed``: a paid call that measured nothing. Failed items are kept out of the day report's score and out
+of the analysis' exam outcomes (``void.research.analysis.exam_counts``), so a call that ran out of output
+tokens never reads as an agent choosing to abstain. Every item emits ``EXAM_ASKED`` and ``EXAM_ANSWERED`` (operator
 visibility). All of an agent's rows (items, answers, the call row) commit in one transaction; only the
 wallet meter commits on its own, as every paid call does. ``exam_day`` in ``world_kv`` and a per-agent check
 on ``exam_items`` make the step resume-safe: a restarted run never asks a day twice.
@@ -54,7 +57,7 @@ from pydantic import BaseModel, Field
 
 from void.brain import utility_calls
 from void.brain.base import BrainResult
-from void.brain.decision import _strictify, sanitize_text
+from void.brain.decision import _strictify, parse_lenient, sanitize_text
 from void.brain.prompt import estimate_tokens, fence, system_prompt
 from void.config import micro_to_usd
 from void.events import OPERATOR, Event, Kind
@@ -128,6 +131,7 @@ class ExamReport:
     asked: int = 0
     correct: int = 0
     abstained: int = 0
+    failed: int = 0           # paid calls that returned no usable answer (refusal, max_tokens, error): not graded
     by_kind: dict[str, dict[str, int]] = field(default_factory=dict)
     calls: int = 0            # paid provider calls that reached a model
     real_cost: int = 0        # micro-dollars metered on the research pool
@@ -140,7 +144,14 @@ class ExamReport:
     def formula_score(self, guess_penalty: float) -> float | None:
         return score(self.correct, self.abstained, self.asked, guess_penalty)
 
-    def tally(self, kind: str, correct: bool, abstained: bool) -> None:
+    def tally(self, kind: str, correct: bool, abstained: bool, failed: bool = False) -> None:
+        """Count one item. A failed item is a measurement that did not happen, not an abstention: it is kept
+        out of ``asked`` (and so out of the score and the abstain rate) and counted on its own."""
+        if failed:
+            self.failed += 1
+            self.by_kind.setdefault(kind, {"asked": 0, "correct": 0, "abstained": 0}).setdefault("failed", 0)
+            self.by_kind[kind]["failed"] += 1
+            return
         self.asked += 1
         self.correct += int(correct)
         self.abstained += int(abstained)
@@ -305,7 +316,7 @@ def parse_answer(result: BrainResult) -> tuple[str | None, str | None]:
     if result.error:
         return None, result.error[:MAX_ANSWER_CHARS]
     try:
-        parsed = ExamAnswer.model_validate_json(result.raw_text or "")
+        parsed = parse_lenient(ExamAnswer, result.raw_text or "")
     except ValueError as e:  # pydantic's ValidationError is a ValueError
         return None, f"parse: {type(e).__name__}"
     return sanitize_text(parsed.answer, single_line=True, max_len=MAX_ANSWER_CHARS), None
@@ -316,8 +327,19 @@ def exam_schema() -> dict[str, Any]:
 
 
 def exam_system_prompt(cfg: Any, tier_name: str) -> str:
-    """Cache-stable: the tier's standing rules plus the exam clause (a pure function of ``(config, tier)``)."""
-    return system_prompt(cfg, tier_name) + EXAM_CLAUSE
+    """Cache-stable: the tier's standing rules plus the exam clause (a pure function of ``(config, tier)``).
+
+    A provider tier gets an OUTPUT clause that names the exam's own schema and output cap instead of the
+    decision's (conflicting instructions only lengthen a thinking model's deliberation); a scripted tier keeps
+    the decision prompt unchanged (it makes no call)."""
+    tier = cfg.tiers[tier_name]
+    if tier.provider == "scripted":
+        return system_prompt(cfg, tier_name) + EXAM_CLAUSE
+    cap = min(int(tier.max_tokens), int(cfg.memory.exam.max_tokens))
+    output = ("OUTPUT: this call is an exam, not a turn in the world: respond with one JSON object matching the provided "
+              "schema: `answer` (the exact text of one option) and `confidence` (0 to 1, or null). "
+              f"Your output cap for this call is {cap} tokens.")
+    return system_prompt(cfg, tier_name, output_clause=output) + EXAM_CLAUSE
 
 
 def render_exam_prompt(name: str, agent_id: str, tick: int, self_summary: str, retrieved: Sequence[RetrievedNote],
@@ -514,14 +536,15 @@ class Exams:
         prompt = render_exam_prompt(rec.name, rec.agent_id, tick, self.sim.memory.get_self(rec.agent_id), retrieved,
                                     draft.question, options)
         schema = exam_schema()
-        # the hold bounds what this call can spend: the exam's own output cap, never the tier's decision cap
-        bounded = tier.model_copy(update={"max_tokens": min(tier.max_tokens, self.cfg.max_tokens)})
-        hold = self.sim.wallet.hold_for(bounded, estimate_tokens(prompt), estimate_tokens(system))
+        # one output cap for the call and its hold: the exam's own, never above the tier's decision cap
+        max_tokens = min(tier.max_tokens, self.cfg.max_tokens)
+        bounded = tier.model_copy(update={"max_tokens": max_tokens})
+        hold, cap_hold = self.sim.wallet.holds_for(bounded, estimate_tokens(prompt), estimate_tokens(system),
+                                                   schema_tokens=estimate_tokens(json.dumps(schema, separators=(",", ":"))))
         ref = self.sim.ids.new("cl")
-        max_tokens = self.cfg.max_tokens
         cc = await self.sim.wallet.charged_call(
             "research_pool", tier, hold, tick, ref,
-            lambda: call(prompt, schema=schema, system=system, max_tokens=max_tokens), purpose="exam")
+            lambda: call(prompt, schema=schema, system=system, max_tokens=max_tokens), purpose="exam", cap_hold=cap_hold)
         if cc.result is None or cc.meter is None:
             return _Asked(draft, options, None, titles, reason=f"gate:{cc.gate.reason}")
         r, m = cc.result, cc.meter
@@ -545,6 +568,7 @@ class Exams:
         db = self.sim.db
         d = asked.draft
         correct, abstained = grade(asked.answer, d.truth, asked.options)
+        failed = asked.call_row is not None and asked.answer is None  # a paid call with no usable answer
         item_id = self.sim.ids.new("ex")
         db.execute(
             "INSERT INTO exam_items(item_id, exam, agent_id, tick_asked, tick_about, kind, question, truth, options, source_ref) "
@@ -557,7 +581,9 @@ class Exams:
             report.world_cost += asked.world_cost
         db.execute("INSERT INTO exam_answers(item_id, call_id, answer, correct, abstained, retrieved) VALUES(?,?,?,?,?,?)",
                    (item_id, asked.call_id, asked.answer, int(correct), int(abstained), json.dumps(asked.retrieved)))
-        extra = {"reason": asked.reason} if asked.reason else {}
+        extra: dict[str, Any] = {"reason": asked.reason} if asked.reason else {}
+        if failed:
+            extra["failed"] = True
         self.sim.bus.emit(Event(tick, day, Kind.EXAM_ASKED, {
             "item_id": item_id, "agent_id": rec.agent_id, "kind": d.kind, "question": d.question, "truth": d.truth,
             "options": asked.options, "tick_about": d.tick_about, "source_ref": d.source_ref, **extra,
@@ -566,7 +592,7 @@ class Exams:
             "item_id": item_id, "agent_id": rec.agent_id, "kind": d.kind, "answer": asked.answer, "correct": correct,
             "abstained": abstained, "call_id": asked.call_id, "retrieved": len(asked.retrieved), **extra,
         }, rec.agent_id, visibility=OPERATOR))
-        report.tally(d.kind, correct, abstained)
+        report.tally(d.kind, correct, abstained, failed)
 
     async def examine(self, rec: AgentRecord, tick: int, day: int, report: ExamReport) -> int:
         """Generate, ask and commit one agent's items for the day; returns how many were asked."""

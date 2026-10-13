@@ -15,7 +15,13 @@ from test_brains import obs
 from void.brain import entropy
 from void.brain.base import Sampling
 from void.brain.gemini_brain import GeminiBrain
-from void.brain.utility_calls import complete_json, complete_text, make_chronicle_writer, make_paraphraser
+from void.brain.utility_calls import (
+    PARAPHRASE_MAX_TOKENS,
+    complete_json,
+    complete_text,
+    make_chronicle_writer,
+    make_paraphraser,
+)
 from void.config import EntropyConfig, TierConfig, load_config
 from void.economy.pricing import hold_micro, real_cost_micro
 from void.sim.loop import Simulation
@@ -156,7 +162,7 @@ def test_utility_calls_run_on_a_gemini_tier(tmp_path):
     out = asyncio.run(para(ada.agent_id, "The north node is [[Node n1]] and rich.", 1))
     assert out and "[[Node n1]]" in out and len(models.calls) == 1
     c = models.calls[0]["config"]
-    assert "response_json_schema" not in c and "system_instruction" not in c and c["max_output_tokens"] == 200
+    assert "response_json_schema" not in c and "system_instruction" not in c and c["max_output_tokens"] == PARAPHRASE_MAX_TOKENS
     row = sim.db.fetchone("SELECT purpose, provider, model, real_cost FROM llm_calls WHERE agent_id=?", (ada.agent_id,))
     assert row["purpose"] == "gossip" and row["provider"] == "gemini" and row["real_cost"] > 0 and row["model"].startswith("gemini-2.5")
     assert asyncio.run(para(bao.agent_id, "x", 1)) is None and len(models.calls) == 1  # scripted listener: never a paid call

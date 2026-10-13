@@ -1,0 +1,32 @@
+# Live Claude test, stage 1: the smallest run that proves the live path end to end on every tier the later stages
+# use. It extends the stage-2 world (live_claude_ladder.yaml) unchanged except for size: three agents, one each on
+# `frontier`, `standard` and `swift`, for 2 days x 3 ticks. That is 18 decisions, then at the start of day 2 one paid
+# maintenance call and one audit-exam question per agent, and the frontier model writes the chronicle twice: every
+# call purpose on every model, about 26 calls.
+# It must show: valid structured JSON, no 400 (effort low, no sampling parameters, no thinking field, the fallback
+# beta only on frontier and standard), no stop at max_tokens, cache reads after the first call of a tier, metered
+# cost equal to tokens x list prices, and the real output tokens (thinking included) the later stages are priced on.
+# scripts/live_claude.sh checks all of it (`live_budget.py verify --strict`) before any other stage runs.
+# Cost `[estimate]` (scratch mock dry run through the real brain code): about $0.35 for 26 calls; the cap leaves room
+# for the holds reserved per tick (about $0.25) and the larger maintenance holds.
+extends: live_claude_ladder.yaml
+run:
+  name: live_claude_smoke
+  days: 2
+  ticks_per_day: 3
+population:
+  cap: 3
+economy:
+  daily_cap_usd: 0.75
+  total_cap_usd: 1.50
+memory:
+  exam:
+    delay_days: 1
+    questions_per_agent: 1
+agents:
+  - {name: Ada,  tier: frontier, personality: {curiosity: 0.9, sociability: 0.8, greed: 0.7, honesty: 0.3}}
+  - {name: Bao,  tier: standard, personality: {greed: 0.9, honesty: 0.2, sociability: 0.7}}
+  - {name: Dev,  tier: swift,    personality: {industriousness: 0.95, honesty: 0.7}}
+benefactor:
+  enabled: false
+epochs: []

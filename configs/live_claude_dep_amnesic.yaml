@@ -1,0 +1,10 @@
+# Live Claude test, stage 3, arm amnesic: `remember` is dropped and nothing is retrieved; the self-summary stays.
+# Everything else, caps included, comes from live_claude_dep_base.yaml. Compare the arms afterwards with
+#   .venv/bin/python scripts/compare.py data/live/exp_mem_dep_claude
+extends: live_claude_dep_base.yaml
+run:
+  name: live_claude_dep_amnesic
+memory:
+  enabled: false
+experiment:
+  arm: amnesic

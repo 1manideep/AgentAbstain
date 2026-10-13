@@ -19,7 +19,7 @@ from void.agents.models import AgentRecord, PersonalitySeed
 from void.agents.registry import AgentRegistry
 from void.brain import coherence, entropy
 from void.brain.base import Brain, BrainResult, Sampling, Usage
-from void.brain.decision import Action, Decision, MemoryOp, sanitize_text
+from void.brain.decision import Action, Decision, MemoryOp, sanitize_text, strict_json_schema
 from void.brain.factory import build_brains
 from void.brain.prompt import estimate_tokens, render_observation, system_prompt
 from void.config import VoidConfig, micro_to_usd, usd_to_micro
@@ -143,6 +143,8 @@ class Simulation:
             from void.brain.utility_calls import make_chronicle_writer
             self.chronicle.llm_writer = make_chronicle_writer(self)
         self.system_tokens = {t: estimate_tokens(system_prompt(cfg, t)) for t in cfg.tiers}
+        # the structured-output schema is sent as input on every provider decision; the hold counts it
+        self.schema_tokens = estimate_tokens(json.dumps(strict_json_schema(), separators=(",", ":")))
         self.system_hash = {t: self._store_prompt_text(system_prompt(cfg, t)) for t in cfg.tiers}
         self.snapshot_listeners: list[Callable[[dict[str, Any]], None]] = []
         self.status = "running"
@@ -398,6 +400,7 @@ class Simulation:
         except Exception as e:
             self.clock = Clock.load(self.db, self.cfg.run.ticks_per_day)
             self.ids.restore(int(self.db.kv_get("id_counter", 0)))
+            self.wallet.book_unmetered(f"tick failed: {type(e).__name__}")  # calls may have been billed
             self.wallet.clear_reservations()
             self.lifecycle.pending_bankrupt.clear()
             self.lifecycle.pending_archive.clear()
@@ -463,6 +466,7 @@ class Simulation:
 
         # gating with reservations
         holds: dict[str, int] = {}
+        cap_holds: dict[str, int] = {}
         gated: list[str] = []
         min_hold = min(self.hold_min_for().values()) if cfg.tiers else 0
         if cfg.economy.daily_cap_policy == "sync_sleep" and order_ids and not self.wallet.daily_headroom(len(order_ids), min_hold):
@@ -472,10 +476,12 @@ class Simulation:
         for aid in order_ids:
             a = agents[aid]
             tier = cfg.tiers[a.model_tier]
-            hold = self.wallet.hold_for(tier, obs[aid].prompt_tokens, self.system_tokens[a.model_tier])
-            g = self.wallet.gate(aid, hold)
+            hold, cap_hold = self.wallet.holds_for(tier, obs[aid].prompt_tokens, self.system_tokens[a.model_tier],
+                                                   schema_tokens=self.schema_tokens)
+            g = self.wallet.gate(aid, hold, cap_hold=cap_hold)
             if g.ok:
                 holds[aid] = hold
+                cap_holds[aid] = cap_hold
                 gated.append(aid)
                 continue
             self.bus.emit(Event(tick, day, Kind.GATE_BLOCKED, {"agent_id": aid, "reason": g.reason, "hold_usd": micro_to_usd(hold),
@@ -509,7 +515,8 @@ class Simulation:
             unknown = r.error is not None and r.error.split(":")[0] in ("timeout", "connection", "exception")
             call_id = self.ids.new("cl")
             call_ids[aid] = call_id
-            m = self.wallet.meter(aid, tier, None if unknown else r.usage, tick, call_id, holds[aid], purpose="decide")
+            m = self.wallet.meter(aid, tier, None if unknown else r.usage, tick, call_id, holds[aid], purpose="decide",
+                                  cap_hold=cap_holds[aid])
             if m.overrun:
                 self.lifecycle.pending_bankrupt[aid] = "overrun"
             logged = cfg.run.log_prompts
@@ -783,11 +790,17 @@ class Simulation:
         self.bus.emit(Event(tick, day, "run_ended", {"reason": reason, "tick": tick, "day": day}))
 
     async def finish(self) -> None:
-        """Write the last day's chronicle and daily metrics, then close files."""
+        """Write the last day's chronicle and daily metrics, then close files.
+
+        Re-opening a run that already finished (``--resume`` of an ended run, or a server resume after a step
+        ended it) runs no tick, so the chronicle written last time is still current: it is not written again,
+        which keeps an LLM chronicle writer from paying for the same column twice."""
         tick, day = self.clock.tick, self.clock.day
         if day >= 1:
-            if self.chronicle is not None:
+            stamp = f"{day}:{tick}"
+            if self.chronicle is not None and self.db.kv_get("final_chronicle") != stamp:
                 await self.chronicle.write_day(day, tick)
+                self.db.kv_set("final_chronicle", stamp)
             self._last_day_row = self.metrics.record_day(day, tick, extra={**self._tracer_metrics(tick), **self._layer_extra})
         self.metrics.close()
 

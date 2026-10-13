@@ -1,6 +1,9 @@
 """Command-line entry point: ``void run | serve | schema | mock-feed | inspect`` (DESIGN §2).
 
-* ``run``       headless simulation (one seed or a ``--seeds A-B`` sweep); exit 0 when completed, 2 otherwise
+* ``run``       headless simulation (one seed or a ``--seeds A-B`` sweep); exit 0 when completed, 2 otherwise.
+                A config that puts agents on a paid Anthropic tier needs a live budget (``--budget-usd`` or
+                ``VOID_BUDGET_USD``): each run is refused when the real spend already recorded under the spend
+                roots plus the run's ``economy.total_cap_usd`` would exceed it (``void.economy.budget``)
 * ``serve``     the simulation behind the HTTP/WebSocket server (DESIGN §15)
 * ``schema``    export the wire schemas for the frontend
 * ``mock-feed`` record a genuine scripted run as the JSONL message stream a socket would receive
@@ -28,6 +31,8 @@ DEFAULT_OUT = "data/runs"
 DEFAULT_STATIC = "web/dist"
 DEFAULT_MOCK_CONFIG = "configs/scripted_smoke.yaml"
 DEFAULT_MOCK_OUT = "web/public/fixtures/mock.jsonl"
+DEFAULT_SPEND_ROOT = "data/live"   # where live runs are written; always counted against the live budget
+BUDGET_ENV = "VOID_BUDGET_USD"
 
 
 # --- helpers ------------------------------------------------------------------------------------------------
@@ -88,6 +93,46 @@ def _day_line(sim: Any, day: int, t0: float) -> str:
             f"spend ${micro_to_usd(sim.wallet.spend_total):.4f} | {time.perf_counter() - t0:6.1f}s")
 
 
+def _live_providers(cfg: VoidConfig) -> set[str]:
+    from void.economy.budget import BUDGETED_PROVIDERS
+
+    return {cfg.tiers[a.tier].provider for a in cfg.agents if a.tier} & set(BUDGETED_PROVIDERS)
+
+
+def _budget_usd(args: argparse.Namespace) -> float | None:
+    import os
+
+    raw = getattr(args, "budget_usd", None)
+    if raw is None:
+        env = (os.environ.get(BUDGET_ENV) or "").strip()
+        raw = float(env) if env else None
+    return None if raw is None else float(raw)
+
+
+def _budget_refusal(cfg: VoidConfig, run_dir: Path, args: argparse.Namespace) -> str | None:
+    """Why this run may not start under the live budget, or None when it may (or needs no budget)."""
+    from void.economy.budget import run_spend, spend_under
+
+    if not _live_providers(cfg):
+        return None
+    budget = _budget_usd(args)
+    if budget is None:
+        return (f"this config puts agents on a paid tier ({', '.join(sorted(_live_providers(cfg)))}); pass --budget-usd "
+                f"(or set {BUDGET_ENV}) so the run is counted against the live budget")
+    roots = [Path(getattr(args, "spend_root", None) or DEFAULT_SPEND_ROOT), Path(args.out)]
+    spent_micro, _ = spend_under(roots)
+    need = cfg.economy.total_cap_usd
+    if (run_dir / "world.db").is_file():  # resuming: only the rest of this run's cap can still be spent
+        mine = run_spend(run_dir)
+        need = 0.0 if mine.status not in (None, "running") else max(0.0, need - micro_to_usd(mine.real_micro))
+    spent = micro_to_usd(spent_micro)
+    if spent + need > budget + 1e-9:
+        return (f"live budget: ${spent:.4f} already spent under {', '.join(str(r) for r in roots)} + this run's cap "
+                f"${need:.2f} > budget ${budget:.2f}")
+    print(f"live budget: ${spent:.4f} spent + cap ${need:.2f} <= ${budget:.2f}", file=sys.stderr)
+    return None
+
+
 def _summary(sim: Any, status: str, t0: float) -> str:
     counts = {k: int(sim.db.fetchone("SELECT COUNT(*) AS n FROM events WHERE kind=?", (k,))["n"]) for k in ("death", "birth", "degeneration")}
     return (f"run {sim.run_id}: status={status} ticks={sim.clock.tick} days={sim.clock.day} "
@@ -130,6 +175,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         if cfg.intelligence.ladder:
             print(f"intelligence: {cfg.intelligence_summary()}", file=sys.stderr)
         run_dir = _run_dir(out, cfg, sweep=sweep)
+        refusal = _budget_refusal(cfg, run_dir, args)
+        if refusal is not None:
+            print(f"refused: {refusal}", file=sys.stderr)
+            statuses.append("refused")
+            break  # later seeds would need at least as much
         try:
             statuses.append(asyncio.run(_run_headless(cfg, run_dir, resume=args.resume)))
         except RuntimeError as e:
@@ -152,6 +202,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if not (static / "index.html").is_file():
         print(f"note: no built frontend at {static} (run `npm run build` in web/); serving the API only", file=sys.stderr)
     run_dir = _run_dir(Path(args.out), cfg, sweep=False)
+    refusal = _budget_refusal(cfg, run_dir, args)
+    if refusal is not None:
+        print(f"refused: {refusal}", file=sys.stderr)
+        return 2
     serve(cfg, run_dir, host=host, port=port, resume=args.resume, static_dir=static, paused=args.paused)
     return 0
 
@@ -344,13 +398,17 @@ def cmd_inspect(args: argparse.Namespace) -> int:
             print("(no maintenance events: memory.maintenance.enabled was false)")
     if args.exams:
         print("\n== audit exam ==")
-        rows = db.fetchall("SELECT i.agent_id, a.name, COUNT(*) AS asked, SUM(x.correct) AS correct, SUM(x.abstained) AS abstained "
+        # a failed item (a paid call that returned no usable answer) is stored as abstained but is not graded
+        rows = db.fetchall("SELECT i.agent_id, a.name, COUNT(*) AS asked, SUM(x.correct) AS correct, SUM(x.abstained) AS abstained, "
+                           "SUM(x.call_id IS NOT NULL AND x.answer IS NULL) AS failed "
                            "FROM exam_items i JOIN exam_answers x ON x.item_id=i.item_id LEFT JOIN agents a ON a.agent_id=i.agent_id "
                            "GROUP BY i.agent_id ORDER BY a.name")
         for r in rows:
-            asked, correct, abst = int(r["asked"]), int(r["correct"] or 0), int(r["abstained"] or 0)
+            failed = int(r["failed"] or 0)
+            asked, correct, abst = int(r["asked"]) - failed, int(r["correct"] or 0), int(r["abstained"] or 0) - failed
+            acc = f"{correct / asked:.2f}" if asked else "n/a"
             print(f"  {(r['name'] or '?'):<12} {r['agent_id']} asked {asked:<3} correct {correct:<3} abstained {abst:<3} "
-                  f"accuracy {correct / asked:.2f}")
+                  f"failed {failed:<3} accuracy {acc}")
         kinds = db.fetchall("SELECT i.kind, COUNT(*) AS asked, SUM(x.correct) AS correct, SUM(x.abstained) AS abstained FROM exam_items i "
                             "JOIN exam_answers x ON x.item_id=i.item_id GROUP BY i.kind ORDER BY i.kind")
         for r in kinds:
@@ -375,6 +433,13 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
 
 # --- parser -------------------------------------------------------------------------------------------------
+def _budget_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--budget-usd", type=float, dest="budget_usd", default=None,
+                   help=f"live budget in USD across all runs (default ${BUDGET_ENV}); required when agents use a paid Anthropic tier")
+    p.add_argument("--spend-root", dest="spend_root", default=None,
+                   help=f"directory whose runs count against the budget besides --out (default {DEFAULT_SPEND_ROOT})")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="void", description="The Void: a multi-agent LLM ecology")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -387,6 +452,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--out", default=DEFAULT_OUT)
     r.add_argument("--tick-seconds", type=float, dest="tick_seconds")
     r.add_argument("--resume", action="store_true")
+    _budget_args(r)
     r.set_defaults(func=cmd_run)
 
     s = sub.add_parser("serve", help="run behind the HTTP/WebSocket server")
@@ -399,6 +465,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--tick-seconds", type=float, dest="tick_seconds")
     s.add_argument("--static", default=DEFAULT_STATIC, help="built frontend directory (default web/dist)")
     s.add_argument("--paused", action="store_true", help="start paused (step with POST /api/control/step)")
+    _budget_args(s)
     s.set_defaults(func=cmd_serve)
 
     sc = sub.add_parser("schema", help="export the wire JSON Schemas")

@@ -1,0 +1,9 @@
+# Live Claude test, stage 3, arm mem: notes are written every tick and the top 8 are retrieved (the default scaffold).
+# Everything else, caps included, comes from live_claude_dep_base.yaml.
+extends: live_claude_dep_base.yaml
+run:
+  name: live_claude_dep_mem
+memory:
+  enabled: true
+experiment:
+  arm: mem

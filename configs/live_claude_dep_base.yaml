@@ -1,0 +1,57 @@
+# Live Claude test, stage 3: the memory-dependence check (docs/research/MEMORY_EVOLUTION.md section 5.2, gate G0,
+# which FAILED on the scripted brain in S0) on live agents. Do real agents use memory well enough to pay for it?
+# The exp_mem_dep world unchanged (the E0 world: 6 agents, fog 12, claim feedback 0.5, 6 days x 12 ticks, equalized
+# pricing, observe mode; no policy, no maintenance, no exam) with every agent on the cheapest current model (the
+# `swift` tier) instead of the scripted brain. Not an arm itself: live_claude_dep_mem.yaml and
+# live_claude_dep_amnesic.yaml extend it and differ only in memory.enabled, so scripts/compare.py accepts the pair.
+# Two deliberate departures from exp_mem_dep, the same in both arms:
+# * equalized_price_out_per_mtok 2.0 instead of 20: a scripted decision outputs about 65 tokens, a live one about
+#   850 (visible JSON plus thinking), so at 20 a tick would cost about as much as a forage pays and the agents would
+#   starve or sleep; at 2.0 a live decision costs about what a scripted one did. The price of memory (input 4.0,
+#   cache reads 0.20) is untouched.
+# * population.cap 6 and tier_mutation_prob 0: no offspring (they would spend balance, the primary outcome, and add
+#   calls) and a replacement never leaves the tier.
+# The `swift` block repeats live_claude_ladder.yaml's verbatim (a test checks it).
+# Cost `[estimate]` (scratch mock dry run through the real brain code, every agent acting every tick): about $0.23
+# per run with memory and $0.19 amnesic; the per-run cap ($0.54, about twice that plus the $0.01 of holds a tick
+# reserves) is the ceiling. Run through scripts/live_claude.sh (stage `memdep`, 16 pairs by default), which
+# alternates the arms seed by seed so an interrupted stage still leaves complete pairs.
+extends: exp_mem_dep_base.yaml
+run:
+  name: live_claude_dep
+  tick_seconds: 0
+population:
+  cap: 6
+  tier_mutation_prob: 0.0
+economy:
+  daily_cap_usd: 0.09
+  total_cap_usd: 0.54
+  equalized_price_out_per_mtok: 2.0
+tiers:
+  swift:
+    provider: anthropic
+    model: claude-haiku-5-5
+    price_in_per_mtok: 0.10
+    price_out_per_mtok: 0.50
+    price_cache_read_per_mtok: 0.01
+    price_cache_write_per_mtok: 0.125
+    supports_temperature: false
+    refusal_fallbacks: false
+    effort: low
+    architecture: dense
+    collapse_temperature: 1.80
+    max_temperature: 2.00
+    entropy_budget_max: 100.0
+    max_tokens: 2048
+    color: "#68d391"
+agents:
+  - {name: Ada,   tier: swift, personality: {curiosity: 0.8}}
+  - {name: Bao,   tier: swift, personality: {greed: 0.8}}
+  - {name: Cyra,  tier: swift, personality: {caution: 0.8}}
+  - {name: Dev,   tier: swift, personality: {industriousness: 0.8}}
+  - {name: Enzo,  tier: swift, personality: {sociability: 0.8}}
+  - {name: Faye,  tier: swift, personality: {curiosity: 0.6, caution: 0.4}}
+server:
+  max_concurrent_calls: 6  # all six agents in one wave of calls per tick
+experiment:
+  name: exp_mem_dep_claude

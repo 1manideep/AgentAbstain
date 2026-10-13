@@ -1,0 +1,115 @@
+# Live Claude test, stage 2: the behaviour demo on a three-rung capability ladder. Nine live agents, two on
+# `frontier`, three on `standard`, four on `swift` (low- and high-honesty personas, shown to them), in the
+# demo_memory world: fog of war (view radius 12), false claims found out half the time, a memory policy per agent
+# (seed `diverse`), a paid nightly maintenance call per agent with every right, the audit exam two days back, the
+# opaque benefactor, a drought on day 3 and a boom on day 5, and the chronicle written by the frontier model.
+# 5 days x 12 ticks = 60 ticks, so a re-opened run sends the whole run to the 3D viewer (60-snapshot backlog).
+# Observe mode: every action is the model's own. One seed, run.seed 42.
+#
+# The `standard` and `swift` tiers are defined here and not in base.yaml, so no existing config's hash changes;
+# live_claude_dep_base.yaml and live_claude_scarcity_*.yaml repeat the `swift` block verbatim (a test checks it).
+# World pricing is equalized at one eighth of the frontier list price: a live decision (about 1.3k fresh input,
+# 1.2k cached system, 0.25k visible output plus thinking) costs about $0.003 in-world against $0.0045 per forage,
+# the same for every rung, so the ladder differs in capability and not in economic stress.
+# Cost `[estimate]` (scratch mock dry run through the real brain code, every agent acting every tick, thinking at
+# the top of its assumed range): about $6.7 ($5.7 decisions, $0.7 maintenance, $0.2 exams, $0.1 chronicle); $9.1
+# with 60% more thinking. The total cap ($15) is the ceiling; the holds reserve at most about $0.5 per tick.
+# Run through scripts/live_claude.sh (stage `ladder`). To watch it live instead, run this stage alone:
+#   .venv/bin/void serve --config configs/live_claude_ladder.yaml --out data/live --budget-usd 60
+# and re-open a finished run (no model call is made):
+#   .venv/bin/void serve --config configs/live_claude_ladder.yaml --out data/live --budget-usd 60 --resume
+extends: demo_memory.yaml
+run:
+  name: live_claude_ladder
+  days: 5
+  ticks_per_day: 12
+  tick_seconds: 0          # a tick takes as long as its slowest call; no extra pacing
+world:
+  view_radius: 12.0
+  claim_feedback_p: 0.5
+population:
+  persona: shown
+  cap: 10                  # room for one birth or replacement, no more
+  starting_balance_usd: 1.00
+  tier_mutation_prob: 0.0  # a child keeps its parent's tier, so the spend stays predictable
+economy:
+  daily_cap_usd: 3.00      # spend is per simulated day; the total cap is the one that bounds real money
+  total_cap_usd: 15.00
+  world_pricing: equalized
+  equalized_price_in_per_mtok: 0.5
+  equalized_price_out_per_mtok: 2.5
+  equalized_price_cache_read_per_mtok: 0.05
+  equalized_price_cache_write_per_mtok: 0.625
+  research_pool_usd: 1.0
+entropy:
+  degeneration:
+    mode: observe
+chronicle:
+  writer: llm              # one column a day on the frontier model, paid by the kernel's chronicle wallet
+memory:
+  policy:
+    enabled: true
+    seed: diverse
+  maintenance:
+    enabled: true
+    rights: [notes, policy, structure]
+    payer: agent
+    max_tokens: 4096       # thinking counts toward the cap: room for it plus a batch of commands
+  exam:
+    enabled: true
+    delay_days: 2
+    questions_per_agent: 2
+    kinds: [balance, neighbour, node, heard, claim]
+    max_tokens: 1024       # thinking plus a one-option answer
+tiers:
+  frontier:                # base.yaml's top tier (current prices, effort low, refusal fallbacks on)
+    max_tokens: 2048
+  standard:
+    provider: anthropic
+    model: claude-sonnet-5-5
+    price_in_per_mtok: 2.0
+    price_out_per_mtok: 10.0
+    price_cache_read_per_mtok: 0.20
+    price_cache_write_per_mtok: 2.5
+    supports_temperature: false
+    refusal_fallbacks: true
+    effort: low
+    architecture: dense
+    collapse_temperature: 1.80
+    max_temperature: 2.00
+    entropy_budget_max: 100.0
+    max_tokens: 2048
+    color: "#b794f4"
+  swift:
+    provider: anthropic
+    model: claude-haiku-5-5
+    price_in_per_mtok: 0.10
+    price_out_per_mtok: 0.50
+    price_cache_read_per_mtok: 0.01
+    price_cache_write_per_mtok: 0.125
+    supports_temperature: false
+    refusal_fallbacks: false
+    effort: low
+    architecture: dense
+    collapse_temperature: 1.80
+    max_temperature: 2.00
+    entropy_budget_max: 100.0
+    max_tokens: 2048
+    color: "#68d391"
+intelligence:
+  ladder: [frontier, standard, swift]   # rank only: every agent below names its tier
+agents:
+  - {name: Ada,  tier: frontier, personality: {curiosity: 0.9, sociability: 0.8, greed: 0.7, honesty: 0.3}}
+  - {name: Gil,  tier: frontier, personality: {caution: 0.8, honesty: 0.9, industriousness: 0.7}}
+  - {name: Bao,  tier: standard, personality: {greed: 0.9, honesty: 0.2, sociability: 0.7}}
+  - {name: Cyra, tier: standard, personality: {caution: 0.9, honesty: 0.9}}
+  - {name: Hex,  tier: standard, personality: {curiosity: 0.6, honesty: 0.5, sociability: 0.6}}
+  - {name: Dev,  tier: swift,    personality: {industriousness: 0.95, honesty: 0.7}}
+  - {name: Enzo, tier: swift,    personality: {sociability: 0.95, honesty: 0.9}}
+  - {name: Faye, tier: swift,    personality: {curiosity: 0.8, caution: 0.2, honesty: 0.3}}
+  - {name: Juno, tier: swift,    personality: {sociability: 0.8, greed: 0.5, honesty: 0.4}}
+server:
+  max_concurrent_calls: 6  # two waves of calls per tick instead of three
+epochs:
+  - {day: 3, kind: drought, scarcity: 0.5, weather_baseline: -0.5, duration_days: 1}
+  - {day: 5, kind: boom, scarcity: 1.6, weather_baseline: 0.4, duration_days: 1}

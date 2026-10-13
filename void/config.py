@@ -18,10 +18,25 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from void.economy.catalog import (
+    MODEL_PRICES,
+    fallback_targets,
+    rejects_effort,
+    rejects_sampling,
+    thinks_by_default,
+)
+
 __all__ = ["VoidConfig", "TierConfig", "IntelligenceConfig", "MemoryConfig", "MemoryPolicyConfig", "MaintenanceConfig",
            "ExamConfig", "MaintenanceStrategy", "MaintenanceRight", "load_config", "usd_to_micro", "micro_to_usd", "MICRO"]
 
 MICRO = 1_000_000
+
+# Load-time checks for tiers whose model thinks by default (see VoidConfig.warnings): assumed thinking tokens per
+# call by effort level, and the smallest output caps that leave room for thinking plus the answer.
+THINKING_ALLOWANCE = {"low": 300, "medium": 800, "high": 1500, "xhigh": 3000, "max": 3000}
+MIN_THINKING_DECISION_TOKENS = 1024
+MIN_THINKING_MAINTENANCE_TOKENS = 4096
+MIN_THINKING_EXAM_TOKENS = 1024
 
 
 def usd_to_micro(usd: float) -> int:
@@ -132,6 +147,11 @@ class EconomyConfig(StrictModel):
     def _caps(self) -> EconomyConfig:
         if self.total_cap_usd < self.daily_cap_usd:
             raise ValueError("economy.total_cap_usd must be >= economy.daily_cap_usd")
+        # a hold below the worst case would let a whole batch of calls through the gate and past the caps
+        if self.hold_multiplier < 1.0:
+            raise ValueError("economy.hold_multiplier must be >= 1 (a hold must cover the worst case of its call)")
+        if self.min_call_reserve_usd < 0:
+            raise ValueError("economy.min_call_reserve_usd must be >= 0")
         return self
 
 
@@ -181,7 +201,30 @@ class TierConfig(StrictModel):
             raise ValueError("thinking_budget applies to gemini tiers only")
         if self.maintenance_strategy is not None and self.provider != "scripted":
             raise ValueError("maintenance_strategy applies to scripted tiers only (provider tiers ask the model)")
+        if self.provider == "anthropic":
+            self._check_anthropic_request_rules()
         return self
+
+    def _check_anthropic_request_rules(self) -> None:
+        """Settings the API answers with a 400 (or silently mis-serves) for this tier's model; each would turn
+        every call of the tier into an error and its agents into idlers for the whole run."""
+        m = self.model
+        if self.supports_temperature and rejects_sampling(m):
+            raise ValueError(f"tier model {m!r} rejects sampling parameters (a non-default temperature is a 400); "
+                             "set supports_temperature: false")
+        if self.effort is not None and rejects_effort(m):
+            raise ValueError(f"tier model {m!r} does not take an effort level (a 400); set effort: null")
+        if self.effort is None and thinks_by_default(m):
+            raise ValueError(f"tier model {m!r} thinks by default at its own default effort; name one explicitly "
+                             "(effort: low for a per-tick decision)")
+        if self.refusal_fallbacks and not fallback_targets(m):
+            raise ValueError(f"tier model {m!r} has no documented server-side refusal fallback (and the hold could not "
+                             "bound one); set refusal_fallbacks: false")
+        listed = MODEL_PRICES.get(m)
+        configured = (self.price_in_per_mtok, self.price_out_per_mtok, self.price_cache_read_per_mtok, self.price_cache_write_per_mtok)
+        if listed is not None and tuple(float(x) for x in listed) != tuple(float(x) for x in configured):
+            raise ValueError(f"tier model {m!r} is billed at {listed} USD/MTok (input, output, cache read, cache write) "
+                             f"but the tier configures {configured}; metering, holds and caps would all be wrong")
 
 
 class AgentSpec(StrictModel):
@@ -500,20 +543,45 @@ class VoidConfig(StrictModel):
         return self
 
     def warnings(self) -> list[str]:
-        """Load-time sanity warnings (never fatal): economy balance and cap arithmetic."""
+        """Load-time sanity warnings (never fatal): economy balance, cap arithmetic, and output caps too small
+        for a model that thinks by default (thinking counts toward max_tokens and is billed as output)."""
         out: list[str] = []
         income = self.world.forage_yield_usd * self.world.forage_units_per_tick * self.world.scarcity
-        for name in sorted({a.tier for a in self.agents}):
+        rostered = sorted({a.tier for a in self.agents})
+        for name in rostered:
             t = self.tiers[name]
-            est = (1500 * t.price_in_per_mtok + 150 * t.price_out_per_mtok) / 1_000_000
+            out_tokens = 150 + self.thinking_allowance(name)
+            est = (1500 * t.price_in_per_mtok + out_tokens * t.price_out_per_mtok) / 1_000_000
             if self.economy.world_pricing == "equalized":
-                est = (1500 * self.economy.equalized_price_in_per_mtok + 150 * self.economy.equalized_price_out_per_mtok) / 1_000_000
+                est = (1500 * self.economy.equalized_price_in_per_mtok + out_tokens * self.economy.equalized_price_out_per_mtok) / 1_000_000
             ratio = est / income if income > 0 else float("inf")
             if not (0.3 <= ratio <= 2.0):
                 out.append(f"tier {name!r}: estimated call ${est:.4f} vs forage income ${income:.4f}/tick (ratio {ratio:.2f}, want 0.3-2.0)")
         if self.economy.total_cap_usd < self.run.days * self.economy.daily_cap_usd:
             out.append("economy.total_cap_usd < days * daily_cap_usd: the total cap will bind before the last day")
+        thinking = [n for n in rostered if self.tiers[n].provider == "anthropic" and thinks_by_default(self.tiers[n].model)]
+        for name in thinking:
+            t = self.tiers[name]
+            if t.max_tokens < MIN_THINKING_DECISION_TOKENS:
+                out.append(f"tier {name!r} thinks before it answers: max_tokens {t.max_tokens} < {MIN_THINKING_DECISION_TOKENS} "
+                           "leaves little room for the decision JSON")
+            if self.memory.maintenance.enabled and self.memory.maintenance.max_tokens < MIN_THINKING_MAINTENANCE_TOKENS:
+                out.append(f"tier {name!r} thinks before it answers: memory.maintenance.max_tokens {self.memory.maintenance.max_tokens} "
+                           f"< {MIN_THINKING_MAINTENANCE_TOKENS} will cut batches off (nothing applied, still charged)")
+            exam_cap = min(t.max_tokens, self.memory.exam.max_tokens)
+            if self.memory.exam.enabled and exam_cap < MIN_THINKING_EXAM_TOKENS:
+                out.append(f"tier {name!r} thinks before it answers: an exam call may emit {exam_cap} tokens "
+                           f"< {MIN_THINKING_EXAM_TOKENS} (min of memory.exam.max_tokens and the tier's max_tokens)")
         return out
+
+    def thinking_allowance(self, tier: str) -> int:
+        """Output tokens a call on ``tier`` is assumed to spend thinking, for the load-time cost estimate only
+        (`[assumption]`, calibrate from llm_calls.output_tokens after a live run): none for a tier that does not
+        think by default."""
+        t = self.tiers[tier]
+        if t.provider != "anthropic" or not thinks_by_default(t.model):
+            return 0
+        return THINKING_ALLOWANCE.get(t.effort or "medium", THINKING_ALLOWANCE["medium"])
 
     # --- helpers -------------------------------------------------------------------------
     def rung_of(self, tier: str) -> int | None:

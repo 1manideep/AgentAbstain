@@ -10,14 +10,18 @@ can the agent afford it) is the kernel's job.
 from __future__ import annotations
 
 import copy
+import json
 import math
 import re
-from typing import Annotated, Any, Literal
+from functools import cache
+from typing import Annotated, Any, Literal, TypeVar
 
-from pydantic import BaseModel, BeforeValidator, Field, WithJsonSchema, field_validator
+from pydantic import BaseModel, BeforeValidator, Field, ValidationError, WithJsonSchema, field_validator
 
 __all__ = ["ActionType", "ACTION_TYPES", "Claim", "MemoryOp", "Action", "Decision", "strict_json_schema",
-           "NAME_RE", "sanitize_text"]
+           "NAME_RE", "sanitize_text", "parse_lenient", "clamp_to_schema"]
+
+M = TypeVar("M", bound=BaseModel)
 
 ActionType = Literal[
     "move", "forage", "talk", "share_note", "transfer", "read_chronicle", "apply_task",
@@ -184,3 +188,70 @@ def _strictify(schema: dict[str, Any]) -> dict[str, Any]:
 
 def strict_json_schema() -> dict[str, Any]:
     return _strictify(Decision.model_json_schema())
+
+
+# --- lenient parsing --------------------------------------------------------------------------------------------
+# The strict schema sent to the API cannot carry length, count or range limits (see ``_strictify``), so a model
+# that writes a 700-character thought or a 31st command has produced valid JSON for the schema it was given.
+# Rejecting the whole answer for that would charge the agent for an idle tick; instead the value is brought
+# inside the limits (strings cut, lists sliced, numbers clamped) and validated again. Anything else that fails
+# (wrong types, a bad name, truncated JSON) still fails with the original error.
+
+
+@cache
+def _limits_schema(model: type[BaseModel]) -> dict[str, Any]:
+    return model.model_json_schema()
+
+
+def clamp_to_schema(value: Any, schema: dict[str, Any], defs: dict[str, Any] | None = None) -> Any:
+    """``value`` with every string cut to its ``maxLength``, every list sliced to its ``maxItems`` and every number
+    clamped into ``[minimum, maximum]`` as the (non-strict) JSON schema states them; other values are untouched."""
+    defs = schema.get("$defs", {}) if defs is None else defs
+    node = schema
+    ref = node.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        node = defs.get(ref.split("/")[-1], {})
+    if "anyOf" in node:
+        want = {dict: "object", list: "array", str: "string", bool: "boolean"}.get(type(value))
+        if want is None and isinstance(value, int | float):
+            want = "number"
+        for branch in node["anyOf"]:
+            target = defs.get(branch["$ref"].split("/")[-1], {}) if "$ref" in branch else branch
+            kind = target.get("type")
+            if kind == want or (want == "number" and kind == "integer") or (want == "object" and "properties" in target):
+                return clamp_to_schema(value, branch, defs)
+        return value
+    if isinstance(value, dict) and isinstance(node.get("properties"), dict):
+        props = node["properties"]
+        return {k: clamp_to_schema(v, props[k], defs) if k in props else v for k, v in value.items()}
+    if isinstance(value, list):
+        limit = node.get("maxItems")
+        items = value[: int(limit)] if isinstance(limit, int) else value
+        sub = node.get("items")
+        return [clamp_to_schema(v, sub, defs) for v in items] if isinstance(sub, dict) else items
+    if isinstance(value, str):
+        limit = node.get("maxLength")
+        return value[: int(limit)] if isinstance(limit, int) else value
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        lo, hi = node.get("minimum"), node.get("maximum")
+        if isinstance(lo, int | float) and value < lo:
+            return lo
+        if isinstance(hi, int | float) and value > hi:
+            return hi
+    return value
+
+
+def parse_lenient(model: type[M], text: str) -> M:
+    """Validate ``text`` against ``model``; on a failure, retry once with the value clamped to the model's limits.
+    Raises the strict attempt's error when the repaired value fails too (or the text is not JSON)."""
+    try:
+        return model.model_validate_json(text)
+    except ValidationError as strict_error:
+        try:
+            data = json.loads(text)
+        except ValueError:
+            raise strict_error from None
+        try:
+            return model.model_validate(clamp_to_schema(data, _limits_schema(model)))
+        except ValidationError:
+            raise strict_error from None
