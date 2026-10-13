@@ -31,13 +31,17 @@ export function noteCharBudget(): number {
   return perLine * NOTE_LINES - 1
 }
 
-/** A note card's text: "✎ " plus the title, whitespace-collapsed and cut at a word with an ellipsis. */
+/**
+ * A note card's text: "noted: " plus the title, whitespace-collapsed and cut at a word with an ellipsis.
+ * Plain characters only: a glyph the bundled font lacks (a pencil, a ballot X) makes the text renderer fetch
+ * fallback fonts from a CDN, which the page's content security policy blocks.
+ */
 export function clampNoteText(raw: unknown): string {
   const title = String(raw ?? '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 200)
-  const text = `✎ ${title || 'a note'}`
+  const text = `noted: ${title || 'a thought'}`
   const budget = noteCharBudget()
   if (text.length <= budget) return text
   const cut = text.lastIndexOf(' ', budget)

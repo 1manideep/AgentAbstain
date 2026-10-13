@@ -26,6 +26,8 @@ declare global {
       scene: import('three').Scene
       /** effects queue, for smoke tests that inject events */
       fx: typeof fxQueue
+      /** Feed one event to the store's ring (characters read it) and the effects queue, as the socket would. */
+      inject: (e: import('../protocol').EventMsg) => void
       camera: () => { x: number; y: number; z: number }
     }
   }
@@ -84,6 +86,10 @@ export function Driver() {
       select: (id) => useStore.getState().select(id),
       scene,
       fx: fxQueue,
+      inject: (e) => {
+        useStore.getState().events.push(e)
+        fxQueue.push(e)
+      },
       camera: () => ({ x: ctx.camera?.position.x ?? 0, y: ctx.camera?.position.y ?? 0, z: ctx.camera?.position.z ?? 0 }),
     }
     return () => {

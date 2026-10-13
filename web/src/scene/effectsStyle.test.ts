@@ -40,4 +40,25 @@ describe('moves strip layout', () => {
     expect(row.slots).toHaveLength(10)
     expect(row.slots.every((s) => s.y === 0 && s.z === 0)).toBe(true)
   })
+
+  it('moves a note card above a tall speech bubble on the same agent, and leaves it alone otherwise', async () => {
+    const { noteClearY, STACK_GAP } = await import('./bubbleStyle')
+    // a short speech bubble already clears the note: the default height stands
+    expect(noteClearY(3.55, 0.3, 2.9, 0.3)).toBe(3.55)
+    // three lines of speech reach past it: the note's lower edge sits one gap above the speech's upper edge
+    const y = noteClearY(3.55, 0.3, 2.9, 1.2)
+    expect(y).toBeGreaterThan(3.55)
+    expect(y - 0.3 / 2 - (2.9 + 1.2 / 2)).toBeCloseTo(STACK_GAP, 9)
+  })
+
+  it('puts a mark on the side of the listener away from the speaker', async () => {
+    const { markSide } = await import('./bubbleStyle')
+    // camera right is +x; speaker to the listener's right (listener minus speaker points -x): mark goes left
+    expect(markSide(-2, 0, 1, 0)).toBe(-1)
+    // speaker to the left: mark goes right
+    expect(markSide(2, 0.5, 1, 0)).toBe(1)
+    // in line with the camera, or no offset at all: the default right
+    expect(markSide(0, 3, 1, 0)).toBe(1)
+    expect(markSide(0, 0, 1, 0)).toBe(1)
+  })
 })

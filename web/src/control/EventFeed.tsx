@@ -37,6 +37,12 @@ export const FEED_KINDS = [
   'share_note',
   'read_chronicle',
   'use_gadget',
+  'maintenance',
+  'maintenance_skipped',
+  'memory_command',
+  'policy_changed',
+  'claim_feedback',
+  'exam_answered',
   'action_failed',
   'gate_blocked',
   'weather',
@@ -80,6 +86,33 @@ export function summarize(e: EventMsg, roster: ReadonlyMap<string, RosterAgent>)
   if (isEventKind(e, 'gadget_verified')) return `${e.payload.name} verified for ${n(e.payload.owner)} (${e.payload.stage})`
   if (isEventKind(e, 'gadget_rejected')) return `${e.payload.name} rejected at ${e.payload.stage}: ${e.payload.reason ?? '—'}`
   const p = e.payload as Record<string, unknown>
+  const str = (k: string) => (typeof p[k] === 'string' ? (p[k] as string) : '')
+  const num = (k: string) => (typeof p[k] === 'number' ? (p[k] as number) : 0)
+  const who = n(str('agent_id') || e.agent_id)
+  switch (e.kind) {
+    case 'remember':
+      return `${who} noted “${str('title')}”${str('channel') && str('channel') !== 'observed' ? ` (${str('channel')})` : ''}`
+    case 'revise_self':
+      return `${who} rewrote their self-summary (v${num('version')})`
+    case 'share_note':
+      return `${n(str('speaker_id'))} → ${n(str('listener_id'))} shared “${str('note_title') || 'a note'}”`
+    case 'read_chronicle':
+      return `${who} read the chronicle`
+    case 'maintenance': {
+      const how = str('strategy') || str('model')
+      return `${who} tidied memory: ${num('ok')} of ${num('commands')} changes${num('refused') ? `, ${num('refused')} refused` : ''}${how ? ` · ${how}` : ''} (${fmtUsd(num('world_cost') / 1e6)})`
+    }
+    case 'maintenance_skipped':
+      return `${who} could not afford to tidy memory (${str('reason')})`
+    case 'memory_command':
+      return `${who} ${str('command')} ${str('path')} ${p.ok ? 'ok' : `refused: ${str('message')}`}`
+    case 'policy_changed':
+      return `${who} memory policy v${num('version')} (${str('source')}${typeof p.similarity_to_parent === 'number' ? `, ${Math.round((p.similarity_to_parent as number) * 100)}% like the last` : ''}, ${num('chars')} chars)`
+    case 'claim_feedback':
+      return `${n(str('listener_id') || e.agent_id)} found out ${n(str('speaker_id'))} lied: “${claimText(p.claim)}”`
+    case 'exam_answered':
+      return `${who} exam (${str('kind')}): ${p.abstained ? 'abstained' : p.correct ? 'correct' : 'wrong'}`
+  }
   const parts: string[] = []
   for (const k of Object.keys(p).slice(0, 4)) {
     const v = p[k]

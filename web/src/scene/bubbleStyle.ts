@@ -1,6 +1,6 @@
 /**
  * Looks of the in-world bubbles (Effects.tsx): speech for talk, a cream note card when an agent writes to its
- * memory (remember, revise_self, nightly maintenance) and a red one-glyph mark when a listener learns it was
+ * memory (remember, revise_self, nightly maintenance) and a red one-letter mark when a listener learns it was
  * lied to (claim feedback). Pure data so tests import it without React. A speech bubble whose claims the kernel
  * found false is tinted only when the operator turns `showLies` on.
  */
@@ -48,3 +48,24 @@ export function bubbleStyle(kind: BubbleKind, lied = false, lies = lieTint.on): 
   return lied && lies ? LIE_STYLE : SPEECH_STYLE
 }
 
+
+/** Gap between a note card and the speech bubble under it; covers the 0.12 rise either bubble makes as it fades in. */
+export const STACK_GAP = 0.14
+
+/**
+ * Centre height for a note card on an agent that is also speaking. Both bubbles are centre-anchored at their own
+ * lift, so a speech bubble of three lines reaches past the note's default height; the note moves up just enough to
+ * clear it. Heights are the drawn backdrop heights (text block plus padding).
+ */
+export function noteClearY(noteY: number, noteH: number, speechY: number, speechH: number, gap = STACK_GAP): number {
+  return Math.max(noteY, speechY + speechH / 2 + noteH / 2 + gap)
+}
+
+/**
+ * Which side of the listener's head a mark goes on: +1 for the camera's right, -1 for its left. It takes the side
+ * facing away from the speaker (the speaker's bubble is over there), and the right when there is no speaker or the
+ * two stand in line with the camera. `dx`/`dz` run from the speaker to the listener; `rx`/`rz` is the camera's right.
+ */
+export function markSide(dx: number, dz: number, rx: number, rz: number): 1 | -1 {
+  return dx * rx + dz * rz < -1e-6 ? -1 : 1
+}

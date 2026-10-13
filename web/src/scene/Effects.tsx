@@ -34,7 +34,7 @@ import { isEventKind } from '../protocol'
 import { history } from '../state/history'
 import { useStore } from '../state/store'
 import { BUBBLE_LINE_HEIGHT, clampBubbleText, clampNoteText } from './bubbleText'
-import { BUBBLE_MS, bubbleStyle, MARK_MS, NOTE_MS, type BubbleKind } from './bubbleStyle'
+import { BUBBLE_MS, bubbleStyle, MARK_MS, markSide, NOTE_MS, noteClearY, type BubbleKind } from './bubbleStyle'
 import { fxQueue } from './fx'
 import { nodePulse } from './Nodes'
 import { mirror, perSlot, registerSystem, SYS_EFFECTS, type FrameCtx } from './sceneState'
@@ -43,7 +43,7 @@ export const FONT_URL = '/fonts/InstrumentSans-Regular.ttf'
 const FADE_MS = 300
 const MAX_VISIBLE_BUBBLES = 6
 const MAINTENANCE_MS = 3000
-/** A mark (✗) sits beside the head, offset along the camera's right vector, so it never covers a speech bubble. */
+/** A mark (a red X) sits beside the head on the side away from the speaker, so it never covers a speech bubble. */
 const MARK_SIDE = 0.75
 const BUBBLE_MAX_DIST = 35
 const SPEAK_COOLDOWN_MS = 1500
@@ -65,6 +65,8 @@ interface Bubble {
   kind: BubbleKind
   /** The kernel recorded at least one false claim in this speech. */
   lied: boolean
+  /** A mark's speaker: the mark goes on the listener's far side from them, clear of their speech bubble. */
+  awayFrom: string | null
   ttlMs: number
   text: string
   born: number
@@ -110,6 +112,12 @@ interface Burst {
 function hash(n: number): number {
   const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453
   return x - Math.floor(x)
+}
+
+/** Height of a bubble's backdrop: the measured text block (or one line before Troika has measured it) plus padding. */
+function drawnHeight(b: Bubble): number {
+  const st = bubbleStyle(b.kind, b.lied)
+  return (b.h > 0 ? b.h : st.fontSize * BUBBLE_LINE_HEIGHT) + BUBBLE_PAD * 1.6
 }
 
 const posScratch = { x: 0, y: 0, z: 0, ok: false }
@@ -356,11 +364,12 @@ export function Effects() {
     }
 
     /** One bubble per (agent, kind): refresh it, or add one; true when the rendered set must change. */
-    const upsertBubble = (agentId: string, kind: BubbleKind, text: string, ttlMs: number, now: number, lied: boolean): boolean => {
+    const upsertBubble = (agentId: string, kind: BubbleKind, text: string, ttlMs: number, now: number, lied: boolean, awayFrom: string | null = null): boolean => {
       const mine = bubbleState.list.find((b) => b.agentId === agentId && b.kind === kind)
       if (mine) {
         mine.born = now
         mine.ttlMs = ttlMs
+        mine.awayFrom = awayFrom
         const changed = mine.text !== text || mine.lied !== lied
         if (changed) {
           mine.text = text
@@ -370,7 +379,7 @@ export function Effects() {
         }
         return changed
       }
-      bubbleState.list.push({ agentId, kind, lied, ttlMs, text, born: now, rev: 0, group: null, troika: null, w: 0, h: 0, dist: 0, x: 0, y: 0, z: 0, ok: false })
+      bubbleState.list.push({ agentId, kind, lied, awayFrom, ttlMs, text, born: now, rev: 0, group: null, troika: null, w: 0, h: 0, dist: 0, x: 0, y: 0, z: 0, ok: false })
       return true
     }
 
@@ -395,10 +404,10 @@ export function Effects() {
         let text: string
         let ttl = NOTE_MS
         if (e.kind === 'remember') text = clampNoteText(p.title)
-        else if (e.kind === 'revise_self') text = clampNoteText('self')
+        else if (e.kind === 'revise_self') text = 'rewrote who I am'
         else {
           const n = Number(p.commands ?? p.ok ?? 0)
-          text = `✎ tidying memory (${Number.isFinite(n) ? n : 0} ${n === 1 ? 'change' : 'changes'})`
+          text = `tidying memory (${Number.isFinite(n) ? n : 0} ${n === 1 ? 'change' : 'changes'})`
           ttl = MAINTENANCE_MS
         }
         if (upsertBubble(id, 'note', text, ttl, now, false)) dirtyBubbles = true
@@ -407,7 +416,8 @@ export function Effects() {
       if (e.kind === 'claim_feedback') {
         const p = e.payload as Record<string, unknown>
         const id = (typeof p.listener_id === 'string' && p.listener_id) || e.agent_id
-        if (id && upsertBubble(id, 'mark', '✗', MARK_MS, now, false)) dirtyBubbles = true
+        const speaker = typeof p.speaker_id === 'string' && p.speaker_id !== id ? p.speaker_id : null
+        if (id && upsertBubble(id, 'mark', 'X', MARK_MS, now, false, speaker)) dirtyBubbles = true
         return
       }
       if (isEventKind(e, 'transfer')) {
@@ -488,14 +498,26 @@ export function Effects() {
         b.z = p.z
         if (b.kind === 'mark') {
           camRight.set(1, 0, 0).applyQuaternion(camera.quaternion)
-          b.x += camRight.x * MARK_SIDE
-          b.z += camRight.z * MARK_SIDE
+          let side: 1 | -1 = 1
+          if (b.awayFrom) {
+            const q = agentPos(b.awayFrom, ctx) // reuses the scratch: b.x/b.z already hold the listener
+            if (q.ok) side = markSide(b.x - q.x, b.z - q.z, camRight.x, camRight.z)
+          }
+          b.x += camRight.x * MARK_SIDE * side
+          b.z += camRight.z * MARK_SIDE * side
         }
         const dx = camera.position.x - b.x
         const dy = camera.position.y - b.y
         const dz = camera.position.z - b.z
         b.dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
         if (b.dist > BUBBLE_MAX_DIST) b.dist = Infinity
+      }
+      // a note card on an agent that is also speaking moves up to clear the speech bubble
+      for (const b of list) {
+        if (b.kind !== 'note' || !b.ok) continue
+        for (const sp of list) {
+          if (sp.kind === 'speech' && sp.ok && sp.agentId === b.agentId) b.y = noteClearY(b.y, drawnHeight(b), sp.y, drawnHeight(sp))
+        }
       }
       // selection: the MAX_VISIBLE nearest (no allocation: repeated min scan over a tiny list)
       for (const b of list) if (b.group) b.group.visible = false
@@ -529,7 +551,7 @@ export function Effects() {
           dummy.position.copy(g.position).addScaledVector(viewDir, 0.04)
           dummy.quaternion.copy(camera.quaternion)
           const w = ((b.w > 0 ? b.w : st.maxWidth) + BUBBLE_PAD * 2) * pop
-          const h = ((b.h > 0 ? b.h : st.fontSize * BUBBLE_LINE_HEIGHT) + BUBBLE_PAD * 1.6) * pop
+          const h = drawnHeight(b) * pop
           dummy.scale.set(w, h, 1)
           dummy.updateMatrix()
           backdrop.mesh.setMatrixAt(shown, dummy.matrix)

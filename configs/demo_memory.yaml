@@ -1,0 +1,33 @@
+# The demo world with the evolving-memory layer switched on, for watching the new behaviours on localhost and
+# for the frontend fixture: false claims are found out half the time (a red mark over the listener), every
+# agent owns a memory policy and spends one paid call each night tidying its vault (a note card and a writing
+# gesture), and the five rungs run different planted strategies so the vaults diverge visibly:
+# genius and sharp build node indexes, average writes a nightly summary, slow hoards, dim does nothing.
+#   .venv/bin/void serve --config configs/demo_memory.yaml
+#   .venv/bin/void mock-feed --config configs/demo_memory.yaml --ticks 240 --out web/public/fixtures/mock.jsonl
+extends: demo.yaml
+run:
+  name: demo_memory
+world:
+  claim_feedback_p: 0.5
+economy:
+  research_pool_usd: 1.0
+memory:
+  policy:
+    enabled: true
+    seed: diverse
+  maintenance:
+    enabled: true
+    rights: [notes, policy, structure]
+    max_tokens: 512
+  exam:
+    enabled: true
+    delay_days: 2
+    questions_per_agent: 2
+    kinds: [balance, neighbour, node, claim]
+tiers:
+  genius:  {maintenance_strategy: index_builder}
+  sharp:   {maintenance_strategy: index_builder}
+  average: {maintenance_strategy: summarize}
+  slow:    {maintenance_strategy: hoarder}
+  dim:     {maintenance_strategy: noop}

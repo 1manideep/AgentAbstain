@@ -23,10 +23,16 @@ describe('speech bubble text', () => {
 })
 
 describe('clampNoteText', () => {
-  it('prefixes a pencil, collapses whitespace and keeps short titles whole', () => {
-    expect(clampNoteText('  Node n3   is rich ')).toBe('✎ Node n3 is rich')
-    expect(clampNoteText('')).toBe('✎ a note')
-    expect(clampNoteText(undefined)).toBe('✎ a note')
+  it('prefixes "noted:", collapses whitespace and keeps short titles whole', () => {
+    expect(clampNoteText('  Node n3   is rich ')).toBe('noted: Node n3 is rich')
+    expect(clampNoteText('')).toBe('noted: a thought')
+    expect(clampNoteText(undefined)).toBe('noted: a thought')
+  })
+
+  it('uses only characters the bundled font covers (no CDN fallback fonts)', () => {
+    for (const t of [clampNoteText('Foraging at node n3 on day 4 after the storm when Bao said the north node was empty again'), clampNoteText('x')]) {
+      for (const ch of t) expect(ch === '…' || ch.charCodeAt(0) < 0x7f).toBe(true)
+    }
   })
 
   it('cuts long titles at a word with an ellipsis within the two-line budget', () => {
@@ -34,7 +40,7 @@ describe('clampNoteText', () => {
     const out = clampNoteText(long)
     expect(out.length).toBeLessThanOrEqual(noteCharBudget() + 1)
     expect(out.endsWith('…')).toBe(true)
-    expect(out.startsWith('✎ Foraging')).toBe(true)
+    expect(out.startsWith('noted: Foraging')).toBe(true)
     expect(out.slice(0, -1).endsWith(' ')).toBe(false)
     expect(noteCharBudget()).toBeLessThan(bubbleCharBudget())
   })

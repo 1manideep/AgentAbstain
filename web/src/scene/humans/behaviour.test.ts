@@ -222,7 +222,8 @@ describe('personality style', () => {
   })
 
   it('splits the idle and walk weights without changing their totals', () => {
-    for (const traits of [undefined, { curiosity: 1, caution: 0 }, { caution: 1, greed: 1 }, { industriousness: 1 }]) {
+    const cases: Array<Record<string, number> | undefined> = [undefined, { curiosity: 1, caution: 0 }, { caution: 1, greed: 1 }, { industriousness: 1 }]
+    for (const traits of cases) {
       for (const stress of [0, 0.5, 1]) {
         const s = splitBase(0.8, 0.3, styleFor(traits, stress))
         expect(s.idle + s.fidget + s.guard).toBeCloseTo(0.8)
