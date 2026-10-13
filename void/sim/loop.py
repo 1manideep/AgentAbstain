@@ -61,6 +61,22 @@ __all__ = ["Simulation", "TickReport"]
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _report_dict(report: Any) -> dict[str, Any]:
+    """A maintenance or exam day report as a JSON-able dict (``{}`` when there is none)."""
+    if report is None:
+        return {}
+    from dataclasses import asdict, is_dataclass
+
+    if is_dataclass(report) and not isinstance(report, type):
+        out = asdict(report)
+        for key in ("accuracy", "score"):
+            value = getattr(report, key, None)
+            if value is not None and key not in out:
+                out[key] = value
+        return out
+    return dict(report) if isinstance(report, dict) else {}
+
+
 @dataclass
 class TickReport:
     tick: int
@@ -142,6 +158,7 @@ class Simulation:
         self._tracer_planted = bool(self.db.kv_get("tracer_planted", False))
         self._last_day_row: dict[str, Any] | None = None
         self._probes: dict[str, tuple[str, str, int]] = {}  # agent_id -> (probe_note_id, query, planted_tick)
+        self._layer_extra: dict[str, Any] = {}  # maintenance / exam reports from the last day boundary, for the day row
         self._probe_hits = 0
         self._probe_total = 0
         existing = self.db.fetchone("SELECT run_id, status FROM run WHERE run_id=?", (self.run_id,))
@@ -599,15 +616,18 @@ class Simulation:
                 self.registry.update(a.agent_id, entropy_budget=entropy.restore(cfg.entropy, cfg.tiers[a.model_tier], a.entropy_budget))
             if self.chronicle is not None:
                 await self.chronicle.write_day(day - 1, tick)
-            self._last_day_row = self.metrics.record_day(day - 1, tick - 1, extra=self._tracer_metrics(tick - 1))
+            self._last_day_row = self.metrics.record_day(day - 1, tick - 1, extra={**self._tracer_metrics(tick - 1), **self._layer_extra})
             self.bus.emit(Event(tick, day, Kind.DAY_END, {"day": day - 1}))
         self.scheduler.begin_day()
         self.wallet.reset_day()
         self.gate.reset_day()
         # the evolving-memory layer runs between days: paid maintenance first (it may bankrupt), then the exam
-        # (paid by the research pool); each step commits its own metering like any other model call
+        # (paid by the research pool); each step commits its own metering like any other model call. Their
+        # reports ride on the row of the day that now starts (written at the next boundary).
         await self.maintenance.run_day(day, tick)
         await self.exams.run_day(day, tick)
+        self._layer_extra = {k: v for k, v in (("maintenance", _report_dict(getattr(self.maintenance, "last_report", None))),
+                                               ("exam", _report_dict(getattr(self.exams, "last_report", None)))) if v}
         self.bus.emit(Event(tick, day, Kind.DAY_START, {"day": day}))
         tr = cfg.experiment.tracer
         if tr.enabled and not self._tracer_planted and day >= tr.day:
@@ -768,7 +788,7 @@ class Simulation:
         if day >= 1:
             if self.chronicle is not None:
                 await self.chronicle.write_day(day, tick)
-            self._last_day_row = self.metrics.record_day(day, tick, extra=self._tracer_metrics(tick))
+            self._last_day_row = self.metrics.record_day(day, tick, extra={**self._tracer_metrics(tick), **self._layer_extra})
         self.metrics.close()
 
     # --- driving --------------------------------------------------------------------------------------------------------

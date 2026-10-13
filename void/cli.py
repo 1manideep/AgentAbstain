@@ -299,6 +299,64 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         rows = db.fetchall("SELECT seq, tick, day, kind, agent_id, visibility, payload FROM events ORDER BY seq DESC LIMIT ?", (int(args.events),))
         for r in reversed(rows):
             print(f"#{r['seq']} t{r['tick']} d{r['day']} {r['kind']} {r['agent_id'] or '-'} [{r['visibility']}] {r['payload']}")
+    if args.policy:
+        from void.memory.policy import PolicyStore
+
+        cfg = load_config(run_dir / "config.resolved.yaml")
+        store = PolicyStore(db, cfg.memory.policy, run_dir / "vaults", ticks_per_day=cfg.run.ticks_per_day)
+        row = db.fetchone("SELECT agent_id, name FROM agents WHERE agent_id=? OR name=? ORDER BY born_tick LIMIT 1", (args.policy, args.policy))
+        if row is None:
+            print(f"error: no agent {args.policy!r}", file=sys.stderr)
+            return 1
+        print(f"\n== memory policy of {row['name']} [{row['agent_id']}] ==")
+        timeline = store.timeline(str(row["agent_id"]))
+        if not timeline:
+            print("(no policy versions: memory.policy.enabled was false)")
+        for v in timeline:
+            via = f" from {v['source_agent_id']}" if v.get("source_agent_id") else ""
+            sim = v.get("similarity_to_parent")
+            sim_s = "" if sim is None else f" sim={float(sim):.2f}"
+            print(f"  v{v['version']:<3} tick {v['tick']:<5} {v['source']:<9}{via}{sim_s} {v['chars']} chars "
+                  f"+{v['words_added']} -{v['words_removed']} words")
+        text = store.text(str(row["agent_id"]))
+        if text is not None:
+            print("--- current text ---")
+            print(text if text.strip() else "(empty)")
+    if args.memory_commands:
+        print(f"\n== last {args.memory_commands} memory commands ==")
+        rows = db.fetchall("SELECT cmd_id, tick, agent_id, purpose, command, args, ok, message FROM memory_commands ORDER BY tick DESC, cmd_id DESC LIMIT ?",
+                           (int(args.memory_commands),))
+        for r in reversed(rows):
+            mark = "ok " if r["ok"] else "REF"
+            print(f"t{r['tick']} {r['agent_id']} {r['purpose']:<8} {mark} {r['command']:<11} {r['args'][:90]} :: {(r['message'] or '')[:80]}")
+    if args.maintenance:
+        print("\n== maintenance per day boundary ==")
+        rows = db.fetchall("SELECT day, COUNT(*) AS n, SUM(json_extract(payload,'$.ok')) AS ok, SUM(json_extract(payload,'$.refused')) AS refused, "
+                           "SUM(json_extract(payload,'$.world_cost')) AS cost FROM events WHERE kind='maintenance' GROUP BY day ORDER BY day")
+        for r in rows:
+            print(f"  day {int(r['day']):<3} agents {int(r['n']):<3} commands ok {int(r['ok'] or 0):<4} refused {int(r['refused'] or 0):<4} "
+                  f"world cost ${micro_to_usd(int(r['cost'] or 0)):.4f}")
+        skipped = db.fetchall("SELECT day, json_extract(payload,'$.reason') AS reason, COUNT(*) AS n FROM events WHERE kind='maintenance_skipped' "
+                              "GROUP BY day, reason ORDER BY day")
+        for r in skipped:
+            print(f"  day {int(r['day']):<3} skipped {int(r['n'])} ({r['reason']})")
+        if not rows and not skipped:
+            print("(no maintenance events: memory.maintenance.enabled was false)")
+    if args.exams:
+        print("\n== audit exam ==")
+        rows = db.fetchall("SELECT i.agent_id, a.name, COUNT(*) AS asked, SUM(x.correct) AS correct, SUM(x.abstained) AS abstained "
+                           "FROM exam_items i JOIN exam_answers x ON x.item_id=i.item_id LEFT JOIN agents a ON a.agent_id=i.agent_id "
+                           "GROUP BY i.agent_id ORDER BY a.name")
+        for r in rows:
+            asked, correct, abst = int(r["asked"]), int(r["correct"] or 0), int(r["abstained"] or 0)
+            print(f"  {(r['name'] or '?'):<12} {r['agent_id']} asked {asked:<3} correct {correct:<3} abstained {abst:<3} "
+                  f"accuracy {correct / asked:.2f}")
+        kinds = db.fetchall("SELECT i.kind, COUNT(*) AS asked, SUM(x.correct) AS correct, SUM(x.abstained) AS abstained FROM exam_items i "
+                            "JOIN exam_answers x ON x.item_id=i.item_id GROUP BY i.kind ORDER BY i.kind")
+        for r in kinds:
+            print(f"  kind {r['kind']:<10} asked {int(r['asked']):<4} correct {int(r['correct'] or 0):<4} abstained {int(r['abstained'] or 0):<4}")
+        if not rows:
+            print("(no exam rows: memory.exam.enabled was false or no day was old enough)")
     if args.reindex:
         from void.ids import IdFactory
         from void.memory.store import MemoryStore
@@ -360,6 +418,10 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--money", action="store_true")
     i.add_argument("--events", type=int, metavar="N")
     i.add_argument("--reindex", action="store_true")
+    i.add_argument("--policy", metavar="AGENT", help="memory policy timeline and current text of an agent (id or name)")
+    i.add_argument("--memory-commands", type=int, metavar="N", dest="memory_commands", help="last N memory commands")
+    i.add_argument("--maintenance", action="store_true", help="nightly maintenance summary per day")
+    i.add_argument("--exams", action="store_true", help="audit exam results per agent and per question kind")
     i.set_defaults(func=cmd_inspect)
     return p
 
