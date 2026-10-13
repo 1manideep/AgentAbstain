@@ -52,7 +52,7 @@
 
 **The six things that could sink it** (section 8 has all of them):
 1. Prior work. The review found the combination partially scooped, not taken. Two full texts it could not read (TerraLingua's newborn context and DarwinX's cross-generation memory) could still contain a heritable memory practice under selection. Mitigation: read both before any submission, and present the work as a protocol transplant with named baselines (6.13).
-2. The live pilot shows no difference between default and self-edited memory. The gate at week 8 exists for this.
+2. Memory does not pay in this world. The free scripted gate has already found this once (10.4): amnesic agents out-earn agents with memory, because retrieved notes more than double the prompt and keep pointing at the same spent node. It must pass before any paid memory experiment. A live pilot showing no difference between default and self-edited memory is the second form of this risk, and the gate at week 8 exists for it.
 3. Effects appear on one model family and vanish on another.
 4. A proxy reward is gamed in ways that also corrupt the measurement. Mitigation: two exams, one never rewarded.
 5. Ten agents and short lives give too few generations to see a ratchet (Figure 6). Mitigation: the discrete-generation protocol (E3a), which buys generation depth directly, then a long-horizon experiment, both priced in.
@@ -478,6 +478,8 @@ Following the `exp_tiers` precedent (scripted tiers with a hidden sharpness that
 
 Pass conditions, fixed in advance: the pipeline detects index builder over no-op with power at least 0.8 at 20 seeds; it does not separate no-op from decoy on fitness; it ranks hoarder below no-op. Failing E0 means a bug in the measurement, not a finding. Note this needs the fog feature (5.2); without it the scripted agents have nothing to remember.
 
+**First result (2026-10-13): E0 fails, and the dependence check under it fails too.** Details and the diagnosis are in 10.4. Two lessons for the design itself. The no-op must be billed like the others, so scripted maintenance is now billed flat at the output cap (`memory.maintenance.scripted_billing: flat`). And the decoy condition cannot hold as written in a world that prices tokens: a long policy sits in every decision prompt and costs money every tick. The condition that still tests what the decoy is for is "the decoy does not *beat* the no-op on fitness, while a naive text metric ranks it above the no-op". That revision is made after seeing data, to a plumbing check, before any paid run, and it is recorded here as such.
+
 ### 6.3 E1: does self-directed memory help?
 
 **Design.** Four arms on a flat roster of ten Flash-Lite agents, fog on: `a0` amnesic, `a` default scaffold, `b` default plus a generic nightly "summarize your day" call with no rights over structure or policy, `c` policy plus maintenance at C2. `b` is the equal-compute control: it separates "more thinking" from "agent-authored practice". Comparisons: `a` versus `a0` (does memory matter here at all), `c` versus `a` (net of cost), `c` versus `b` (the H1 test). Arm `a` doubles as the append-only control the review calls obligatory: today's scaffold never consolidates or deletes, so it is an episodic-only vault. If `a` matches `c`, the nightly edit is not earning its cost.
@@ -745,11 +747,43 @@ The goal is a small number of credible, honestly reported results and public art
 
 | Stage | What is built and run | Cost | Time | Release condition |
 |---|---|---|---|---|
-| **S0** | Literature review (section 3); thin slice; E0 controls on scripted brains | $0 | about 4 weeks | none. **Done**; see the status below |
-| **S1** | Live smoke test, 3 seeds; then the E1 pilot at 10 seeds (4 arms) | about $20, then about $70 | about 2 weeks | S0 done and the review found no fatal overlap. **Met**: partially scooped, not fatal, provided the 6.13 baselines are adopted |
+| **S0** | Literature review (section 3); thin slice; E0 controls on scripted brains | $0 | about 4 weeks | none. Review and thin slice **done**; E0 **run and failed**; see the status below |
+| **S1** | Live smoke test, 3 seeds; then the E1 pilot at 10 seeds (4 arms) | about $20, then about $70 | about 2 weeks | S0 done and the review found no fatal overlap. The review condition is **met** (partially scooped, not fatal, provided the 6.13 baselines are adopted). The E0 condition is **not met**: hold the E1 pilot until the dependence check passes |
 | **S2, the minimum credible paper** | E1 at 20 seeds ($139); E5 transplant with faithfulness controls, straight after E1 ($150); E2 with arms A and B only ($78); E1 replication on Claude Haiku 4.5 at 10 seeds ($249); 15% exam overhead ($92) | about **$710** | about 8 weeks | **G1 passed** |
 | **S3** | E4 capability ladder with the tariff-removed condition ($426); E3a protocol transplant ($50); E7 persistence channel ($78); E2 arm C ($39); 15% exam overhead ($89) | about $680 | about 8 weeks | **G3 passed**, and S2 shows an effect worth extending |
 | **S4** | E3 ratchet at 42 days with its no-selection arm ($581); E8 control levels ($94); replication of E2 on a second family ($417); 15% exam overhead ($164) | about $1,260 | about 8 weeks | S3 positive, or a collaborator or credits fund it |
+
+**Status of S0 (2026-10-13).**
+
+*Built* `[built]`: prompt and observation logging with a flat export (`void.research.export`); the trust model's manifest, hash-checked `reindex` and `operator` channel; fog and claim feedback; the amnesic switch; the six memory commands; the policy file with versions and seeds S0 to S2; the paid nightly maintenance step with five scripted strategies; the audit exam paid by the research pool; and the E0 and dependence-check configs. The full backend suite passes.
+
+*Run*: E0 and the memory-dependence check, scripted, 20 paired seeds per arm, $0. Mean end balance per agent, paired deltas with 95% bootstrap intervals:
+
+| Check | Pre-registered | Result |
+|---|---|---|
+| Memory on versus amnesic (the gate, 5.2) | memory on wins by a preset margin | **fails**: amnesic wins in 20 of 20 seeds, by $0.071 [0.054, 0.089] |
+| Index builder versus no-op | index builder wins, power at least 0.8 | **fails**: no difference, −$0.000 [−0.023, 0.024] |
+| Hoarder versus no-op | hoarder loses | passes: −$0.049 [−0.077, −0.017] |
+| Decoy versus no-op | not separated | separated: −$0.038 [−0.067, −0.007]; see the revision in 6.2 |
+
+The first E0 run billed scripted maintenance by output length, so the no-op paid about half what the index builder did and "beat" it. Cost matching (6.2) removed that artifact; the table is the cost-matched rerun.
+
+*Diagnosis.* Memory raises the scripted agents' foraging a little and costs four times as much:
+
+| Per agent, memory on minus amnesic, 20 seeds | Value |
+|---|---|
+| Foraging income | +$0.023 [0.002, 0.043], about 5%, higher in 16 of 20 seeds |
+| Decision-call cost | +$0.093 [0.083, 0.103], higher in every seed |
+| Input tokens per decision | 249 without memory, 649 with |
+
+Two mechanisms explain it. First, retrieval is swamped. Under fog an agent often sees no worthwhile node, and then its eight retrieved notes are near-duplicates about the node it just emptied ("Foraging at node n1 on day 3", six times), so memory sends it back to a spent node. This is limitation L3 (no consolidation) showing up as a measured cost. Second, the price of remembering is high: retrieved notes more than double the prompt, so memory must raise foraging income by about 19% to break even, and it raises it by about 5%. A free sweep at 10 seeds of node capacity (12 to 40), regrowth (0.2 to 0.4) and view radius (8 to 12) did not change the picture: in all four settings the amnesic arm won on balance, and memory's effect on foraging was indistinguishable from zero.
+
+*What this means.* G0 is not passed, so by the rule in 10.2 no paid memory experiment should run yet. The live scarcity pilot does not depend on memory and can go ahead. The E1 pilot should wait. This is the cheapest possible place to have found the problem: a paid E1 in this world would very likely have returned "memory does not matter", for a reason that has nothing to do with agent-authored practice.
+
+*Recommended fix, in order* (decision 19 in section 12):
+1. Make retrieval surface the latest state of each node rather than many copies of one, either by de-duplicating near-identical titles in kernel retrieval or by having the scripted brain take the newest status per node and skip nodes it last saw empty. The first changes E1's arm `a`, so it is a design decision, not a bug fix.
+2. Lower the price of memory: retrieve 4 notes instead of 8, or cap retrieved note length, and re-measure the break-even.
+3. Re-run the dependence check, then E0. Only then the E1 pilot.
 
 The stages sum to roughly the full programme in 6.12. Small differences come from seed counts on the replications and from pilot seeds being reused in S2.
 
@@ -801,6 +835,7 @@ Each has my default. Reply with numbers and changes; I will update the document.
 | 16 | Adopt the review's baselines (6.13) | all ten; only the free ones; none | All ten. They add $411 to the cheap-tier programme (about a quarter), and without them a reviewer can attribute any effect to a published mechanism |
 | 17 | Framing | "a new kind of experiment"; "the Vallinder-Hughes protocol transplanted to memory practice, under a cognition-priced economy" | The second. It is what the evidence supports, and it makes E3a the cleanest first inheritance result |
 | 18 | Selection level | individual only; individual and group | Both, with group selection as an exploratory contrast inside E3 at no extra runs |
+| 19 | Making memory matter (10.4) | change kernel retrieval (affects E1's arm `a`); change only the scripted brain's use of memory; make memory cheaper; redesign the world | Scripted brain first, plus 4 retrieved notes instead of 8, because neither touches the live baseline's design. Change kernel retrieval only if that is not enough |
 
 ---
 

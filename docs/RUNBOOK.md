@@ -90,7 +90,7 @@ for arm in mem amnesic; do .venv/bin/void run --config configs/exp_mem_dep_$arm.
 
 ```bash
 for arm in noop index_builder hoarder decoy; do .venv/bin/void run --config configs/exp_mem_e0_$arm.yaml --seeds 1-20 --tick-seconds 0 --out runs; done
-.venv/bin/python scripts/compare.py runs/exp_mem_e0        # primary: mean_balance; pre-registered: index_builder > noop > hoarder, decoy not above noop
+.venv/bin/python scripts/compare.py runs/exp_mem_e0        # primary: mean_balance; pre-registered: index_builder > noop > hoarder (decoy: proposal §6.2)
 ```
 
 **The live pilots** (need `GEMINI_API_KEY`; prices in `base.yaml` are list prices to verify before paying; every run is capped by `economy.total_cap_usd`):
