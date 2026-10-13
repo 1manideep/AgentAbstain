@@ -15,10 +15,11 @@ from test_brains import obs
 from void.brain import entropy
 from void.brain.base import Sampling
 from void.brain.gemini_brain import GeminiBrain
-from void.brain.utility_calls import complete_text, make_chronicle_writer, make_paraphraser
+from void.brain.utility_calls import complete_json, complete_text, make_chronicle_writer, make_paraphraser
 from void.config import EntropyConfig, TierConfig, load_config
 from void.economy.pricing import hold_micro, real_cost_micro
 from void.sim.loop import Simulation
+from void.sim.maintenance import MaintenanceResponse, maintenance_system_prompt, response_schema
 
 
 class FakeModels:
@@ -168,3 +169,55 @@ def test_complete_text_on_gemini_never_raises():
     brain, _, _ = brain_for("average", genai_errors.ServerError(503, {"error": {"code": 503, "message": "overloaded", "status": "UNAVAILABLE"}}))
     r = asyncio.run(complete_text(brain, "hi"))
     assert r.error.startswith("api_503") and r.raw_text == "" and r.usage.total == 0
+
+
+# --- complete_json: the structured maintenance call ---------------------------------------------------------------
+MAINTENANCE_JSON = json.dumps({"reflection": "tidy", "commands": [
+    {"command": "create", "path": "/memories/notes/Plan.md", "file_text": "Go north.", "old_str": None, "new_str": None,
+     "insert_line": None, "insert_text": None, "old_path": None, "new_path": None, "view_range": None}], "adopted_from": []})
+
+
+def test_complete_json_request_shape_usage_and_parsing():
+    schema = response_schema()
+    brain, models, cfg = brain_for("average", resp(MAINTENANCE_JSON, prompt=900, cached=300, out=40))
+    system = maintenance_system_prompt(cfg, "average")
+    r = asyncio.run(complete_json(brain, "# Memory maintenance", schema=schema, system=system, max_tokens=512))
+    assert r.decision is None and r.error is None and r.raw_text == MAINTENANCE_JSON and r.stop_reason == "end_turn"
+    assert r.request_id == "resp_1" and r.model.startswith("gemini-2.5-flash-lite")
+    assert (r.usage.input_tokens, r.usage.cache_read_tokens, r.usage.output_tokens, r.usage.cache_write_tokens) == (600, 300, 40, 0)
+    parsed = MaintenanceResponse.model_validate_json(r.raw_text)
+    assert parsed.reflection == "tidy" and parsed.commands[0].command == "create"
+    kw = models.calls[0]
+    assert kw["model"] == cfg.tiers["average"].model and kw["contents"] == "# Memory maintenance"
+    c = kw["config"]
+    assert c["response_mime_type"] == "application/json" and c["response_json_schema"] == schema
+    assert c["system_instruction"] == system and c["max_output_tokens"] == 512 and c["candidate_count"] == 1
+    assert "temperature" not in c and c["thinking_config"] == {"thinking_budget": 0, "include_thoughts": False}
+
+
+def test_complete_json_without_a_system_prompt_sends_none():
+    brain, models, _ = brain_for("slow", resp(MAINTENANCE_JSON))
+    r = asyncio.run(complete_json(brain, "p", schema=response_schema(), system=None, max_tokens=64))
+    assert r.error is None and "system_instruction" not in models.calls[0]["config"] and models.calls[0]["config"]["max_output_tokens"] == 64
+
+
+def test_complete_json_refusals_blocks_and_truncation_are_reported_not_raised():
+    brain, _, _ = brain_for("average", resp("", finish="SAFETY"), resp("", block="SAFETY", no_candidates=True),
+                            resp("{\"reflection\": \"cut", finish="MAX_TOKENS"))
+    schema = response_schema()
+    r1 = asyncio.run(complete_json(brain, "p", schema=schema, system="S"))
+    assert r1.decision is None and r1.stop_reason == "refusal" and r1.error == "refusal:safety" and r1.usage.total > 0
+    r2 = asyncio.run(complete_json(brain, "p", schema=schema, system="S"))
+    assert r2.error == "refusal:prompt_safety"
+    r3 = asyncio.run(complete_json(brain, "p", schema=schema, system="S"))
+    assert r3.error is None and r3.stop_reason == "max_tokens" and r3.raw_text.startswith("{\"reflection\"")  # the caller parses
+
+
+def test_complete_json_api_errors_map_to_the_shared_error_classes():
+    quota = genai_errors.ClientError(429, {"error": {"code": 429, "message": "quota exceeded", "status": "RESOURCE_EXHAUSTED"}})
+    boom = genai_errors.ServerError(503, {"error": {"code": 503, "message": "overloaded", "status": "UNAVAILABLE"}})
+    brain, _, _ = brain_for("slow", quota, boom, TimeoutError("slow"), RuntimeError("no credentials"))
+    errs = [asyncio.run(complete_json(brain, "p", schema=response_schema(), system="S")) for _ in range(4)]
+    assert errs[0].error.startswith("rate_limit:") and errs[1].error.startswith("api_503:") and errs[2].error.startswith("timeout:")
+    assert errs[3].error.startswith("client: RuntimeError")
+    assert all(r.raw_text == "" and r.usage.total == 0 and r.decision is None for r in errs)

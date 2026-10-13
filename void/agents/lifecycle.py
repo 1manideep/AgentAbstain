@@ -150,7 +150,7 @@ class Lifecycle:
         rec = self._insert(rec, tick, funding)
         first = (parent_self.strip().split(".")[0].strip() + ".") if parent_self.strip() else parent.seed.motto
         self._init_vault(rec, tick, f"Child of {parent.name}. {first}", parent_id=parent.agent_id)
-        for note in self.memory.top_notes(parent.agent_id, self.cfg.memory.inherit_top_k, exclude_tags=("entity", "self", "probe")):
+        for note in self.memory.top_notes(parent.agent_id, self.cfg.memory.inherit_top_k, exclude_tags=("entity", "self", "probe", "index")):
             origin = note.provenance.origin_note_id or note.note_id
             self.memory.copy_note(note, rec.agent_id, tick, provenance=_prov(
                 channel="inherited", source_agent_id=parent.agent_id, hop=note.provenance.hop, origin_note_id=origin,

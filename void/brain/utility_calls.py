@@ -17,7 +17,7 @@ from void.brain.prompt import estimate_tokens, fence
 if TYPE_CHECKING:
     from void.sim.loop import Simulation
 
-__all__ = ["complete_text", "make_paraphraser", "make_chronicle_writer", "is_llm", "chronicle_tier"]
+__all__ = ["complete_text", "complete_json", "make_paraphraser", "make_chronicle_writer", "is_llm", "chronicle_tier"]
 
 
 def is_llm(brain: Brain | None) -> bool:
@@ -27,6 +27,13 @@ def is_llm(brain: Brain | None) -> bool:
 async def complete_text(brain: Any, prompt: str, *, max_tokens: int = 400) -> BrainResult:
     """One plain text completion on the brain's model; never raises."""
     return await brain.complete_text(prompt, max_tokens=max_tokens)
+
+
+async def complete_json(brain: Any, prompt: str, *, schema: dict[str, Any], system: str | None = None,
+                        max_tokens: int = 1024) -> BrainResult:
+    """One structured call on the brain's model (the nightly maintenance step): the raw JSON text constrained by
+    ``schema`` comes back in ``raw_text`` for the caller to parse. The provider brains never raise."""
+    return await brain.complete_json(prompt, schema=schema, system=system, max_tokens=max_tokens)
 
 
 def _record(sim: Simulation, wallet_id: str, tier_name: str, purpose: str, cc: Any, tick: int, ref: str) -> None:
