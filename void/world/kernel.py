@@ -49,6 +49,12 @@ class KernelState:
     read_chronicle_tick: dict[str, int] = field(default_factory=dict)
     windfall_tick: dict[str, int] = field(default_factory=dict)
     seen_nodes: dict[str, set[str]] = field(default_factory=dict)  # fog: node ids each agent has had in view
+    # veins (MEMORY_EVOLUTION §5.2): node id -> last tick its vein pays; when it opened; units foraged in it
+    veins: dict[str, int] = field(default_factory=dict)
+    vein_opened: dict[str, int] = field(default_factory=dict)
+    vein_units: dict[str, float] = field(default_factory=dict)
+    # real depletion: node id -> first tick it regrows again after being foraged down to nothing
+    fallow_until: dict[str, int] = field(default_factory=dict)
 
 
 class Kernel:
@@ -191,6 +197,74 @@ class Kernel:
         out.sort(key=lambda a: (agent.pos.dist(a.pos), a.agent_id))
         return out
 
+    # --- nodes: regrowth, fallow and veins (MEMORY_EVOLUTION §5.2, §10.4) ------------------------------------
+    def step_nodes(self, tick: int, day: int) -> None:
+        """Start-of-tick node update: regrowth (none while a node lies fallow), then veins ending and opening.
+
+        With ``world.fallow_ticks`` 0 and veins off this is exactly the old ``node.step()`` for every node.
+        """
+        fallow = self.state.fallow_until
+        for nid in sorted(self.nodes):
+            until = fallow.get(nid)
+            if until is not None:
+                if tick < until:
+                    continue
+                del fallow[nid]
+            self.nodes[nid].step()
+        if self.cfg.world.veins.enabled:
+            self._step_veins(tick, day)
+
+    def vein_prone_nodes(self) -> list[str]:
+        """The seeded subset of nodes where veins recur (stream ``vein_prone``); empty when veins are off."""
+        v = self.cfg.world.veins
+        ids = sorted(self.nodes)
+        k = min(v.prone_nodes, len(ids))
+        if not v.enabled or k <= 0 or self.rng is None:
+            return []
+        return sorted(self.rng.stream("vein_prone").sample(ids, k))
+
+    def _step_veins(self, tick: int, day: int) -> None:
+        v = self.cfg.world.veins
+        st = self.state
+        for nid in sorted(st.veins):
+            if tick > st.veins[nid]:
+                last = st.veins.pop(nid)
+                self.bus.emit(Event(tick, day, Kind.VEIN_END, {"node_id": nid, "opened_tick": st.vein_opened.pop(nid, None),
+                                                               "last_tick": last, "units": round(st.vein_units.pop(nid, 0.0), 3)}))
+        if self.rng is None:
+            return
+        prone = set(self.vein_prone_nodes())
+        draws = self.rng.stream("veins", tick)
+        for nid in sorted(self.nodes):
+            p = v.p_start_prone if nid in prone else v.p_start_other
+            draw = draws.random()  # one draw per node every tick, so the stream never depends on which veins are open
+            if nid in st.veins or draw >= p:
+                continue
+            node = self.nodes[nid]
+            st.veins[nid] = tick + v.duration_ticks - 1
+            st.vein_opened[nid] = tick
+            st.vein_units[nid] = 0.0
+            if v.refill:
+                node.stock = node.capacity
+                st.fallow_until.pop(nid, None)
+            self.bus.emit(Event(tick, day, Kind.VEIN_START, {"node_id": nid, "x": round(node.x, 3), "y": round(node.y, 3),
+                                                             "until_tick": st.veins[nid], "yield_mult": v.yield_mult,
+                                                             "prone": nid in prone}))
+
+    def vein_mult(self, node_id: str) -> float:
+        """The forage multiplier a vein gives ``node_id`` this tick (1.0 without one)."""
+        last = self.state.veins.get(node_id)
+        if last is None or self.state.tick > last:
+            return 1.0
+        return float(self.cfg.world.veins.yield_mult)
+
+    def vein_ticks_left(self, node_id: str) -> int | None:
+        """Ticks the vein at ``node_id`` still pays, this one included; None without a vein."""
+        last = self.state.veins.get(node_id)
+        if last is None or self.state.tick > last:
+            return None
+        return last - self.state.tick + 1
+
     # --- fog of war (MEMORY_EVOLUTION §5.2) ---------------------------------------------------------------
     def visible_nodes(self, agent: AgentRecord) -> dict[str, ResourceNode]:
         """Nodes the agent can see this tick: every node without fog, those within ``world.view_radius`` with it."""
@@ -308,13 +382,26 @@ class Kernel:
         lo, hi = self.cfg.world.weather.yield_mult_bounds
         wmult = max(lo, min(hi, self.weather.yield_multiplier()))
         bonus = float(agent.effects.get("forage_bonus", 0.0))
-        value = forage_value_micro(self.cfg.world, units, self.scarcity, wmult, bonus)
+        vmult = self.vein_mult(node.node_id)
+        value = forage_value_micro(self.cfg.world, units, self.scarcity, wmult, bonus, vmult)
         if value > 0:
             self.wallet.credit(agent.agent_id, self.state.tick, value, "forage", node.node_id, {"units": units})
         self.registry.update(agent.agent_id, last_forage_tick=self.state.tick)
-        self.bus.emit(Event(self.state.tick, self.state.day, Kind.FORAGE, {"agent_id": agent.agent_id, "node_id": node.node_id, "units": round(units, 3),
-                                                                          "usd": micro_to_usd(value), "stock_after": round(node.stock, 3)}, agent.agent_id))
-        return ActionOutcome(True, "forage", f"gathered {units:.1f} units worth ${micro_to_usd(value):.3f} at {node.node_id} ({node.label})",
+        payload: dict[str, Any] = {"agent_id": agent.agent_id, "node_id": node.node_id, "units": round(units, 3),
+                                   "usd": micro_to_usd(value), "stock_after": round(node.stock, 3)}
+        where = f"at {node.node_id} ({node.label})"
+        if vmult > 1.0:
+            payload["vein"] = vmult
+            self.state.vein_units[node.node_id] = self.state.vein_units.get(node.node_id, 0.0) + units
+            where += f" in a vein (x{vmult:g})"
+        self.bus.emit(Event(self.state.tick, self.state.day, Kind.FORAGE, payload, agent.agent_id))
+        fallow = self.cfg.world.fallow_ticks
+        if fallow > 0 and node.stock <= 0.0:
+            # foraged down to nothing: no regrowth for `fallow` ticks (real depletion, MEMORY_EVOLUTION §10.4)
+            until = self.state.tick + fallow + 1
+            self.state.fallow_until[node.node_id] = until
+            self.bus.emit(Event(self.state.tick, self.state.day, Kind.NODE_FALLOW, {"node_id": node.node_id, "until_tick": until}))
+        return ActionOutcome(True, "forage", f"gathered {units:.1f} units worth ${micro_to_usd(value):.3f} {where}",
                              effects={"usd": micro_to_usd(value)})
 
     def _reach_check(self, agent: AgentRecord, target: AgentRecord | None, kind: str) -> ActionOutcome | None:

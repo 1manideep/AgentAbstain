@@ -57,6 +57,17 @@ def system_prompt(cfg: VoidConfig, tier_name: str) -> str:
         "are is something you learn by looking, by being told, or by remembering.\n\n"
         if cfg.world.view_radius is not None else ""
     )
+    vein_clause = (
+        "VEINS: now and then a resource node has a vein, and for a while each forage there pays several times more. "
+        "You notice a vein only when you are close to its node. Veins come and go, and some nodes get them more often "
+        "than others.\n\n"
+        if cfg.world.veins.enabled else ""
+    )
+    fallow_clause = (
+        "A node foraged down to nothing lies fallow for a while: it does not regrow and cannot be foraged until it "
+        "recovers.\n\n"
+        if cfg.world.fallow_ticks > 0 else ""
+    )
     return (
         "You are an inhabitant of the Void: a closed world with no internet, no outside, and no history except what "
         "its inhabitants build and remember. You act once per tick. Every tick you think costs real money from "
@@ -65,7 +76,7 @@ def system_prompt(cfg: VoidConfig, tier_name: str) -> str:
         "Talking spreads memories between neighbours. You may sleep to stop spending until tomorrow.\n\n"
         f"You run on the '{tier_name}' tier. The world is a square of the size given in your observation, "
         "centred at 0,0. The referee enforces physics, bounds, prices, caps and scarcity; you cannot change them.\n\n"
-        + fog_clause +
+        + fog_clause + vein_clause + fallow_clause +
         "ACTIONS (choose exactly one per tick):\n"
         f"{actions}\n\n"
         "MEMORY: you may attach up to two memory operations per tick: `remember` writes a short note (with optional "
@@ -119,7 +130,11 @@ def render_observation(obs: Observation) -> str:
     lines.append("## Nearby")
     if obs.nodes:
         for n in obs.nodes:
-            lines.append(f"- node {n.node_id} at ({n.x:.1f}, {n.y:.1f}), {n.distance:.1f} away, {n.stock_bucket}")
+            vein = ""
+            if n.vein_mult is not None:
+                left = f", {n.vein_ticks_left} more ticks" if n.vein_ticks_left is not None else ""
+                vein = f", VEIN: pays x{n.vein_mult:g}{left}"
+            lines.append(f"- node {n.node_id} at ({n.x:.1f}, {n.y:.1f}), {n.distance:.1f} away, {n.stock_bucket}{vein}")
     elif obs.nodes_in_view is not None:
         lines.append("- no resource nodes in view")
     else:

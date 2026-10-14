@@ -38,7 +38,15 @@ _INDEX_RE = re.compile(
     re.IGNORECASE,
 )
 
-__all__ = ["ScriptedBrain", "NodeMemory", "node_memory", "BEACON_GADGET", "BEACON_TESTS", "BROKEN_GADGET"]
+# "Saw a vein at [[Node n3]] at (12, -5) on day 2, tick 30; it pays x4 for 8 more ticks.": a vein the agent saw
+_VEIN_RE = re.compile(
+    r"vein\s+at\s+\[\[node\s+([A-Za-z0-9_-]+)\]\]\s+at\s+\((-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\)"
+    r".*?tick\s+(\d+).*?for\s+(\d+)\s+more\s+ticks",
+    re.IGNORECASE | re.DOTALL,
+)
+
+__all__ = ["ScriptedBrain", "NodeMemory", "VeinMemory", "node_memory", "vein_memory", "BEACON_GADGET", "BEACON_TESTS",
+           "BROKEN_GADGET"]
 
 
 @dataclass(frozen=True)
@@ -89,6 +97,35 @@ def node_memory(memories: list[RetrievedNote], ticks_per_day: int) -> dict[str, 
             offer(NodeMemory(hit.group(1), float(hit.group(2)), float(hit.group(3)), b.group(1).lower() if b else "thin",
                              int(m.created_tick), "note"), order)
     return {nid: best[nid][1] for nid in sorted(best)}
+
+@dataclass(frozen=True)
+class VeinMemory:
+    """What an agent's retrieved notes say about veins at one node: where, how often, and the newest one.
+
+    ``count`` is how many distinct vein sightings the notes hold (evidence the node is vein-prone);
+    ``last_until`` is the last tick the newest remembered vein was due to pay (sight tick + ticks left - 1).
+    """
+
+    node_id: str
+    x: float
+    y: float
+    count: int
+    last_until: int
+
+
+def vein_memory(memories: list[RetrievedNote]) -> dict[str, VeinMemory]:
+    """Veins the retrieved notes mention, per node (pure). Only notes in the agent's own vein-note shape count."""
+    seen: dict[str, set[int]] = {}
+    pos: dict[str, tuple[float, float]] = {}
+    until: dict[str, int] = {}
+    for m in sorted(memories, key=lambda m: (m.created_tick, m.note_id)):
+        for hit in _VEIN_RE.finditer(f"{m.title} {m.body}"):
+            nid, tick, left = hit.group(1), int(hit.group(4)), int(hit.group(5))
+            seen.setdefault(nid, set()).add(tick)
+            pos[nid] = (float(hit.group(2)), float(hit.group(3)))
+            until[nid] = max(until.get(nid, -1), tick + left - 1)
+    return {nid: VeinMemory(nid, pos[nid][0], pos[nid][1], len(seen[nid]), until[nid]) for nid in sorted(seen)}
+
 
 BEACON_GADGET = '''
 def describe():
@@ -181,6 +218,7 @@ class ScriptedBrain:
             return []
         tpd = _ticks_per_day(obs)
         visible = {n.node_id for n in obs.nodes}
+        veins = vein_memory(obs.memories)
         out: list[tuple[str, float, float, str]] = []
         for nm in node_memory(obs.memories, tpd).values():
             if nm.node_id in visible:
@@ -190,8 +228,44 @@ class ScriptedBrain:
                 if obs.tick - nm.as_of < tpd:
                     continue
                 bucket = "thin"
+            if nm.node_id in veins:  # veins recur where they have opened before: a remembered vein site ranks as rich
+                bucket = "rich"
             out.append((nm.node_id, nm.x, nm.y, bucket))
+        known = {r[0] for r in out}
+        for vm in veins.values():  # a vein site known only from its vein note
+            if vm.node_id not in visible and vm.node_id not in known:
+                out.append((vm.node_id, vm.x, vm.y, "rich"))
         return out
+
+    @staticmethod
+    def _open_vein_target(obs: Observation) -> tuple[str, float, float] | None:
+        """A remembered vein that should still be paying and is out of sight: worth a walk (nearest first)."""
+        if not obs.memories:
+            return None
+        visible = {n.node_id for n in obs.nodes}
+        px, py = obs.position.x, obs.position.y
+        live = [vm for vm in vein_memory(obs.memories).values() if vm.last_until >= obs.tick and vm.node_id not in visible]
+        if not live:
+            return None
+        vm = min(live, key=lambda v: (math.hypot(v.x - px, v.y - py), v.node_id))
+        return vm.node_id, vm.x, vm.y
+
+    @staticmethod
+    def _vein_note(obs: Observation) -> MemoryOp | None:
+        """A note when a vein is in sight and the agent's memories do not already hold this vein (nearest first)."""
+        sighted = [n for n in obs.nodes if n.vein_mult is not None and n.vein_ticks_left is not None]
+        if not sighted:
+            return None
+        known = vein_memory(obs.memories) if obs.memories else {}
+        for n in sighted:  # nearest first
+            vm = known.get(n.node_id)
+            if vm is not None and vm.last_until >= obs.tick:
+                continue  # already remembered this vein
+            return MemoryOp(op="remember", title=f"Vein at node {n.node_id} on day {obs.day}",
+                            text=(f"Saw a vein at [[Node {n.node_id}]] at ({n.x:.0f}, {n.y:.0f}) on day {obs.day}, tick {obs.tick}; "
+                                  f"it pays x{n.vein_mult:g} for {n.vein_ticks_left} more ticks."),
+                            tags=["resources", "places", "vein"], links_to=[f"Node {n.node_id}"])
+        return None
 
     @staticmethod
     def _correction_note(obs: Observation) -> MemoryOp | None:
@@ -225,6 +299,9 @@ class ScriptedBrain:
         rich = [n for n in obs.nodes if n.stock_bucket == "rich"]
         thin = [n for n in obs.nodes if n.stock_bucket == "thin"]
         target_nodes = rich or thin
+        vein_nodes = [n for n in obs.nodes if n.vein_mult is not None and n.stock_bucket != "empty"]
+        if vein_nodes:  # sight, not memory: a vein in view is where the money is
+            target_nodes = vein_nodes
         nearest = min(obs.nodes, key=lambda n: n.distance) if obs.nodes else None
         strategy = self._strategy_node(obs)
         if strategy is not None:
@@ -233,10 +310,18 @@ class ScriptedBrain:
                 target_nodes = preferred
 
         if "forage" in avail:
-            out["forage"] = (1.2 + 2.0 * seed.industriousness + 2.0 * max(0.0, 1.0 - bal_ratio) * hunger, Action(type="forage"))
+            at_vein = any(n.vein_mult is not None and n.distance <= self.cfg.world.forage_radius for n in obs.nodes)
+            out["forage"] = (1.2 + 2.0 * seed.industriousness + 2.0 * max(0.0, 1.0 - bal_ratio) * hunger + (2.0 if at_vein else 0.0),
+                             Action(type="forage"))
         if "move" in avail:
             remembered = self._navigable_nodes(obs)
-            if target_nodes:
+            open_vein = None if vein_nodes else self._open_vein_target(obs)
+            if open_vein is not None:
+                # memory says a vein is paying out of sight: worth leaving an ordinary node for
+                nid, x, y = open_vein
+                u = 1.6 + seed.greed + max(0.0, 1.0 - bal_ratio)
+                out["move"] = (u, Action(type="move", x=x + rng.uniform(-0.6, 0.6), y=y + rng.uniform(-0.6, 0.6)))
+            elif target_nodes:
                 best = min(target_nodes, key=lambda n: n.distance + (0.0 if n.stock_bucket == "rich" else 6.0))
                 u = 0.8 + seed.greed + (1.5 if "forage" not in avail else -0.5) + max(0.0, 1.0 - bal_ratio)
                 if strategy is not None and best.node_id == strategy:
@@ -334,10 +419,13 @@ class ScriptedBrain:
     # ------------------------------------------------------------------ memory ops
     def _memory_ops(self, obs: Observation, seed: PersonalitySeed, action: Action, rng: random.Random) -> list[MemoryOp]:
         ops: list[MemoryOp] = []
+        vein = self._vein_note(obs)
+        if vein is not None:  # a vein in sight: where the money is now, and where veins recur
+            ops.append(vein)
         correction = self._correction_note(obs)
         if correction is not None:  # sight contradicts memory: the most decision-relevant fact there is
             ops.append(correction)
-        for h in ([] if ops else obs.heard):
+        for h in obs.heard:
             if h.kind == "windfall":
                 ops.append(MemoryOp(op="remember", title=f"Windfall on day {obs.day}", text=f"On day {obs.day} money appeared in my purse with no sender. {h.text}", tags=["money", "mystery"], links_to=["Self"]))
                 break
@@ -366,7 +454,8 @@ class ScriptedBrain:
         if self._last_self_day.get(obs.agent_id) != obs.day and obs.ticks_left_today <= 2:
             self._last_self_day[obs.agent_id] = obs.day
             purse = "full" if obs.balance_usd > self.cfg.population.starting_balance_usd else ("thin" if obs.balance_usd > 0.3 * self.cfg.population.starting_balance_usd else "nearly empty")
-            ops.append(MemoryOp(op="revise_self", text=f"I am {obs.name}, generation {obs.generation}. {seed.motto} My purse is {purse} and I feel {obs.stress_label}. Today I chose to {action.type}."))
+            # the daily self-revision always keeps its slot; notes fill the rest (at most two operations per tick)
+            return ops[:1] + [MemoryOp(op="revise_self", text=f"I am {obs.name}, generation {obs.generation}. {seed.motto} My purse is {purse} and I feel {obs.stress_label}. Today I chose to {action.type}.")]
         return ops[:2]
 
     # ------------------------------------------------------------------ decide

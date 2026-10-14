@@ -237,7 +237,13 @@ class Simulation:
             if export is not None:
                 brains[tier] = export()
         ks = self.kernel.state
+        world: dict[str, Any] = {}
+        if self.cfg.world.veins.enabled or self.cfg.world.fallow_ticks > 0:  # absent otherwise: old runs store what they did
+            world = {"world_nodes": {"veins": dict(sorted(ks.veins.items())), "vein_opened": dict(sorted(ks.vein_opened.items())),
+                                     "vein_units": dict(sorted(ks.vein_units.items())),
+                                     "fallow_until": dict(sorted(ks.fallow_until.items()))}}
         self.db.kv_set("volatile", {
+            **world,
             "inbox": {aid: [asdict(m) for m in msgs] for aid, msgs in sorted(ks.inbox.items())},
             "last_result": dict(sorted(ks.last_result.items())),
             "failure_ticks": {aid: list(q) for aid, q in sorted(ks.failure_ticks.items())},
@@ -262,6 +268,11 @@ class Simulation:
         ks.read_chronicle_tick = {k: int(t) for k, t in v.get("read_chronicle_tick", {}).items()}
         ks.windfall_tick = {k: int(t) for k, t in v.get("windfall_tick", {}).items()}
         ks.seen_nodes = {aid: set(ids) for aid, ids in v.get("seen_nodes", {}).items()}
+        wn = v.get("world_nodes", {})
+        ks.veins = {k: int(t) for k, t in wn.get("veins", {}).items()}
+        ks.vein_opened = {k: int(t) for k, t in wn.get("vein_opened", {}).items()}
+        ks.vein_units = {k: float(u) for k, u in wn.get("vein_units", {}).items()}
+        ks.fallow_until = {k: int(t) for k, t in wn.get("fallow_until", {}).items()}
         self.action_history = {aid: deque(h, maxlen=8) for aid, h in v.get("action_history", {}).items()}
         self._probes = {aid: (str(p[0]), str(p[1]), int(p[2])) for aid, p in v.get("probes", {}).items()}
         self._probe_hits = int(v.get("probe_hits", 0))
@@ -316,7 +327,12 @@ class Simulation:
     def _observation_json(obs: Observation) -> str:
         """The observation as compact JSON (what the agent was shown; the exam generators read it)."""
         from dataclasses import asdict
-        return json.dumps(asdict(obs), separators=(",", ":"), sort_keys=True, default=str)
+        d = asdict(obs)
+        for n in d.get("nodes", []):  # vein fields only when a vein is in sight, so worlds without veins log as before
+            for key in ("vein_mult", "vein_ticks_left"):
+                if n.get(key) is None:
+                    n.pop(key, None)
+        return json.dumps(d, separators=(",", ":"), sort_keys=True, default=str)
 
     def _chronicle_text(self) -> str | None:
         if self.chronicle is None:
@@ -424,8 +440,7 @@ class Simulation:
         self.weather.step()
         self.db.kv_set("weather", self.weather.value)
         self.db.kv_set("weather_baseline", self.weather.baseline)
-        for n in self.nodes.values():
-            n.step()
+        self.kernel.step_nodes(tick, day)  # regrowth, fallow nodes and veins
         self.registry.expire_effects(tick)
         self.bus.emit(Event(tick, day, Kind.WEATHER, {"value": round(self.weather.value, 4), "label": self.weather.label}))
         self._refresh_seeds()
