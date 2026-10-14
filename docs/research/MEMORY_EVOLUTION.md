@@ -788,11 +788,29 @@ A free sweep at 10 seeds of node capacity (12 to 40), regrowth (0.2 to 0.4) and 
 
 *What this means.* G0 is not passed, so by the rule in 10.2 no paid memory experiment should run yet. The live scarcity pilot does not depend on memory and can go ahead. The E1 pilot should wait. This is the cheapest possible place to have found the problem: a paid E1 in this world would very likely have returned "memory does not matter", for a reason that has nothing to do with agent-authored practice.
 
-*Next fix: make the world need memory* (decision 4's documented fallback, now triggered because the dependence check is weak):
-1. **Veins** (5.2): a random node pays several times more for a short window and is visible only nearby, so remembering and sharing where it was pays.
-2. **Real depletion**: nodes that run dry and regrow slowly, with fewer nodes than agents, so agents must move between known nodes, and an agent that remembers where they are walks straight there while an amnesic one wanders.
-3. Keep 4 retrieved notes in E0 and the dependence check, and state the gate at that setting.
-4. Re-run the dependence check, then E0. Only then the E1 pilot.
+*Second fix attempt: make the world need memory (2026-10-14).* Built: **veins** (a node pays several times more for a window of ticks, recurring at a seeded subset of vein-prone nodes, visible only within a small radius of its node) and **fallow nodes** (a node foraged to nothing does not regrow for a set number of ticks). Both are off by default; worlds that do not use them are byte-identical to before, pinned by golden fingerprints of a base run and of the amnesic arm. The scripted brain notices veins in sight, writes them down with position and remaining ticks, walks to a remembered vein that should still be paying, and ranks remembered vein sites as rich.
+
+Protocol fixed in advance: tune world settings on seeds 1–10 only, at most about 8 settings, then freeze one and confirm on held-out seeds 21–40. Memory on minus amnesic, mean end balance per agent, retrieval of 4 notes in both arms:
+
+| Setting | World | Seeds 1–10 |
+|---|---|---|
+| A | veins (2 prone nodes, x4 for 12 ticks, seen within 4) | +$0.087 [−0.133, 0.306] |
+| B | veins, fallow 12, capacity 12 | +$0.007 [−0.150, 0.125] |
+| C | veins, fallow 24, capacity 8, regrowth 0.2 | −$0.080 [−0.161, 0.012] |
+| D | fallow 24, capacity 8, no veins | −$0.041 [−0.066, −0.016] |
+| E | stronger veins (3 prone, x6 for 18), fallow 12, capacity 12 | −$0.071 [−0.267, 0.097] |
+| F | as C with view radius 8 | +$0.020 [−0.071, 0.089] |
+| G | view radius 6, veins, fallow 6, capacity 12 | −$0.029 [−0.159, 0.096] |
+| H | as G without veins | −$0.009 [−0.056, 0.043] |
+| I | view radius 6, veins, fallow 12, capacity 20, regrowth 0.3 | −$0.029 [−0.147, 0.078] |
+| K | as G with 4 nodes | −$0.095 [−0.256, 0.051] |
+| L | view radius 8, veins, fallow 6, capacity 12 | +$0.057 [−0.070, 0.195] |
+
+The search ran to 11 settings, past the planned 8, and no setting separated memory from amnesia. Frozen setting A (best on tuning) on held-out seeds 21–40: **−$0.078 [−0.219, 0.058]**, and E0 in that world separates nothing (index builder minus no-op +$0.029 [−0.146, 0.207]). The tuning-set edge was noise.
+
+Why: veins make everyone richer (per-run income roughly doubles) but scripted agents with memory reach no more veins than amnesic ones. Their vein notes, about 80 a run, almost all describe the node they already stand at, because a vein is visible only up close and agents rarely know a second node. Where fallow forces movement, wandering under fog finds a node about as fast as walking back to a remembered one, and memory still costs about 200 extra input tokens a decision.
+
+*What this means.* **G0 is not passed on scripted brains**, in any of the 11 worlds. That is a statement about the scripted agents' simple positional use of memory, not about whether a real model can use memory well. The decisive measurement is therefore the live memory-dependence check, run in both the original world and the vein world (stages `memdep` and `memdep_veins` in `scripts/live_claude.sh`, about $26 for 24 seed pairs on the cheapest current model; the vein world is disclosed as the best tuning setting that failed its held-out confirmation). The E1 pilot waits for that result. The veins and fallow mechanics stay in the code, off by default, for the live runs and later experiments.
 
 The stages sum to roughly the full programme in 6.12. Small differences come from seed counts on the replications and from pilot seeds being reused in S2.
 
@@ -844,7 +862,7 @@ Each has my default. Reply with numbers and changes; I will update the document.
 | 16 | Adopt the review's baselines (6.13) | all ten; only the free ones; none | All ten. They add $411 to the cheap-tier programme (about a quarter), and without them a reviewer can attribute any effect to a published mechanism |
 | 17 | Framing | "a new kind of experiment"; "the Vallinder-Hughes protocol transplanted to memory practice, under a cognition-priced economy" | The second. It is what the evidence supports, and it makes E3a the cleanest first inheritance result |
 | 18 | Selection level | individual only; individual and group | Both, with group selection as an exploratory contrast inside E3 at no extra runs |
-| 19 | Making memory matter (10.4) | change kernel retrieval (affects E1's arm `a`); change only the scripted brain's use of memory; make memory cheaper; redesign the world | **Tried, not enough** (10.4): the scripted-brain change and 4 retrieved notes halve the cost of memory but the world never needs it. Now: redesign the world (veins and real depletion, decision 4's fallback) before touching kernel retrieval, which would change E1's arm `a` |
+| 19 | Making memory matter (10.4) | change kernel retrieval (affects E1's arm `a`); change only the scripted brain's use of memory; make memory cheaper; redesign the world | **Both tried, G0 still not passed on scripted brains** (10.4): the scripted-brain change and 4 retrieved notes halve the cost of memory; veins and fallow nodes across 11 world settings, confirmed on held-out seeds, show no memory benefit. Next: the live memory-dependence check decides; change kernel retrieval (E1's arm `a`) only if live agents also fail to benefit |
 
 ---
 

@@ -1,0 +1,8 @@
+# Live Claude test, stage memdep_veins, arm mem (see live_claude_dep_veins_base.yaml).
+extends: live_claude_dep_veins_base.yaml
+run:
+  name: live_claude_dep_veins_mem
+memory:
+  enabled: true
+experiment:
+  arm: mem

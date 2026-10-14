@@ -1,0 +1,9 @@
+# Live Claude test, stage memdep_veins, arm amnesic (see live_claude_dep_veins_base.yaml). Compare afterwards with
+#   .venv/bin/python scripts/compare.py data/live/exp_mem_dep_veins_claude
+extends: live_claude_dep_veins_base.yaml
+run:
+  name: live_claude_dep_veins_amnesic
+memory:
+  enabled: false
+experiment:
+  arm: amnesic

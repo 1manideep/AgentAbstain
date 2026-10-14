@@ -24,9 +24,10 @@ PY="${PY:-$ROOT/.venv/bin/python}"
 VOID="${VOID:-$ROOT/.venv/bin/void}"
 OUT="${OUT:-$ROOT/data/live}"
 BUDGET_USD="${BUDGET_USD:-60}"
-STAGES="${STAGES:-smoke ladder memdep scarcity}"
+STAGES="${STAGES:-smoke ladder memdep memdep_veins scarcity}"
 DEP_SEEDS="${DEP_SEEDS:-$(seq -s ' ' 1 16)}"
 SCARCITY_SEEDS="${SCARCITY_SEEDS:-$(seq -s ' ' 1 12)}"
+VEIN_SEEDS="${VEIN_SEEDS:-$(seq -s ' ' 1 8)}"
 PLAN_ONLY="${PLAN_ONLY:-0}"
 HELPER="$ROOT/scripts/live_budget.py"
 CONFIGS="$ROOT/configs"
@@ -98,6 +99,10 @@ stage_memdep() {
   stage_pairs exp_mem_dep_claude "$CONFIGS/live_claude_dep_mem.yaml" "$CONFIGS/live_claude_dep_amnesic.yaml" "$DEP_SEEDS"
 }
 
+stage_memdep_veins() {
+  stage_pairs exp_mem_dep_veins_claude "$CONFIGS/live_claude_dep_veins_mem.yaml" "$CONFIGS/live_claude_dep_veins_amnesic.yaml" "$VEIN_SEEDS"
+}
+
 stage_scarcity() {
   stage_pairs exp_scarcity_claude "$CONFIGS/live_claude_scarcity_high.yaml" "$CONFIGS/live_claude_scarcity_low.yaml" "$SCARCITY_SEEDS"
 }
@@ -111,10 +116,13 @@ stage_caps() {
     memdep)
       n="$(wc -w <<<"$DEP_SEEDS")"
       awk -v n="$n" -v c="$(helper cap --config "$CONFIGS/live_claude_dep_mem.yaml")" 'BEGIN { printf "%.2f", 2 * n * c }' ;;
+    memdep_veins)
+      n="$(wc -w <<<"$VEIN_SEEDS")"
+      awk -v n="$n" -v c="$(helper cap --config "$CONFIGS/live_claude_dep_veins_mem.yaml")" 'BEGIN { printf "%.2f", 2 * n * c }' ;;
     scarcity)
       n="$(wc -w <<<"$SCARCITY_SEEDS")"
       awk -v n="$n" -v c="$(helper cap --config "$CONFIGS/live_claude_scarcity_high.yaml")" 'BEGIN { printf "%.2f", 2 * n * c }' ;;
-    *) die "unknown stage '$1' (stages: smoke ladder memdep scarcity)" ;;
+    *) die "unknown stage '$1' (stages: smoke ladder memdep memdep_veins scarcity)" ;;
   esac
 }
 

@@ -102,6 +102,37 @@ for arm in noop index_builder hoarder decoy; do .venv/bin/void run --config conf
 
 Read the E1 result in this order (section 6.3 of the proposal): `a` must beat `a0` (memory matters under fog at all), then `c` versus `b` is the question; `c` versus `a` is the effect net of its cost.
 
+## Live Claude test
+
+Real model calls on the current Haiku, Sonnet and Opus, in five stages with a hard ceiling on total spend. Nothing here runs without a key.
+
+**The key.** Add a workspace-scoped API key as `ANTHROPIC_API_KEY` in the environment's settings (never in chat, never in a file in the repo); a new session picks it up. A user-level key that is not scoped to a workspace also works if `ANTHROPIC_WORKSPACE_ID` is set; it is sent as the `anthropic-workspace-id` header. Setting a spend limit on that workspace in the Anthropic Console gives a second ceiling outside this code.
+
+**See the plan first** (no calls, no spend):
+
+```bash
+PLAN_ONLY=1 bash scripts/live_claude.sh
+```
+
+**Run it:**
+
+```bash
+bash scripts/live_claude.sh                      # all stages, BUDGET_USD=60 by default
+STAGES=smoke bash scripts/live_claude.sh         # one stage; the smoke stage must pass before the others start
+```
+
+| Stage | Configs | What it shows | Most it can spend |
+|---|---|---|---|
+| `smoke` | `live_claude_smoke.yaml` | every call purpose on every model works: valid JSON decisions, no 400s, metered cost close to the provider's usage | $1.50 |
+| `ladder` | `live_claude_ladder.yaml` | nine agents on three capability rungs, 5 days: the behaviour demo | $15.00 |
+| `memdep` | `live_claude_dep_{mem,amnesic}.yaml`, 16 seed pairs | does a real agent use memory well enough to pay for it? (gate G0, live) | $17.28 |
+| `memdep_veins` | `live_claude_dep_veins_{mem,amnesic}.yaml`, 8 pairs | the same in the vein world | $8.64 |
+| `scarcity` | `live_claude_scarcity_{high,low}.yaml`, 12 pairs | does scarcity raise deception on a real model? | $9.60 |
+
+Every run has its own `economy.total_cap_usd`. Before each run the script sums the real spend already recorded under `data/live` and refuses to start a run whose cap would take the total past `BUDGET_USD`; `void run --budget-usd` applies the same check. Completed runs are skipped on a rerun, and paired stages alternate arms seed by seed, so an interrupted stage still leaves complete pairs. Compare paired stages with `.venv/bin/python scripts/compare.py data/live/<experiment>`.
+
+**Watch the demo in the 3D viewer.** Instead of the headless `ladder` stage, serve it: `.venv/bin/void serve --config configs/live_claude_ladder.yaml --out data/live` and open http://127.0.0.1:8000 (rebuild the web app with `cd web && npm run build` if it is stale). Serving bypasses the script's cumulative guard but not the config's own $15 cap, so check the remaining budget first. Reopen a finished run with the same command plus `--resume`; it makes no model call. Never run `void mock-feed` with a live config: it would start a new paid simulation.
+
 ## Tuning the economy
 
 `VoidConfig.warnings()` (printed by the CLI) flags any roster tier whose estimated call cost is outside 0.3 to 2.0 times the forage income per tick, and a total cap that binds before the last day. The levers: `world.forage_yield_usd`, `world.node_regen_per_tick`, `world.scarcity`, `population.starting_balance_usd`, `population.min_reserve_usd`, tier prices, `economy.world_pricing: equalized`.

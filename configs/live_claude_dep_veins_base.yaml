@@ -1,0 +1,15 @@
+# Live Claude test, stage memdep_veins: the live memory-dependence check in the vein world (docs/research/
+# MEMORY_EVOLUTION.md section 10.4). Same as live_claude_dep_base.yaml plus world.veins at its defaults: two vein-prone
+# nodes, a vein pays x4 for 12 ticks, seen only within 4 units of its node. Disclosed choice: on the scripted brain
+# this was the best of 11 world settings on tuning seeds 1-10 (memory +$0.087, interval spanning zero) and it did
+# not hold on held-out seeds 21-40 (-$0.078 [-0.219, 0.058]); it is run live because a real agent may use what it
+# remembers about veins where the scripted one cannot. Not an arm itself: live_claude_dep_veins_{mem,amnesic}.yaml
+# extend it. Per-run cap as in the base ($0.54); scripts/live_claude.sh runs 8 pairs by default (VEIN_SEEDS).
+extends: live_claude_dep_base.yaml
+run:
+  name: live_claude_dep_veins
+world:
+  veins:
+    enabled: true
+experiment:
+  name: exp_mem_dep_veins_claude

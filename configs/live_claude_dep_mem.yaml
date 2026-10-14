@@ -1,4 +1,5 @@
-# Live Claude test, stage 3, arm mem: notes are written every tick and the top 8 are retrieved (the default scaffold).
+# Live Claude test, stage 3, arm mem: notes are written every tick and the top 4 are retrieved (memory.max_retrieved: 4,
+# inherited from exp_mem_dep_base.yaml, the size the scripted gate is defined at).
 # Everything else, caps included, comes from live_claude_dep_base.yaml.
 extends: live_claude_dep_base.yaml
 run:
