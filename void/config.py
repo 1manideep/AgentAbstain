@@ -26,7 +26,7 @@ from void.economy.catalog import (
     thinks_by_default,
 )
 
-__all__ = ["VoidConfig", "TierConfig", "IntelligenceConfig", "MemoryConfig", "MemoryPolicyConfig", "MaintenanceConfig",
+__all__ = ["VoidConfig", "VeinsConfig", "TierConfig", "IntelligenceConfig", "MemoryConfig", "MemoryPolicyConfig", "MaintenanceConfig",
            "ExamConfig", "MaintenanceStrategy", "MaintenanceRight", "load_config", "usd_to_micro", "micro_to_usd", "MICRO"]
 
 MICRO = 1_000_000
@@ -74,6 +74,40 @@ class WeatherConfig(StrictModel):
     yield_mult_bounds: tuple[float, float] = (0.2, 2.0)
 
 
+class VeinsConfig(StrictModel):
+    """Veins (MEMORY_EVOLUTION §5.2): a node that, for a while, pays several times more per forage.
+
+    Veins open more often at a seeded subset of "vein-prone" nodes, so where veins have appeared is worth
+    remembering. A vein shows in an observation only within ``visible_radius`` of its node (tighter than the fog's
+    view radius): an agent sees the node from afar but learns of the vein only by coming close. Off by default;
+    with ``enabled: false`` the world is exactly what it was before veins existed.
+    """
+
+    enabled: bool = False
+    prone_nodes: int = 2            # nodes drawn once per run (stream ``vein_prone``) where veins recur
+    p_start_prone: float = 0.10     # per tick, the chance a vein opens at a prone node that has none
+    p_start_other: float = 0.01     # the same for every other node
+    duration_ticks: int = 12        # how long a vein lasts
+    yield_mult: float = 4.0         # forage value multiplier while it lasts
+    visible_radius: float = 4.0     # an observation shows the vein only within this distance of its node
+    refill: bool = True             # a vein opening tops its node up to capacity (and ends any fallow)
+
+    @model_validator(mode="after")
+    def _check(self) -> VeinsConfig:
+        if self.prone_nodes < 0:
+            raise ValueError("world.veins.prone_nodes must be >= 0")
+        for name in ("p_start_prone", "p_start_other"):
+            if not (0.0 <= getattr(self, name) <= 1.0):
+                raise ValueError(f"world.veins.{name} must be within [0, 1]")
+        if self.duration_ticks < 1:
+            raise ValueError("world.veins.duration_ticks must be >= 1")
+        if self.yield_mult < 1.0:
+            raise ValueError("world.veins.yield_mult must be >= 1")
+        if self.visible_radius <= 0:
+            raise ValueError("world.veins.visible_radius must be > 0")
+        return self
+
+
 class WorldConfig(StrictModel):
     size: float = 60.0
     max_speed: float = 2.0
@@ -97,6 +131,10 @@ class WorldConfig(StrictModel):
     view_radius: float | None = None
     # Claim feedback: after a checkable false claim the listener learns it was false with this probability.
     claim_feedback_p: float = 0.0
+    # Real depletion (MEMORY_EVOLUTION §10.4): a node foraged down to nothing lies fallow for this many ticks (no
+    # regrowth, nothing to forage) before it starts to regrow. 0 = it regrows at once, as it always did.
+    fallow_ticks: int = 0
+    veins: VeinsConfig = VeinsConfig()
 
     @model_validator(mode="after")
     def _check_fog(self) -> WorldConfig:
@@ -106,6 +144,13 @@ class WorldConfig(StrictModel):
             raise ValueError("world.claim_feedback_p must be within [0, 1]")
         if self.view_radius is not None and self.view_radius < self.talk_radius:
             raise ValueError("world.view_radius must be >= world.talk_radius (an agent must see whom it can talk to)")
+        if self.fallow_ticks < 0:
+            raise ValueError("world.fallow_ticks must be >= 0")
+        if self.veins.enabled:
+            if self.view_radius is not None and self.veins.visible_radius >= self.view_radius:
+                raise ValueError("world.veins.visible_radius must be < world.view_radius (a vein is seen only up close)")
+            if self.veins.prone_nodes > self.resource_nodes:
+                raise ValueError("world.veins.prone_nodes must be <= world.resource_nodes")
         return self
 
 
@@ -367,7 +412,7 @@ class MemoryConfig(StrictModel):
     entry_k: int = 4
     hops: int = 2
     hop_decay: float = 0.6
-    max_retrieved: int = 8
+    max_retrieved: int = 8   # notes retrieved into each decision prompt (the retrieval-size knob; E0 uses 4)
     mode: Literal["graph", "vector"] = "graph"
     inherit_top_k: int = 3
     self_max_words: int = 60
@@ -540,6 +585,8 @@ class VoidConfig(StrictModel):
             raise ValueError("memory.exam.kinds includes 'claim' but world.claim_feedback_p is 0 (nothing to ask about)")
         if m.index_boost < 0:
             raise ValueError("memory.index_boost must be >= 0")
+        if m.max_retrieved < 1:
+            raise ValueError("memory.max_retrieved must be >= 1 (switch retrieval off with memory.enabled: false)")
         return self
 
     def warnings(self) -> list[str]:
@@ -599,14 +646,28 @@ class VoidConfig(StrictModel):
             parts.append(f"{tier}={len(names)}" + (f" ({', '.join(names)})" if names else ""))
         return " · ".join(parts)
 
+    def canonical_dict(self) -> dict[str, Any]:
+        """The resolved config as stored and hashed.
+
+        World fields added after runs already existed (``world.fallow_ticks``, ``world.veins``) are left out while
+        they hold their defaults, so a config that does not use them hashes exactly as it did before they existed:
+        older runs stay resumable and comparable. Loading the stored YAML restores the defaults.
+        """
+        data = self.model_dump(mode="json")
+        world = data["world"]
+        for key, default in _LATE_WORLD_DEFAULTS.items():
+            if world.get(key) == default:
+                world.pop(key, None)
+        return data
+
     def canonical_json(self) -> str:
-        return json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        return json.dumps(self.canonical_dict(), sort_keys=True, separators=(",", ":"))
 
     def hash(self) -> str:
         return hashlib.sha256(self.canonical_json().encode()).hexdigest()
 
     def to_yaml(self) -> str:
-        return yaml.safe_dump(self.model_dump(mode="json"), sort_keys=True)
+        return yaml.safe_dump(self.canonical_dict(), sort_keys=True)
 
     def public_subset(self) -> dict[str, Any]:
         """What the renderer is told about the run (no prices, no thresholds)."""
@@ -631,6 +692,10 @@ class VoidConfig(StrictModel):
                       for k, t in self.tiers.items()},
             "intelligence": {"ladder": list(self.intelligence.ladder)},
         }
+
+
+# World fields omitted from the canonical form at these values (see VoidConfig.canonical_dict).
+_LATE_WORLD_DEFAULTS: dict[str, Any] = {"fallow_ticks": 0, "veins": VeinsConfig().model_dump(mode="json")}
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

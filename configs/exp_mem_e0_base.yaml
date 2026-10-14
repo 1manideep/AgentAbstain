@@ -20,6 +20,7 @@ entropy:
   degeneration:
     mode: observe
 memory:
+  max_retrieved: 4         # notes retrieved per decision (default 8): halves the price of remembering (decision 19)
   policy:
     enabled: true
     seed: default

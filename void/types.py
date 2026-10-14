@@ -61,6 +61,8 @@ class NodeView:
     stock_bucket: str  # rich | thin | empty
     x: float
     y: float
+    vein_mult: float | None = None      # a vein in sight (within world.veins.visible_radius): its forage multiplier
+    vein_ticks_left: int | None = None  # and how many more ticks it pays, this one included
 
 
 @dataclass

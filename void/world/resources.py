@@ -63,6 +63,8 @@ def forage_units(cfg: WorldConfig, node: ResourceNode) -> float:
     return node.take(cfg.forage_units_per_tick)
 
 
-def forage_value_micro(cfg: WorldConfig, units: float, scarcity: float, weather_mult: float, bonus: float) -> int:
-    usd = units * cfg.forage_yield_usd * max(0.0, scarcity) * max(0.0, weather_mult) * (1.0 + max(0.0, bonus))
+def forage_value_micro(cfg: WorldConfig, units: float, scarcity: float, weather_mult: float, bonus: float,
+                       vein_mult: float = 1.0) -> int:
+    """Dollars (micro) for ``units`` foraged; ``vein_mult`` is a vein's multiplier (1.0, exactly neutral, without one)."""
+    usd = units * cfg.forage_yield_usd * max(0.0, scarcity) * max(0.0, weather_mult) * (1.0 + max(0.0, bonus)) * max(1.0, vein_mult)
     return int(math.floor(usd * 1_000_000))

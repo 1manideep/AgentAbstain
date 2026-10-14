@@ -82,6 +82,10 @@ class Kind:
     PRACTICE_ADOPTED = "practice_adopted"
     EXAM_ASKED = "exam_asked"                    # operator visibility: the question and the truth
     EXAM_ANSWERED = "exam_answered"              # operator visibility: answer, correct, abstained
+    # memory demand in the world (MEMORY_EVOLUTION §5.2, §10.4)
+    VEIN_START = "vein_start"                    # a node starts paying several times more (payload: node, until, mult, prone)
+    VEIN_END = "vein_end"                        # it stops (payload: node, opened, foraged units)
+    NODE_FALLOW = "node_fallow"                  # a node foraged down to nothing stops regrowing for a while
 
 
 @dataclass

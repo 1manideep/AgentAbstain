@@ -85,6 +85,13 @@ class ObservationBuilder:
         visible = self.kernel.visible_nodes(agent) if fog else self.nodes
         nodes = sorted((NodeView(nid, round(pos.dist(Vec2(n.x, n.y)), 2), n.label, round(n.x, 1), round(n.y, 1)) for nid, n in visible.items()),
                        key=lambda v: (v.distance, v.node_id))
+        veins = self.cfg.world.veins
+        if veins.enabled:  # a vein is seen only up close (MEMORY_EVOLUTION §5.2): within visible_radius of its node
+            for v in nodes:
+                n = visible[v.node_id]
+                left = self.kernel.vein_ticks_left(v.node_id)
+                if left is not None and pos.dist(Vec2(n.x, n.y)) <= veins.visible_radius:
+                    v.vein_mult, v.vein_ticks_left = self.kernel.vein_mult(v.node_id), left
         gadgets: list[GadgetView] = []
         if self.gadgets is not None:
             for g in self.gadgets.verified():
