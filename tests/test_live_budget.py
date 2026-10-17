@@ -8,8 +8,13 @@ nothing calls a model.
 
 from __future__ import annotations
 
+import fcntl
 import importlib.util
 import json
+import os
+import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +40,7 @@ live_budget = _load_script("live_budget")
 
 def make_run(run_dir: Path, config: str, *, seed: int | None = None, status: str = "completed",
              calls: list[dict[str, Any]] | None = None, events: list[tuple[str, dict[str, Any]]] = (),
-             ledger: list[tuple[str, int]] = ()) -> Path:
+             ledger: list[tuple[str, int]] = (), created_at: str = "2026-10-17T00:00:00Z") -> Path:
     """A run directory as `void run` leaves it, reduced to what the budget and verify read."""
     cfg = load_config(CONFIGS / config, {"run": {"seed": seed}} if seed is not None else {})
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -44,7 +49,7 @@ def make_run(run_dir: Path, config: str, *, seed: int | None = None, status: str
     db = Database(run_dir / "world.db")
     db.conn.execute("INSERT INTO run(run_id, config_hash, config_yaml, seed, created_at, schema_version, status) "
                     "VALUES(?,?,?,?,?,?,?)", (f"{cfg.run.name}-s{cfg.run.seed}", cfg.hash(), "", cfg.run.seed,
-                                              "2026-10-17T00:00:00Z", 2, status))
+                                              created_at, 2, status))
     for i, c in enumerate(calls or []):
         row = {"call_id": f"cl_{i:04d}", "tick": 1 + i, "agent_id": "a1", "purpose": "decide", "tier": tier,
                "model": cfg.tiers[tier].model, "provider": cfg.tiers[tier].provider, "input_tokens": 500,
@@ -126,6 +131,121 @@ def test_reserve_final_lost_and_passed(tmp_path: Path, capsys: pytest.CaptureFix
     assert entry["first_request_id"] == "req_000" and entry["last_request_id"] == "req_001"
     assert live_budget.main(["passed", "--ledger", str(ledger), "--config", config, "--seed", "3"]) == 0
     assert spend_under([tmp_path / "nowhere"], ledger=ledger)[0] == 10_000
+
+
+# --- attempts a killed script left open -------------------------------------------------------------------------
+def reserved(attempt: str, ts: str, run_id: str = "live_claude_dep_mem-s3", cap: int = 360_000) -> dict[str, Any]:
+    return {"attempt": attempt, "run_id": run_id, "run": "exp_mem_dep_claude/mem/seed_3", "state": "reserved",
+            "cap_micro": cap, "ts": ts}
+
+
+def reconcile(ledger: Path, out: Path, *extra: str) -> int:
+    return live_budget.main(["reconcile", "--ledger", str(ledger), "--config", str(CONFIGS / "live_claude_dep_mem.yaml"),
+                             "--seed", "3", "--root", str(out), "--out", str(out), *extra])
+
+
+def test_reconcile_closes_an_open_attempt_from_the_run_it_wrote(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "out"
+    ledger = write_ledger(tmp_path / "ledger.jsonl", reserved("a1", "2026-10-17T10:00:00Z"))
+    # an older run of the same id, created before the reservation, is never taken for it
+    make_run(out / "_rejected" / "old", "live_claude_dep_mem.yaml", seed=3, status="failed",
+             calls=[{"real_cost": 50_000}], created_at="2026-10-17T09:00:00Z")
+    assert reconcile(ledger, out) == 0
+    assert read_ledger(ledger)["a1"]["state"] == "reserved"  # no directory of its own: stays at its cap
+    assert "never" not in capsys.readouterr().out
+    # the orphaned `void run` finished on its own (the script got TERM and died without recording the end)
+    run_dir = make_run(out / "exp_mem_dep_claude" / "mem" / "seed_3", "live_claude_dep_mem.yaml", seed=3,
+                       calls=[{"real_cost": 7_000}, {"real_cost": 3_000}], created_at="2026-10-17T10:00:05Z")
+    assert reconcile(ledger, out, "--verified-dir", str(run_dir)) == 0
+    assert capsys.readouterr().out.split() == ["a1"]
+    entry = read_ledger(ledger)["a1"]
+    assert entry["state"] == "final" and entry["status"] == "completed" and entry["real_micro"] == 10_000
+    assert entry["verified"] is True and entry["created_at"] == "2026-10-17T10:00:05Z"
+    assert spend_under([out], ledger=ledger)[0] == 50_000 + 10_000  # no longer the 360,000 cap
+    assert reconcile(ledger, out) == 0 and capsys.readouterr().out == ""  # nothing left to close
+
+
+def test_reconcile_never_closes_a_run_that_may_still_be_spending(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "out"
+    ledger = write_ledger(tmp_path / "ledger.jsonl", reserved("a1", "2026-10-17T10:00:00Z"))
+    make_run(out / "exp_mem_dep_claude" / "mem" / "seed_3", "live_claude_dep_mem.yaml", seed=3, status="running",
+             calls=[{"real_cost": 4_000}], created_at="2026-10-17T10:00:05Z")
+    assert reconcile(ledger, out) == 0  # running, and no lock shows its process ended (a manual serve, another OUT)
+    assert read_ledger(ledger)["a1"]["state"] == "reserved" and "stays counted at its cap" in capsys.readouterr().err
+    lock = live_budget.lock_path(out, "a1")
+    lock.parent.mkdir(parents=True)
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # its `void run` is alive
+        assert reconcile(ledger, out) == 0
+        assert read_ledger(ledger)["a1"]["state"] == "reserved" and "still holds its lock" in capsys.readouterr().err
+    finally:
+        os.close(fd)
+    assert reconcile(ledger, out) == 0  # the lock is free: the process is gone, its records are final
+    entry = read_ledger(ledger)["a1"]
+    assert entry["state"] == "final" and entry["status"] == "running" and entry["real_micro"] == 4_000
+    assert entry["verified"] is False
+
+
+def test_reconcile_places_each_open_attempt_by_its_reservation_time(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "out"
+    ledger = write_ledger(tmp_path / "ledger.jsonl", reserved("a1", "2026-10-17T10:00:00Z"), reserved("a2", "2026-10-17T11:00:00Z"))
+    make_run(out / "_rejected" / "first", "live_claude_dep_mem.yaml", seed=3, status="failed", calls=[{"real_cost": 1_000}],
+             created_at="2026-10-17T10:00:02Z")
+    make_run(out / "exp_mem_dep_claude" / "mem" / "seed_3", "live_claude_dep_mem.yaml", seed=3, calls=[{"real_cost": 2_000}],
+             created_at="2026-10-17T11:00:02Z")
+    assert reconcile(ledger, out) == 0 and capsys.readouterr().out.split() == ["a1", "a2"]
+    attempts = read_ledger(ledger)
+    assert attempts["a1"]["real_micro"] == 1_000 and attempts["a1"]["status"] == "failed"
+    assert attempts["a2"]["real_micro"] == 2_000 and attempts["a2"]["status"] == "completed"
+
+
+def test_launch_holds_the_attempt_lock_while_the_command_lives(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    # the command (same pid as `launch`) lives until its stdin closes
+    child = subprocess.Popen([sys.executable, str(REPO / "scripts" / "live_budget.py"), "launch", "--out", str(out),
+                              "--attempt", "a1", "--", sys.executable, "-c", "import sys; sys.stdin.read()"],
+                             stdin=subprocess.PIPE)
+    lock = live_budget.lock_path(out, "a1")
+    try:
+        deadline = time.monotonic() + 30
+        while not (lock.is_file() and live_budget.lock_held(lock)):
+            assert child.poll() is None and time.monotonic() < deadline
+            time.sleep(0.05)
+    finally:
+        child.communicate(b"", timeout=30)
+    assert child.returncode == 0 and not live_budget.lock_held(lock)
+
+
+def test_lost_tells_an_open_reservation_from_a_finished_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "out"
+    args = ["--config", str(CONFIGS / "live_claude_dep_mem.yaml"), "--seed", "3", "--root", str(out)]
+    ledger = write_ledger(tmp_path / "ledger.jsonl", reserved("a1", "2026-10-17T10:00:00Z"))
+    assert live_budget.main(["lost", "--ledger", str(ledger), *args]) == live_budget.EXIT_LOST
+    err = capsys.readouterr().err
+    assert "reserved at 2026-10-17T10:00:00Z and never recorded as finished" in err
+    assert f"final --ledger {ledger} --attempt a1 --run-dir {out / 'exp_mem_dep_claude/mem/seed_3'}" in err
+    # closed by hand at $0 (it never started): no longer lost, no longer counted
+    assert live_budget.main(["final", "--ledger", str(ledger), "--attempt", "a1", "--run-dir", str(out / "nowhere")]) == 0
+    assert live_budget.main(["lost", "--ledger", str(ledger), *args]) == 0 and spend_under([out], ledger=ledger)[0] == 0
+    ledger = write_ledger(tmp_path / "ledger2.jsonl", {**reserved("b1", "2026-10-17T10:00:00Z"), "state": "final",
+                                                       "status": "failed", "real_micro": 9_000})
+    assert live_budget.main(["lost", "--ledger", str(ledger), *args]) == live_budget.EXIT_LOST
+    assert "finished with status failed, $0.0090 spent" in capsys.readouterr().err
+
+
+def test_report_shows_the_ledger_over_disk_and_open_reservations(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "out"
+    make_run(out / "live_claude_smoke", "live_claude_smoke.yaml", calls=[{"real_cost": 156_798}])
+    ledger = write_ledger(tmp_path / "ledger.jsonl",
+                          {"attempt": "s", "run_id": "live_claude_smoke-s42", "state": "final", "real_micro": 156_798},
+                          {"attempt": "o", "run_id": "live_claude_smoke-s42", "state": "reserved", "cap_micro": 1_500_000,
+                           "ts": "2026-10-17T12:00:00Z"})
+    assert live_budget.main(["report", "--root", str(out), "--ledger", str(ledger)]) == 0
+    printed = capsys.readouterr().out
+    assert "(ledger over disk) live_claude_smoke-s42" in printed and "+$1.5000" in printed
+    assert "(open reservation) live_claude_smoke-s42" in printed and "reserved at 2026-10-17T12:00:00Z" in printed
+    assert "total $1.6568" in printed
 
 
 def test_void_run_counts_the_ledger_and_refuses_without_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

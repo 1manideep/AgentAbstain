@@ -237,18 +237,20 @@ class AnthropicBrain:
             return r
 
         async with self.semaphore:
+            # the call timeout runs from here, not from t0: time spent queued for a slot is not time the request had
+            started = time.perf_counter()
             while True:
                 if self._halted is not None:  # nothing is sent once a response was billed above the list prices
                     return None, failed(f"billing: not sent after a response with {self._halted}"), t0, retries
                 try:
-                    remaining = timeout - (time.perf_counter() - t0)
+                    remaining = timeout - (time.perf_counter() - started)
                     resp = await asyncio.wait_for(send(), timeout=max(remaining, 0.001))
                 except (TimeoutError, anthropic.APITimeoutError) as e:
                     return None, failed(f"timeout: {e}"[:300]), t0, retries
                 except anthropic.APIStatusError as e:
                     if _retryable(e) and retries + 1 < MAX_ATTEMPTS:
                         wait = _retry_wait(e, retries)
-                        if time.perf_counter() - t0 + wait < timeout:
+                        if time.perf_counter() - started + wait < timeout:
                             retries += 1
                             log.warning("tier %s: %s, attempt %d of %d in %.1f s", self.tier, e.status_code, retries + 1,
                                         MAX_ATTEMPTS, wait)
