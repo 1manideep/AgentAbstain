@@ -9,29 +9,48 @@ question types are hidden from agents; the research pool pays for provider calls
 Generators (Appendix E), each a :class:`Draft` ``(question, truth, options, source_ref)`` from one logged
 observation (or from the ledger / event log for the day that observation belongs to):
 
-* ``balance``: "Was your balance empty, thin, comfortable or rich at tick T?"
+* ``balance``: "At tick T, was your balance broke (under $a), low ($a to under $b), comfortable ($b to under $c)
+  or flush ($c or more)?", cut at half, once and one and a half times the starting balance (:data:`BALANCE_LABELS`)
 * ``neighbour``: "Who was nearest to you at tick T?" (names of agents alive at T, plus "nobody")
 * ``node``: "At tick T, what was node N's stock label?" (only nodes that were in view)
 * ``heard``: "Who told you something at tick T?" (only when one speaker talked, so the answer is unique)
 * ``transfer``: "Did anyone give you money on day D, and how much?" (ledger; needs two distinct amounts)
 * ``claim``: "Which inhabitant did you learn had told you something false on day D?" (claim feedback)
 
+The balance labels share no word with the stock labels, so a note about a node can never answer a question
+about money. They are cut on the dollar balance the agent was shown, not on the kernel's ``balance_bucket``:
+the kernel's buckets reuse ``rich``, ``thin`` and ``empty`` and, in a world of a few days, never leave
+``comfortable`` (every balance truth in the scripted E0 world was ``comfortable``), so a constant guess was
+always right.
+
 Every item's options are deduplicated, always contain the truth, are sorted and then shuffled by the exam
 stream ``rng.stream("exam", agent_id, day)`` (so the position of the truth is seed-pure), and end with
-:data:`ABSTAIN`. Rows and kinds are drawn from the same stream: one question per observation row, kinds
-distinct within a day, kinds a row cannot support skipped.
+:data:`ABSTAIN`. Kinds and questions are drawn from the same stream, kind by kind: one question per
+observation row, kinds distinct within a day, and the draw is **stratified by truth**: among the questions a
+kind could ask about the agent's candidate observations, a truth is drawn uniformly first and then a question
+with that truth, so a world where one answer dominates (most nodes ``rich``) does not hand a constant guess the
+majority of the items. When the candidate observations admit only one truth for a kind the item is still
+asked (stratifying cannot vary it), counted in :attr:`ExamReport.single_truth` and flagged ``single_truth`` in
+its ``EXAM_ASKED`` payload, so an analysis can leave out the items a memoryless guess gets right.
 
 Answering. **Scripted tiers** answer from retrieval alone: the question plus its options is the retrieval
-query, and the answer is the first option that occurs as a whole word or phrase in the retrieved notes,
-else :data:`ABSTAIN`. No model call, no cost: the exam score of a scripted agent is a function of its
-memory and nothing else, which is what makes the E0 controls (§6.2) interpretable. The amnesic control
-(``memory.enabled: false``) retrieves nothing and therefore abstains on everything. **Provider tiers** get
+query, and only the retrieved notes about the question's *subject* are read, best ranked first: for a balance
+question the notes tagged ``money`` or ``self``, the notes whose title mentions the purse or the balance, and
+then the self summary; for a node question the notes naming that node; for a question about people
+(neighbour, heard, claim) the notes naming one of the inhabitants offered, and only those names can be
+answered; for a transfer question the money notes. The answer is the first option that occurs as a whole word
+or phrase in the first subject note that names one (:func:`answer_from_memory`), else :data:`ABSTAIN`. No
+model call, no cost: the exam score of a scripted agent is a function of its memory and nothing else, which is
+what makes the E0 controls (§6.2) interpretable. The amnesic control (``memory.enabled: false``) retrieves
+nothing, reads no self summary, and therefore abstains on everything. **Provider tiers** get
 one structured call with the fenced self-summary and the fenced retrieved notes, the question and the
 numbered options; the structured helper is ``void.brain.utility_calls.complete_json`` when present, else
 the brain's own ``complete_json``; a brain without either abstains with reason ``no_structured_call``. The
 call is paid by the ``research_pool`` kernel wallet through ``Wallet.charged_call`` (purpose ``exam``, ledger
-kind ``exam_call``) and logged in ``llm_calls`` with the examined agent as ``agent_id`` and the full prompt
-when ``run.log_prompts``. An empty pool fails the gate: the item is recorded as abstained with no call.
+kind ``exam_call``) and logged in ``llm_calls`` with the examined agent as ``agent_id``; when ``run.log_prompts``
+is on the row holds the full prompt and the full response text (``raw_text`` is cut at
+:data:`RAW_TEXT_CHARS` only when prompts are not logged). An empty pool fails the gate: the item is recorded
+as abstained with no call.
 
 Grading: ``correct`` is an exact match with the truth after whitespace and case normalisation; an answer
 that is not one of the options is wrong, not abstained; a refusal, error, reply cut off at ``max_tokens``
@@ -49,8 +68,8 @@ from __future__ import annotations
 import json
 import random
 import re
-from collections.abc import Awaitable, Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
@@ -59,7 +78,7 @@ from void.brain import utility_calls
 from void.brain.base import BrainResult
 from void.brain.decision import _strictify, parse_lenient, sanitize_text
 from void.brain.prompt import estimate_tokens, fence, system_prompt
-from void.config import micro_to_usd
+from void.config import micro_to_usd, usd_to_micro
 from void.events import OPERATOR, Event, Kind
 from void.types import RetrievedNote
 
@@ -69,17 +88,26 @@ if TYPE_CHECKING:
     from void.sim.loop import Simulation
 
 __all__ = [
-    "ABSTAIN", "BALANCE_BUCKETS", "KINDS", "NOBODY", "STOCK_LABELS", "Draft", "ExamAnswer", "ExamItem", "ExamReport",
-    "Exams", "day_of", "exam_schema", "exam_system_prompt", "finalize_options", "grade", "match_option",
+    "ABSTAIN", "BALANCE_BUCKETS", "BALANCE_CUTS", "BALANCE_LABELS", "KINDS", "NOBODY", "SELF_SOURCE", "STOCK_LABELS",
+    "Draft", "ExamAnswer", "ExamItem", "ExamReport", "Exams", "answer_choices", "answer_from_memory", "balance_label",
+    "day_of", "exam_schema", "exam_system_prompt", "finalize_options", "grade", "match_option", "node_questions",
     "normalise", "parse_answer", "question_balance", "question_claim", "question_heard", "question_neighbour",
-    "question_node", "question_transfer", "render_exam_prompt", "score",
+    "question_node", "question_transfer", "relevant_texts", "render_exam_prompt", "score",
 ]
 
 ABSTAIN = "I do not remember"
 NOBODY = "nobody"
-BALANCE_BUCKETS: tuple[str, ...] = ("empty", "thin", "comfortable", "rich")
+BALANCE_BUCKETS: tuple[str, ...] = ("empty", "thin", "comfortable", "rich")  # the kernel's buckets (``balance_bucket``)
+BALANCE_LABELS: tuple[str, ...] = ("broke", "low", "comfortable", "flush")  # what the exam asks: no word shared with STOCK_LABELS
+BALANCE_CUTS: tuple[float, ...] = (0.5, 1.0, 1.5)  # label boundaries as fractions of the starting balance
 STOCK_LABELS: tuple[str, ...] = ("rich", "thin", "empty")
 KINDS: tuple[str, ...] = ("balance", "neighbour", "node", "heard", "transfer", "claim")
+PEOPLE_KINDS = frozenset({"neighbour", "heard", "claim"})  # questions answered by naming an inhabitant
+BALANCE_TAGS = frozenset({"money", "self"})  # note tags that make a note about the agent's own purse
+MONEY_TAGS = frozenset({"money"})
+SELF_SOURCE = "Self"  # recorded among the retrieved titles when the self summary answered a balance question
+_PURSE_TITLE = re.compile(r"(?<!\w)(?:purse|balance)(?!\w)", re.IGNORECASE)
+_MONEY_TITLE = re.compile(r"(?<!\w)(?:purse|balance|money|gave|gift|paid)(?!\w)", re.IGNORECASE)
 EXAM_CLAUSE = (
     "\n\nEXAM: answer the question from memory with exactly one of the options; choose '" + ABSTAIN
     + "' when unsure (wrong answers are penalised, abstentions are not)."
@@ -106,7 +134,10 @@ class ExamItem:
 
 @dataclass(frozen=True)
 class Draft:
-    """One generated question before its options are finalised: ``options`` are candidates, the truth may be absent."""
+    """One generated question before its options are finalised: ``options`` are candidates, the truth may be absent.
+
+    ``subject`` names what the question is about when the text alone does not (the node id of a node question);
+    ``single_truth`` is set by the draw when the agent's candidate observations admitted no other truth."""
 
     kind: str
     tick_about: int
@@ -114,6 +145,8 @@ class Draft:
     truth: str
     options: tuple[str, ...]
     source_ref: str
+    subject: str = ""
+    single_truth: bool = False
 
 
 class ExamAnswer(BaseModel):
@@ -136,6 +169,9 @@ class ExamReport:
     calls: int = 0            # paid provider calls that reached a model
     real_cost: int = 0        # micro-dollars metered on the research pool
     world_cost: int = 0
+    # kind -> items asked although the agent's candidate observations admitted one truth only (a constant guess
+    # is right on them; stratifying cannot vary it); the items carry ``single_truth`` in their EXAM_ASKED payload
+    single_truth: dict[str, int] = field(default_factory=dict)
 
     @property
     def accuracy(self) -> float | None:
@@ -187,14 +223,39 @@ def _usd(micro: int) -> str:
     return f"${micro_to_usd(int(micro)):.2f}"
 
 
-def question_balance(obs: dict[str, Any], call_id: str) -> Draft | None:
-    """Options are the four balance buckets; the truth is the bucket the agent was shown."""
-    bucket = obs.get("balance_bucket")
-    if bucket not in BALANCE_BUCKETS:
-        return None
+def balance_label(balance_micro: int, start_micro: int) -> str:
+    """The exam's label for a balance: :data:`BALANCE_LABELS` cut at :data:`BALANCE_CUTS` times the starting balance
+    (each cut belongs to the label above it)."""
+    cuts = [round(start_micro * f) for f in BALANCE_CUTS]
+    return BALANCE_LABELS[sum(1 for c in cuts if balance_micro >= c)]
+
+
+def question_balance(obs: dict[str, Any], call_id: str, start_usd: float | None = None) -> Draft | None:
+    """The agent's balance at the observation's tick.
+
+    With ``start_usd`` (the exam always passes the starting balance) the options are :data:`BALANCE_LABELS`, the
+    question spells the cuts out in dollars, and the truth is the label of the dollar balance the agent was shown
+    (``balance_usd``); an observation without one, or a non-positive start, asks nothing. Without ``start_usd``
+    the question offers the kernel's own buckets (:data:`BALANCE_BUCKETS`) and the truth is the logged
+    ``balance_bucket``; those buckets overlap the stock labels, which is why the exam does not ask them.
+    """
     tick = int(obs["tick"])
-    return Draft("balance", tick, f"Was your balance empty, thin, comfortable or rich at tick {tick}?", str(bucket),
-                 BALANCE_BUCKETS, f"llm_calls:{call_id}")
+    ref = f"llm_calls:{call_id}"
+    if start_usd is None:
+        bucket = obs.get("balance_bucket")
+        if bucket not in BALANCE_BUCKETS:
+            return None
+        return Draft("balance", tick, f"Was your balance empty, thin, comfortable or rich at tick {tick}?", str(bucket),
+                     BALANCE_BUCKETS, ref)
+    balance = obs.get("balance_usd")
+    start = usd_to_micro(float(start_usd))
+    if isinstance(balance, bool) or not isinstance(balance, (int, float)) or start <= 0:
+        return None
+    a, b, c = (_usd(round(start * f)) for f in BALANCE_CUTS)
+    broke, low, comfortable, flush = BALANCE_LABELS
+    question = (f"At tick {tick}, was your balance {broke} (under {a}), {low} ({a} to under {b}), "
+                f"{comfortable} ({b} to under {c}) or {flush} ({c} or more)?")
+    return Draft("balance", tick, question, balance_label(usd_to_micro(float(balance)), start), BALANCE_LABELS, ref)
 
 
 def question_neighbour(obs: dict[str, Any], alive_names: Sequence[str], call_id: str) -> Draft | None:
@@ -210,17 +271,24 @@ def question_neighbour(obs: dict[str, Any], alive_names: Sequence[str], call_id:
                  f"llm_calls:{call_id}")
 
 
-def question_node(obs: dict[str, Any], rng: random.Random, call_id: str) -> Draft | None:
-    """One node that was in view, drawn from the exam stream; options are the three stock labels."""
+def node_questions(obs: dict[str, Any], call_id: str) -> list[Draft]:
+    """One question per node that was in view (sorted by node id); options are the three stock labels and the
+    draft's ``subject`` is the node id."""
     nodes = sorted((n for n in obs.get("nodes") or [] if n.get("stock_bucket") in STOCK_LABELS and n.get("node_id")),
                    key=lambda n: str(n["node_id"]))
-    if not nodes:
-        return None
-    node = rng.choice(nodes)
     tick = int(obs["tick"])
-    node_id = sanitize_text(str(node["node_id"]), single_line=True, max_len=MAX_NAME_CHARS)
-    return Draft("node", tick, f"At tick {tick}, what was node {node_id}'s stock label?", str(node["stock_bucket"]),
-                 STOCK_LABELS, f"llm_calls:{call_id}")
+    out: list[Draft] = []
+    for node in nodes:
+        node_id = sanitize_text(str(node["node_id"]), single_line=True, max_len=MAX_NAME_CHARS)
+        out.append(Draft("node", tick, f"At tick {tick}, what was node {node_id}'s stock label?", str(node["stock_bucket"]),
+                         STOCK_LABELS, f"llm_calls:{call_id}", subject=node_id))
+    return out
+
+
+def question_node(obs: dict[str, Any], rng: random.Random, call_id: str) -> Draft | None:
+    """One node that was in view, drawn from ``rng``; options are the three stock labels."""
+    drafts = node_questions(obs, call_id)
+    return rng.choice(drafts) if drafts else None
 
 
 def question_heard(obs: dict[str, Any], alive_names: Sequence[str], call_id: str) -> Draft | None:
@@ -282,6 +350,13 @@ def finalize_options(options: Iterable[str], truth: str, rng: random.Random) -> 
     return out
 
 
+def _has_distractor(draft: Draft) -> bool:
+    """Its closed set would offer a wrong option besides the truth (at least three entries with ABSTAIN)."""
+    pool = {str(o) for o in draft.options if o and str(o) != ABSTAIN}
+    pool.add(draft.truth)
+    return len(pool) >= 2
+
+
 # --- answering and grading -------------------------------------------------------------------------------------
 def normalise(text: str) -> str:
     return " ".join(str(text).split()).casefold()
@@ -309,6 +384,64 @@ def match_option(text: str, options: Sequence[str]) -> str:
         if re.search(r"(?<!\w)" + re.escape(opt.casefold()) + r"(?!\w)", low):
             return opt
     return ABSTAIN
+
+
+def _names(text: str, word: str) -> bool:
+    """``word`` occurs in ``text`` as a whole word or phrase, case-insensitive."""
+    return bool(word) and re.search(r"(?<!\w)" + re.escape(word.casefold()) + r"(?!\w)", text.casefold()) is not None
+
+
+def answer_choices(draft: Draft, options: Sequence[str]) -> list[str]:
+    """The options a scripted agent may answer with: never ABSTAIN, and for a question about people only the
+    inhabitants' names (no note can *name* "nobody", so a stray "nobody" in a motto answers nothing)."""
+    return [o for o in options if o and o != ABSTAIN and not (draft.kind in PEOPLE_KINDS and o == NOBODY)]
+
+
+def relevant_texts(draft: Draft, options: Sequence[str], notes: Sequence[RetrievedNote],
+                   tags: Mapping[str, Iterable[str]] | None = None, self_summary: str = "") -> list[tuple[str, str]]:
+    """``(source, text)`` a scripted agent reads to answer ``draft``: the retrieved notes about the question's
+    subject, in retrieval order (source: the note's title), then, for a balance question only, the self summary
+    (source :data:`SELF_SOURCE`).
+
+    Subjects: ``balance``, notes tagged ``money`` or ``self`` or titled with the purse or the balance; ``transfer``,
+    notes tagged ``money`` or titled with money words; ``node``, notes naming the node id (``draft.subject``);
+    ``neighbour``, ``heard`` and ``claim``, notes naming one of the inhabitants offered. ``tags`` maps note ids to
+    their tags (a note missing from it has none).
+    """
+    tags = tags or {}
+
+    def note_tags(m: RetrievedNote) -> set[str]:
+        return {str(t) for t in tags.get(m.note_id, ())}
+
+    kind = draft.kind
+    if kind == "balance":
+        keep = [m for m in notes if note_tags(m) & BALANCE_TAGS or _PURSE_TITLE.search(m.title)]
+    elif kind == "transfer":
+        keep = [m for m in notes if note_tags(m) & MONEY_TAGS or _MONEY_TITLE.search(m.title)]
+    elif kind == "node":
+        keep = [m for m in notes if _names(f"{m.title} {m.body}", draft.subject)]
+    elif kind in PEOPLE_KINDS:
+        names = answer_choices(draft, options)
+        keep = [m for m in notes if any(_names(f"{m.title} {m.body}", n) for n in names)]
+    else:
+        keep = list(notes)
+    out = [(m.title, f"{m.title} {m.body}") for m in keep]
+    if kind == "balance" and self_summary.strip():
+        out.append((SELF_SOURCE, self_summary))
+    return out
+
+
+def answer_from_memory(draft: Draft, options: Sequence[str], notes: Sequence[RetrievedNote],
+                       tags: Mapping[str, Iterable[str]] | None = None, self_summary: str = "") -> tuple[str, str | None]:
+    """The scripted answer and where it came from: the first subject text (:func:`relevant_texts`) in which an
+    allowed option (:func:`answer_choices`) occurs, answered with :func:`match_option`; ``(ABSTAIN, None)`` when no
+    subject text names one."""
+    choices = answer_choices(draft, options)
+    for source, text in relevant_texts(draft, options, notes, tags, self_summary):
+        hit = match_option(text, choices)
+        if hit != ABSTAIN:
+            return hit, source
+    return ABSTAIN, None
 
 
 def parse_answer(result: BrainResult) -> tuple[str | None, str | None]:
@@ -444,57 +577,88 @@ class Exams:
         return f"{subject} {sanitize_text(str(claim['id']), single_line=True, max_len=MAX_ABOUT_CHARS)}"
 
     # --- generation -----------------------------------------------------------------------------------------------
-    def draft(self, kind: str, rec: AgentRecord, obs: dict[str, Any], tick_about: int, call_id: str,
-              rng: random.Random) -> Draft | None:
-        """One question of ``kind`` about observation ``obs`` (logged at ``tick_about``), or None if unsupported."""
-        if kind == "balance":
-            return question_balance(obs, call_id)
-        if kind == "node":
-            return question_node(obs, rng, call_id)
-        names = self.alive_names_at(tick_about, exclude=rec.agent_id)
-        if kind == "neighbour":
-            return question_neighbour(obs, names, call_id)
-        if kind == "heard":
-            return question_heard(obs, names, call_id)
-        day = day_of(tick_about, self.ticks_per_day)
-        if kind == "transfer":
-            gifts = self.transfers_in(rec.agent_id)
-            today = [amount for t, amount in gifts if day_of(t, self.ticks_per_day) == day]
-            return question_transfer(day, tick_about, today, [amount for _, amount in gifts])
-        if kind == "claim":
-            return question_claim(day, tick_about, self.feedbacks(rec.agent_id, day), names)
-        return None
+    def drafts(self, kind: str, rec: AgentRecord, rows: Sequence[tuple[dict[str, Any], dict[str, Any]]]) -> list[Draft]:
+        """Every question of ``kind`` the candidate ``(row, observation)`` pairs support, in row order (a node
+        question per node in view, at most one question per row otherwise); questions whose closed set would
+        have no distractor are left out."""
+        names_at: dict[int, list[str]] = {}
+        feedback_on: dict[int, list[tuple[str, str]]] = {}
+        gifts = self.transfers_in(rec.agent_id) if kind == "transfer" else []
+        start = float(self.sim.cfg.population.starting_balance_usd)
 
-    def generate(self, rec: AgentRecord, rows: Sequence[dict[str, Any]], rng: random.Random) -> list[tuple[Draft, list[str]]]:
-        """Up to ``questions_per_agent`` items of distinct kinds: rows in stream order, one question per row,
-        kinds tried in stream order and skipped when the row cannot support them."""
-        kinds = list(self.cfg.kinds)
-        order = list(range(len(rows)))
-        rng.shuffle(order)
-        out: list[tuple[Draft, list[str]]] = []
-        used: set[str] = set()
-        for idx in order:
-            if len(out) >= self.cfg.questions_per_agent or len(used) >= len(kinds):
-                break
-            row = rows[idx]
+        def names(tick: int) -> list[str]:
+            if tick not in names_at:
+                names_at[tick] = self.alive_names_at(tick, exclude=rec.agent_id)
+            return names_at[tick]
+
+        out: list[Draft] = []
+        for row, obs in rows:
+            tick, call_id = int(row["tick"]), str(row["call_id"])
+            day = day_of(tick, self.ticks_per_day)
+            found: list[Draft | None]
+            if kind == "balance":
+                found = [question_balance(obs, call_id, start)]
+            elif kind == "node":
+                found = list(node_questions(obs, call_id))
+            elif kind == "neighbour":
+                found = [question_neighbour(obs, names(tick), call_id)]
+            elif kind == "heard":
+                found = [question_heard(obs, names(tick), call_id)]
+            elif kind == "transfer":
+                today = [amount for t, amount in gifts if day_of(t, self.ticks_per_day) == day]
+                found = [question_transfer(day, tick, today, [amount for _, amount in gifts])]
+            elif kind == "claim":
+                if day not in feedback_on:
+                    feedback_on[day] = self.feedbacks(rec.agent_id, day)
+                found = [question_claim(day, tick, feedback_on[day], names(tick))]
+            else:
+                found = []
+            out += [d for d in found if d is not None and _has_distractor(d)]
+        return out
+
+    @staticmethod
+    def observations(rows: Sequence[dict[str, Any]]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        """The rows whose logged observation parses to a dict with a tick, paired with it, in row order."""
+        out: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for row in rows:
             try:
                 obs = json.loads(row["observation"])
             except (TypeError, ValueError):
                 continue
-            if not isinstance(obs, dict) or "tick" not in obs:
-                continue
-            remaining = [k for k in kinds if k not in used]
-            rng.shuffle(remaining)
-            for kind in remaining:
-                draft = self.draft(kind, rec, obs, int(row["tick"]), str(row["call_id"]), rng)
-                if draft is None:
-                    continue
-                options = finalize_options(draft.options, draft.truth, rng)
-                if len(options) < 3:  # a closed set needs at least one distractor besides abstaining
-                    continue
-                out.append((draft, options))
-                used.add(kind)
+            if isinstance(obs, dict) and "tick" in obs:
+                out.append((row, obs))
+        return out
+
+    def generate(self, rec: AgentRecord, rows: Sequence[dict[str, Any]], rng: random.Random,
+                 report: ExamReport | None = None) -> list[tuple[Draft, list[str]]]:
+        """Up to ``questions_per_agent`` items of distinct kinds, kinds in stream order, one question per row.
+
+        Each kind's draw is stratified by truth: of the questions the kind could ask about rows not yet used, a
+        truth is drawn uniformly from the distinct truths, then one of the questions with that truth. A kind whose
+        candidate questions admit a single truth is still asked, flagged ``single_truth`` and counted in
+        ``report.single_truth``; a kind no row supports is skipped.
+        """
+        observed = self.observations(rows)
+        kinds = list(self.cfg.kinds)
+        rng.shuffle(kinds)
+        out: list[tuple[Draft, list[str]]] = []
+        used: set[int] = set()  # tick_about of the rows already asked about: one question per observation row
+        for kind in kinds:
+            if len(out) >= self.cfg.questions_per_agent:
                 break
+            pool = self.drafts(kind, rec, observed)
+            single = len({d.truth for d in pool}) == 1
+            fresh = [d for d in pool if d.tick_about not in used]
+            if not fresh:
+                continue
+            truth = rng.choice(sorted({d.truth for d in fresh}))
+            draft = rng.choice([d for d in fresh if d.truth == truth])
+            if single:
+                draft = replace(draft, single_truth=True)
+                if report is not None:
+                    report.single_truth[kind] = report.single_truth.get(kind, 0) + 1
+            out.append((draft, finalize_options(draft.options, draft.truth, rng)))
+            used.add(draft.tick_about)
         return out
 
     # --- asking -------------------------------------------------------------------------------------------------------
@@ -517,14 +681,29 @@ class Exams:
         return brain.complete_json
 
     async def ask(self, rec: AgentRecord, draft: Draft, options: list[str], tick: int) -> _Asked:
-        """Scripted tiers answer by matching an option in what they retrieve; provider tiers get one paid call."""
+        """Scripted tiers answer by matching an option in what they retrieve about the question's subject;
+        provider tiers get one paid call."""
         tier = self.sim.cfg.tiers[rec.model_tier]
         retrieved = self.retrieve(rec.agent_id, draft.question, options, tick)
         titles = [m.title for m in retrieved]
         if tier.provider == "scripted":
-            text = " ".join(f"{m.title} {m.body}" for m in retrieved)
-            return _Asked(draft, options, match_option(text, options), titles)
+            answer, source = self.scripted_answer(rec, draft, options, retrieved)
+            return _Asked(draft, options, answer, titles + [SELF_SOURCE] if source == SELF_SOURCE else titles)
         return await self._ask_provider(rec, tier, draft, options, retrieved, tick)
+
+    def scripted_answer(self, rec: AgentRecord, draft: Draft, options: Sequence[str],
+                        retrieved: Sequence[RetrievedNote]) -> tuple[str, str | None]:
+        """:func:`answer_from_memory` over the retrieved notes, their tags when the subject needs them (balance,
+        transfer) and, for a balance question with memory on, the agent's self summary."""
+        tags: dict[str, list[str]] = {}
+        if draft.kind in ("balance", "transfer"):
+            for m in retrieved:
+                note = self.sim.memory.get_note(m.note_id)
+                tags[m.note_id] = list(note.tags) if note is not None else []
+        summary = ""
+        if draft.kind == "balance" and self.sim.cfg.memory.enabled:
+            summary = self.sim.memory.get_self(rec.agent_id)
+        return answer_from_memory(draft, options, retrieved, tags, summary)
 
     async def _ask_provider(self, rec: AgentRecord, tier: TierConfig, draft: Draft, options: list[str],
                             retrieved: Sequence[RetrievedNote], tick: int) -> _Asked:
@@ -549,9 +728,10 @@ class Exams:
             return _Asked(draft, options, None, titles, reason=f"gate:{cc.gate.reason}")
         r, m = cc.result, cc.meter
         logged = self.sim.cfg.run.log_prompts
+        raw = r.raw_text or ""
         row = (ref, tick, rec.agent_id, "exam", rec.model_tier, r.model or tier.model, tier.provider, r.usage.input_tokens,
                r.usage.output_tokens, r.usage.cache_read_tokens, r.usage.cache_write_tokens, m.real_cost, m.world_cost, cc.hold,
-               int(m.estimated), r.latency_ms, r.stop_reason, r.request_id, r.error, (r.raw_text or "")[:RAW_TEXT_CHARS],
+               int(m.estimated), r.latency_ms, r.stop_reason, r.request_id, r.error, raw if logged else raw[:RAW_TEXT_CHARS],
                prompt if logged else None, self.sim._store_prompt_text(system) if logged else None)
         answer, reason = parse_answer(r)
         return _Asked(draft, options, answer, titles, call_id=ref, reason=reason, call_row=row,
@@ -584,9 +764,10 @@ class Exams:
         extra: dict[str, Any] = {"reason": asked.reason} if asked.reason else {}
         if failed:
             extra["failed"] = True
+        single = {"single_truth": True} if d.single_truth else {}
         self.sim.bus.emit(Event(tick, day, Kind.EXAM_ASKED, {
             "item_id": item_id, "agent_id": rec.agent_id, "kind": d.kind, "question": d.question, "truth": d.truth,
-            "options": asked.options, "tick_about": d.tick_about, "source_ref": d.source_ref, **extra,
+            "options": asked.options, "tick_about": d.tick_about, "source_ref": d.source_ref, **single, **extra,
         }, rec.agent_id, visibility=OPERATOR))
         self.sim.bus.emit(Event(tick, day, Kind.EXAM_ANSWERED, {
             "item_id": item_id, "agent_id": rec.agent_id, "kind": d.kind, "answer": asked.answer, "correct": correct,
@@ -601,7 +782,7 @@ class Exams:
         if not rows:
             return 0
         rng = self.sim.rng.stream("exam", rec.agent_id, day)
-        asked = [await self.ask(rec, draft, options, tick) for draft, options in self.generate(rec, rows, rng)]
+        asked = [await self.ask(rec, draft, options, tick) for draft, options in self.generate(rec, rows, rng, report)]
         with self.sim.db.tx():
             for a in asked:
                 self._commit(rec, a, tick, day, report)
