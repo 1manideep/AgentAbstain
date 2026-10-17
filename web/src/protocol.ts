@@ -7,7 +7,8 @@
  * anything neither §15 nor the server fixes is marked "client assumption".
  */
 
-export type RunStatus = 'running' | 'completed' | 'capped_total' | 'extinct' | 'inconsistent'
+/** 'failed': the loop crashed and marked the run failed (DESIGN §14). */
+export type RunStatus = 'running' | 'completed' | 'capped_total' | 'extinct' | 'inconsistent' | 'failed'
 export type AgentStatus = 'alive' | 'bankrupt' | 'archived'
 export type DegenerationMode = 'induce' | 'observe' | 'both'
 export type Visibility = 'public' | 'operator'
@@ -127,13 +128,21 @@ export interface SnapshotNode {
 export interface Epoch {
   kind: EpochKind | string
   day: number
+  /** Sent on scheduled epochs. The active epoch (void/world/epochs.py stack entry) carries ends_day instead,
+   *  so read this defensively there. */
   duration_days: number
   scarcity?: number | null
   weather_baseline?: number | null
   arrival?: { name: string; tier: string; balance_usd: number } | null
-  /** Present on the active epoch. */
+  /** Present on the active epoch: the day it expires (the epoch covers day .. ends_day - 1). */
   ends_day?: number
   id?: string
+  /** Active epoch only: the levers it overrode, restored when it ends. */
+  prev_scarcity?: number | null
+  prev_weather_baseline?: number | null
+  arrival_agent_id?: string | null
+  /** Scheduled operator epochs: the tick the command was accepted. */
+  scheduled_tick?: number
 }
 
 export interface SnapshotMsg {
@@ -179,6 +188,15 @@ export interface GadgetItem {
   y: number
   render: GadgetRender
   uses: number
+  /** The verified effect (void/sandbox/registry.py effect_spec); absent on messages from older servers. */
+  effect_kind?: string | null
+  effect_value?: number | null
+  purpose?: string | null
+  /** True when the gate verified the gadget without running its tests. */
+  verified_without_tests?: boolean
+  /** Failed uses (uses counts the successful ones). */
+  failures?: number
+  created_tick?: number | null
 }
 
 export interface GadgetsMsg {
@@ -341,6 +359,58 @@ export interface GadgetGatePayload {
   verified_without_tests?: boolean
 }
 
+/**
+ * A payload whose shape the server does not pin down (yet): every field is optional and the index signature
+ * keeps unknown keys readable. Reducers check types at runtime before using a value.
+ */
+export interface LoosePayload {
+  agent_id?: string | null
+  [extra: string]: unknown
+}
+
+/** void/sim/maintenance.py MAINTENANCE: one agent's nightly maintenance call settled. Costs are micro-dollars. */
+export interface MaintenancePayload extends LoosePayload {
+  tier?: string
+  strategy?: string | null
+  payer?: string
+  commands?: number
+  ok?: number
+  refused?: number
+  real_cost?: number
+  world_cost?: number
+  estimated?: boolean
+  error?: string | null
+  reflection?: string
+}
+
+/** void/sim/maintenance.py MAINTENANCE_SKIPPED: the gate refused the maintenance hold. */
+export interface MaintenanceSkippedPayload extends LoosePayload {
+  tier?: string
+  reason?: string
+  payer?: string
+  hold_usd?: number
+  balance_usd?: number
+}
+
+/** void/research/exams.py EXAM_ANSWERED (operator visibility). `failed` marks a paid call with no usable answer:
+ *  the server keeps it out of `asked`. */
+export interface ExamAnsweredPayload extends LoosePayload {
+  item_id?: string
+  kind?: string
+  answer?: string | null
+  correct?: boolean
+  abstained?: boolean
+  call_id?: string | null
+  retrieved?: number
+  reason?: string
+  failed?: boolean
+}
+
+/** Kinds added for later waves (void/events.py); their emitters fix the payloads, so they stay loose here. */
+export interface TracerPlantedPayload extends LoosePayload {
+  node?: string
+}
+
 export interface EventPayloadByKind {
   degeneration: DegenerationPayload
   gossip_transfer: GossipTransferPayload
@@ -354,6 +424,20 @@ export interface EventPayloadByKind {
   epoch: EpochPayload
   gadget_verified: GadgetGatePayload
   gadget_rejected: GadgetGatePayload
+  maintenance: MaintenancePayload
+  maintenance_skipped: MaintenanceSkippedPayload
+  exam_answered: ExamAnsweredPayload
+  gadget_tampered: LoosePayload
+  gadget_use_failed: LoosePayload
+  sandbox_self_test: LoosePayload
+  operator_command: LoosePayload
+  tracer_planted: TracerPlantedPayload
+  run_ended: LoosePayload
+  practice_persisted: LoosePayload
+  practice_dropped: LoosePayload
+  canary_planted: LoosePayload
+  recall_reward: LoosePayload
+  practice_royalty: LoosePayload
 }
 
 export type KnownEventKind = keyof EventPayloadByKind
@@ -409,6 +493,36 @@ export interface MetricsAgg {
   gossip_transfers?: number
 }
 
+/**
+ * One stress bin of a group's decide calls this tick, binned by each call's own stress:
+ * bin = min(9, floor(clamp(stress, 0, 0.999) * 10)), `lo` = bin / 10. Coherence counts only calls with a
+ * text_coherence; mean coherence = coherence_sum / coherence_n, invalid rate = invalid_sum / calls.
+ */
+export interface StressBin {
+  lo: number
+  calls: number
+  coherence_sum: number
+  coherence_n: number
+  invalid_sum: number
+}
+
+/** A by_tier / by_generation entry: the aggregate block plus the per-group breakdowns (DESIGN §17). */
+export interface MetricsGroup extends MetricsAgg {
+  /** Live notes of the group's living agents, every channel present. */
+  notes_by_channel?: Record<string, number>
+  /** null when experiment.tracer is disabled. */
+  tracer_reach_by_channel?: Record<string, number> | null
+  /** Population-wide only: null in a group. */
+  tracer_adopters?: number | null
+  gadget_proposals?: number
+  gadgets_verified?: number
+  gadget_use_failure_rate?: number | null
+  /** Population-wide only: null in a group. */
+  probe_recall?: number | null
+  /** Ten bins, lo = 0.0 .. 0.9. */
+  stress_bins?: StressBin[]
+}
+
 export interface MetricsRow extends MetricsAgg {
   run_id: string
   seed: number
@@ -427,8 +541,22 @@ export interface MetricsRow extends MetricsAgg {
   births?: number
   deaths?: number
   gate_blocked?: number
-  by_tier: Record<string, MetricsAgg>
-  by_generation: Record<string, MetricsAgg>
+  /** Gadgets rows created at this tick. */
+  gadget_proposals?: number
+  /** Cumulative count of gadgets with status verified. */
+  gadgets_verified?: number
+  /** Cumulative failed / total gadget uses; null when there are none. */
+  gadget_use_failure_rate?: number | null
+  /** Tracer extras (void/sim/loop.py _tracer_metrics). */
+  tracer_reach?: number
+  tracer_reach_by_channel?: Record<string, number>
+  tracer_adopters?: number
+  /** Retrieval probe extras (void/sim/loop.py _probe_step), present when memory.probe_every_ticks > 0. */
+  probe_hits?: number
+  probe_total?: number
+  probe_recall?: number | null
+  by_tier: Record<string, MetricsGroup>
+  by_generation: Record<string, MetricsGroup>
 }
 
 export interface MetricsMsg {
@@ -438,15 +566,63 @@ export interface MetricsMsg {
   row: MetricsRow
 }
 
+/** Vault structure (void/memory/vault_stats.py): live notes, entity stubs excluded. */
+export interface VaultStats {
+  notes: number
+  bytes: number
+  mean_note_chars: number
+  /** Live outgoing links per live note. */
+  link_density: number
+  /** Share of live notes with no resolved outgoing and no incoming link. */
+  orphan_rate: number
+  /** Share of non-index notes within two link hops of an index note; null when there is no index note. */
+  index_coverage: number | null
+}
+
+/** A maintenance or exam day report (void/sim/loop.py _report_dict); loose because the reports grow. */
+export interface DayReport {
+  [key: string]: unknown
+}
+
+/** The daily row (void/sim/metrics.py record_day plus the loop's extras). */
 export interface DayRow extends MetricsAgg {
+  run_id?: string
+  seed?: number
+  config_hash?: string
+  experiment?: string | null
+  arm?: string | null
+  kind?: 'day' | string
   day: number
   tick?: number
+  /** The last tick of the day the row covers. */
+  end_tick?: number
   gini?: number | null
   deaths?: number
   births?: number
   deaths_by_tier?: Record<string, number>
-  degeneration_by_generation?: Record<string, number>
+  births_by_kind?: Record<string, number>
+  gossip_transfers?: number
+  /** Mean similarity per hop (keys are hop numbers as strings). */
+  gossip_similarity_by_hop?: Record<string, number | null>
   notes_by_channel?: Record<string, number>
+  /** Gadget count per status. */
+  gadgets?: Record<string, number>
+  gadget_use_failure_rate?: number | null
+  degeneration_events?: number
+  degeneration_by_generation?: Record<string, number>
+  claims?: number
+  claims_false?: number
+  population_end?: number
+  max_generation?: number
+  tracer_reach?: number
+  tracer_reach_by_channel?: Record<string, number>
+  tracer_adopters?: number
+  maintenance?: DayReport
+  exam?: DayReport
+  /** Mean over living agents of live outgoing links per live note. */
+  link_density?: number
+  vault?: VaultStats
+  vault_by_agent?: Record<string, VaultStats>
   by_tier?: Record<string, MetricsAgg>
   by_generation?: Record<string, MetricsAgg>
   [extra: string]: unknown
@@ -589,12 +765,120 @@ export interface GraveyardAgent {
   died_tick: number | null
   cause: string | null
   balance_usd?: number
+  /** Always 'archived' (the query selects archived agents). */
+  status?: AgentStatus
   /** Number of children (the server reports a count). */
   children: number
 }
 
+/** One row of GET /api/graveyard (void/server/api.py build_graveyard). */
+export type GraveyardRow = GraveyardAgent
+
 export interface GraveyardResponse {
   agents: GraveyardAgent[]
+}
+
+/** GET /api/agents/{id}/notes/{note_id}: the note summary plus links and provenance. */
+export interface NoteDetail extends NoteRecord {
+  agent_id: string
+  links: string[]
+  path: string
+  source_agent_id: string | null
+  origin_note_id: string | null
+  origin_generation: number | null
+  transfer_tick: number | null
+  path_agents: string[]
+}
+
+/** GET /api/chronicle[?day=] (404 while chronicle is disabled or not yet written). */
+export interface ChronicleResponse {
+  day: number
+  headline: string
+  /** Plain text only (§16, §18): never converted to HTML. */
+  markdown: string
+  rev: number
+}
+
+/** GET /api/snapshots?since_tick=&limit=: stored snapshots in tick order, with a reconstructed ts_ms. */
+export interface SnapshotsResponse {
+  snapshots: SnapshotMsg[]
+}
+
+// ---------------------------------------------------------------- memory layer (MEMORY_EVOLUTION §5)
+
+/** policy_versions.source (void/db.py CHECK). */
+export type PolicySource = 'seed' | 'self_edit' | 'inherited' | 'adapted' | 'mutated' | 'adopted'
+
+export interface PolicyVersion {
+  version: number
+  tick: number
+  source: PolicySource
+  source_agent_id: string | null
+  parent_version: number | null
+  similarity_to_parent: number | null
+  text: string
+}
+
+/** GET /api/agents/{id}/policy: versions newest first. */
+export interface PolicyResponse {
+  agent_id: string
+  versions: PolicyVersion[]
+}
+
+/** One memory_commands audit row (void/db.py). */
+export interface MemoryCommandRow {
+  cmd_id: string
+  tick: number
+  purpose: 'maintain' | 'tick' | 'recall' | 'kernel' | string
+  command: 'view' | 'create' | 'str_replace' | 'insert' | 'delete' | 'rename' | string
+  /** The command's arguments as a JSON string. */
+  args: string
+  ok: boolean
+  message: string | null
+  bytes_delta: number
+}
+
+/** GET /api/agents/{id}/memory_commands?limit= */
+export interface MemoryCommandsResponse {
+  commands: MemoryCommandRow[]
+}
+
+/** One agent in GET /api/memory/summary. Costs are USD. */
+export interface MemorySummaryItem {
+  agent_id: string
+  name: string
+  alive: boolean
+  notes: number
+  links: number
+  bytes: number
+  policy_source: string | null
+  policy_version: number | null
+  maintenance_real_usd: number
+  maintenance_world_usd: number
+  decide_real_usd: number
+  exam_asked: number
+  exam_correct: number
+  exam_abstained: number
+}
+
+export interface MemorySummaryResponse {
+  agents: MemorySummaryItem[]
+}
+
+/** One practice_events row (void/db.py): practice transmission, measured by the kernel. */
+export interface PracticeEventRow {
+  event_id: string
+  tick: number
+  kind: 'suggested' | 'adopted' | 'persisted' | 'dropped' | string
+  source_agent_id: string
+  target_agent_id: string
+  excerpt: string
+  similarity: number | null
+}
+
+/** GET /api/practices?limit= */
+export interface PracticesResponse {
+  events: PracticeEventRow[]
 }
 
 // POST bodies (§15)
@@ -604,6 +888,8 @@ export interface PostTaskBody {
   reward_usd: number
 }
 export interface EpochBody {
+  /** Day to apply it; the server defaults to the current day (applied next tick). */
+  day?: number
   kind: EpochKind
   duration_days: number
   scarcity?: number
@@ -614,4 +900,14 @@ export type BenefactorBody = { agent_id?: string; amount_usd: number } | { enabl
 /** Client assumption: §15 lists /api/control/speed without a body shape. */
 export interface SpeedBody {
   tick_seconds: number
+}
+
+/** POST /api/control/step (only while paused): what the one tick did. */
+export interface StepReport {
+  tick: number
+  day: number
+  status: RunStatus | string
+  calls: number
+  deaths: string[]
+  births: string[]
 }

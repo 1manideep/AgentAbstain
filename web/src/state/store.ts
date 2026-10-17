@@ -54,6 +54,8 @@ export interface WorldStats {
   spendToday: number
   spendTotal: number
   spawnPool: number
+  /** The house kernel wallet (snapshot house_usd: absorbs overruns, collects gadget fees); 0 when not sent. */
+  houseUsd: number
   population: number
   paused: boolean
   epochs: SnapshotMsg['epochs']
@@ -88,6 +90,7 @@ const EMPTY_WORLD: WorldStats = {
   spendToday: 0,
   spendTotal: 0,
   spawnPool: 0,
+  houseUsd: 0,
   population: 0,
   paused: false,
   epochs: { active: null, scheduled: [] },
@@ -246,12 +249,14 @@ export const useStore = create<VoidState>()((set, get) => {
     applyHello: (m) => {
       const s = get()
       if (s.runId && s.runId !== m.run_id) s.resetRun()
+      seriesAcc.beginRun(m.run_id)
       set({
         runId: m.run_id,
         config: m.config,
         runStatus: m.status,
         serverPaused: m.paused,
-        tickSeconds: m.config.tick_seconds,
+        // the live speed (an operator may have changed it); the config value is only the starting speed
+        tickSeconds: typeof m.tick_seconds === 'number' ? m.tick_seconds : m.config.tick_seconds,
       })
     },
 
@@ -272,6 +277,7 @@ export const useStore = create<VoidState>()((set, get) => {
       worldAcc.spendToday = m.spend_today_usd
       worldAcc.spendTotal = m.spend_total_usd
       worldAcc.spawnPool = m.spawn_pool_usd
+      worldAcc.houseUsd = typeof m.house_usd === 'number' ? m.house_usd : 0
       worldAcc.population = m.population
       worldAcc.paused = m.paused
       worldAcc.epochs = m.epochs
@@ -309,9 +315,9 @@ export const useStore = create<VoidState>()((set, get) => {
           st.tick = m.tick
         }
       }
-      seriesAcc.onSnapshot(m, s.rosterById)
+      // a replayed backlog snapshot (tick already counted) leaves the series untouched
+      if (seriesAcc.onSnapshot(m, s.rosterById)) pendingSeries = true
       pendingStats = true
-      pendingSeries = true
       if (m.paused !== s.serverPaused) set({ serverPaused: m.paused })
       commit.call()
     },
