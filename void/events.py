@@ -67,9 +67,15 @@ class Kind:
     # gadgets
     GADGET_VERIFIED = "gadget_verified"
     GADGET_REJECTED = "gadget_rejected"
+    GADGET_TAMPERED = "gadget_tampered"          # operator visibility: code on disk no longer matches its hash; quarantined
+    GADGET_USE_FAILED = "gadget_use_failed"      # a use ran and failed (payload: gadget_id, agent_id, stage, reason)
+    SANDBOX_SELF_TEST = "sandbox_self_test"      # operator visibility: the sandbox's isolation report at startup
     # control
     PAUSE = "pause"
     RESUME = "resume"
+    OPERATOR_COMMAND = "operator_command"        # operator visibility: the result of one applied control command
+    TRACER_PLANTED = "tracer_planted"            # operator visibility: the tracer note was planted (payload: agent_id, node)
+    RUN_ENDED = "run_ended"                      # the run stopped (payload: reason, tick, day)
     # claims (kernel) and claim feedback to the listener (MEMORY_EVOLUTION §5.2)
     CLAIM = "claim"
     CLAIM_FEEDBACK = "claim_feedback"
@@ -80,8 +86,14 @@ class Kind:
     POLICY_CHANGED = "policy_changed"            # a new policy_versions row (payload: version, source, similarity)
     PRACTICE_SUGGESTED = "practice_suggested"
     PRACTICE_ADOPTED = "practice_adopted"
+    PRACTICE_PERSISTED = "practice_persisted"    # an adopted practice survived memory.practices.persist_days
+    PRACTICE_DROPPED = "practice_dropped"        # an adopted practice left the receiver's policy before that
     EXAM_ASKED = "exam_asked"                    # operator visibility: the question and the truth
     EXAM_ANSWERED = "exam_answered"              # operator visibility: answer, correct, abstained
+    # selection signals (MEMORY_EVOLUTION §5.8): canary facts and the research pool's rewards
+    CANARY_PLANTED = "canary_planted"            # operator visibility: a canary fact and its answer (canary_facts row)
+    RECALL_REWARD = "recall_reward"              # arm B: a correct reward-exam answer was paid (ledger kind recall_reward)
+    PRACTICE_ROYALTY = "practice_royalty"        # arm C: a persisted practice paid its source (ledger kind practice_royalty)
     # memory demand in the world (MEMORY_EVOLUTION §5.2, §10.4)
     VEIN_START = "vein_start"                    # a node starts paying several times more (payload: node, until, mult, prone)
     VEIN_END = "vein_end"                        # it stops (payload: node, opened, foraged units)

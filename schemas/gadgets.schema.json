@@ -2,6 +2,49 @@
   "$defs": {
     "GadgetItem": {
       "properties": {
+        "created_tick": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Created Tick"
+        },
+        "effect_kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One of world.effect_caps' kinds (e.g. forage_bonus)",
+          "title": "Effect Kind"
+        },
+        "effect_value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The verified effect size, capped by world.effect_caps",
+          "title": "Effect Value"
+        },
+        "failures": {
+          "default": 0,
+          "title": "Failures",
+          "type": "integer"
+        },
         "id": {
           "title": "Id",
           "type": "string"
@@ -14,6 +57,18 @@
           "title": "Owner",
           "type": "string"
         },
+        "purpose": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Purpose"
+        },
         "render": {
           "$ref": "#/$defs/GadgetRender"
         },
@@ -21,6 +76,11 @@
           "default": 0,
           "title": "Uses",
           "type": "integer"
+        },
+        "verified_without_tests": {
+          "default": false,
+          "title": "Verified Without Tests",
+          "type": "boolean"
         },
         "x": {
           "title": "X",
