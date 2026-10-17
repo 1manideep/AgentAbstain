@@ -14,7 +14,8 @@
  *   npm run screenshot:humans                             (writes web/screenshots/)
  *
  * VOID_PREVIEW_URL / VOID_URL override the two servers; VOID_MOVES_PRESET picks
- * the preset index for the moves strip (default 1).
+ * the preset index for the moves strip (default 1). The browser is Playwright's own
+ * Chromium (`npx playwright install chromium`) unless VOID_CHROME names an executable.
  */
 import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -28,14 +29,22 @@ mkdirSync(outDir, { recursive: true })
 const previewUrl = (process.env.VOID_PREVIEW_URL ?? 'http://127.0.0.1:4173/').replace(/\/?$/, '/')
 const worldUrl = (process.env.VOID_URL ?? 'http://127.0.0.1:5173/').replace(/\/?$/, '/')
 const movesPreset = process.env.VOID_MOVES_PRESET ?? '1'
-const executablePath = process.env.VOID_CHROME ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome'
 const only = new Set((process.env.VOID_SHOTS ?? 'contact,moves,world,world-night').split(','))
+// Playwright's own Chromium (`npx playwright install chromium`; honours PLAYWRIGHT_BROWSERS_PATH) unless
+// VOID_CHROME names a Chrome/Chromium executable to use instead.
+const chrome = process.env.VOID_CHROME || undefined
+const launchFailed = (e) => {
+  const why = String(e?.message ?? e).split('\n')[0]
+  console.error(`could not launch Chromium${chrome ? ` (VOID_CHROME=${chrome})` : ''}: ${why}`)
+  console.error('hint: run npx playwright install chromium, or set VOID_CHROME to a Chrome/Chromium executable')
+  process.exit(1)
+}
 
 const browser = await chromium.launch({
   headless: true,
-  executablePath,
+  ...(chrome ? { executablePath: chrome } : {}),
   args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-gpu-vsync'],
-})
+}).catch(launchFailed)
 const errors = []
 const newPage = async (viewport = { width: 1600, height: 1000 }) => {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1 })
