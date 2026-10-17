@@ -4,13 +4,27 @@ An experiment directory holds one subdirectory per arm, each holding ``seed_<n>/
 run directly). Before any statistics the arms are checked for comparability and the comparison is
 REFUSED (:class:`IncomparableRuns`) when
 
-* the resolved configs differ at any path outside the union of the arms'
-  ``experiment.independent_variables`` (``run.name`` and ``experiment.arm`` are always allowed);
 * the seed sets differ between arms, or runs within an arm differ outside ``run.seed``;
 * ``entropy.degeneration.mode`` is not ``observe`` in every arm;
-* for ``exp_tiers`` / ``exp_scarcity`` / ``exp_ladder``, ``economy.world_pricing`` is not ``equalized``;
+* for ``exp_tiers`` / ``exp_scarcity`` / ``exp_ladder`` / ``exp_mem`` (``exp_mem_e0``, ``exp_mem_dep``, ...; not the
+  ``exp_memory`` graph-vs-vector pair), ``economy.world_pricing`` is not ``equalized``;
+* for ``exp_ladder`` / ``exp_gate``, ``population.tier_mutation_prob`` is not 0 in every arm;
+* the resolved configs differ at any path outside the union of the arms'
+  ``experiment.independent_variables`` (``run.name`` and ``experiment.arm`` are always allowed; for the ``exp_mem``
+  family this is what refuses a difference in the exam or the maintenance step that is not a declared variable);
 * for ``exp_tiers`` / ``exp_ladder``, the rostered tiers differ in declared thresholds, ``max_tokens`` or ``effort``, or
-  the arms differ in ``entropy.drain``.
+  the arms differ in ``entropy.drain``;
+* any run is incomplete: its ``run.status`` is not ``completed`` (``capped_total``, ``extinct``, ``inconsistent``,
+  ``failed``, or still ``running`` after a crash), its last tick row (``metrics.jsonl``, else the ``metrics`` table)
+  is below ``run.days * run.ticks_per_day``, a metrics line is cut short, or it has no metrics at all.
+  With ``allow_incomplete=True`` (``scripts/compare.py --allow-incomplete``) such runs are dropped instead: every seed
+  pair that touches one is left out of the statistics, the run is listed under ``dropped_incomplete`` and in the
+  warnings, and the comparison is still refused when a pair of arms has no complete seed in common.
+
+The result always carries ``runs: {arm: {seed: {status, last_tick}}}`` for every discovered run.
+
+A family name such as ``exp_mem`` covers an experiment name that starts with it when the next character, if any,
+is not a letter, so ``exp_mem`` covers ``exp_mem_e0`` and ``exp_mem_dep_claude`` but not ``exp_memory``.
 
 Arms are paired by seed. For the primary outcome (``experiment.primary_outcome`` of the first arm unless
 overridden) each pair of arms gets n, per-arm means, the paired mean delta (b - a), Cohen's d_z, a paired
@@ -24,6 +38,7 @@ import json
 import math
 import random
 import re
+import sqlite3
 import statistics
 from itertools import combinations
 from pathlib import Path
@@ -31,7 +46,16 @@ from typing import Any
 
 import yaml
 
-from void.research.analysis import CONFIG_FILE, DAILY, connect, end_of_run_outcome, load_metrics, resolve_path
+from void.research.analysis import (
+    CONFIG_FILE,
+    DAILY,
+    DB_FILE,
+    METRICS_FILE,
+    connect,
+    end_of_run_outcome,
+    load_metrics,
+    resolve_path,
+)
 
 __all__ = [
     "ALWAYS_ALLOWED",
@@ -40,13 +64,17 @@ __all__ = [
     "config_diff",
     "covered_by",
     "discover_runs",
+    "in_family",
     "paired_stats",
     "render",
+    "run_state",
     "sign_test_p",
 ]
 
 ALWAYS_ALLOWED = ("run.name", "experiment.arm")
-EQUALIZED_EXPERIMENTS = ("exp_tiers", "exp_scarcity", "exp_ladder")
+EQUALIZED_EXPERIMENTS = ("exp_tiers", "exp_scarcity", "exp_ladder", "exp_mem")
+MUTATION_FREE_EXPERIMENTS = ("exp_ladder", "exp_gate")  # DESIGN §17: no tier mutation in these
+TIER_INVARIANT_EXPERIMENTS = ("exp_tiers", "exp_ladder")
 TIER_INVARIANTS = ("collapse_temperature", "max_temperature", "entropy_budget_max", "max_tokens", "effort")
 N_BOOT = 2000
 BOOT_SEED = 0
@@ -56,6 +84,15 @@ _RETRIEVED_KEYS = ("retrieved_titles", "retrieved", "retrieved_ids", "memories",
 
 class IncomparableRuns(RuntimeError):
     """The runs under an experiment directory are not a fair comparison."""
+
+
+def in_family(name: str, families: str | tuple[str, ...]) -> bool:
+    """``name`` belongs to one of ``families`` when it starts with the family name and the next character, if any, is
+    not a letter (``exp_mem`` covers ``exp_mem_e0`` but not ``exp_memory``; ``exp_tiers`` covers ``exp_tiers0``)."""
+    for fam in (families,) if isinstance(families, str) else families:
+        if name.startswith(fam) and not name[len(fam):len(fam) + 1].isalpha():
+            return True
+    return False
 
 
 # --- config diff --------------------------------------------------------------------------------------
@@ -131,6 +168,74 @@ def discover_runs(exp_dir: str | Path) -> dict[str, dict[int, Path]]:
         if runs:
             arms[arm_dir.name] = runs
     return arms
+
+
+# --- completeness ------------------------------------------------------------------------------------------
+def _run_status(run_dir: Path) -> str | None:
+    """``run.status`` from ``world.db``; None when there is no database or no run row (a run that crashed early)."""
+    if not (run_dir / DB_FILE).is_file():
+        return None
+    try:
+        with connect(run_dir) as db:
+            row = db.execute("SELECT status FROM run ORDER BY created_at DESC LIMIT 1").fetchone()
+    except sqlite3.Error:
+        return None
+    return None if row is None else str(row["status"])
+
+
+def _metrics_tail(run_dir: Path) -> tuple[int | None, bool]:
+    """``(last tick row, intact)`` from ``metrics.jsonl``, else the ``metrics`` table: the source
+    :func:`~void.research.analysis.load_metrics` reads. ``intact`` is False when a line does not parse (a write cut
+    short by a crash); the tick is then the last one that parses. The tick is None without any tick row."""
+    lines: list[str] = []
+    path = run_dir / METRICS_FILE
+    if path.is_file():
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    elif (run_dir / DB_FILE).is_file():
+        try:
+            with connect(run_dir) as db:
+                lines = [str(r["json"]) for r in db.execute("SELECT json FROM metrics")]
+        except sqlite3.Error:
+            return None, False
+    last: int | None = None
+    intact = True
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            intact = False
+            continue
+        if not isinstance(row, dict) or row.get("kind") == "day":
+            continue
+        tick = row.get("tick")
+        if isinstance(tick, int) and not isinstance(tick, bool):
+            last = tick if last is None else max(last, tick)
+    return last, intact
+
+
+def run_state(run_dir: str | Path, cfg: dict[str, Any] | None = None) -> tuple[dict[str, Any], str | None]:
+    """``({status, last_tick}, reason)`` for one run; ``reason`` says why the run is incomplete, None when it ran to
+    its last tick (``run.days * run.ticks_per_day`` of its resolved config) with ``run.status`` ``completed``."""
+    run_dir = Path(run_dir)
+    cfg = _load_cfg(run_dir) if cfg is None else cfg
+    status = _run_status(run_dir)
+    last_tick, intact = _metrics_tail(run_dir)
+    days, tpd = resolve_path(cfg, "run.days"), resolve_path(cfg, "run.ticks_per_day")
+    expected = int(days) * int(tpd) if isinstance(days, int) and isinstance(tpd, int) else None
+    reasons: list[str] = []
+    if status != "completed":
+        reasons.append("no run row in world.db" if status is None else f"run.status {status!r}")
+    if last_tick is None:
+        reasons.append("no tick rows in the metrics")
+    elif expected is None:
+        reasons.append("the resolved config has no run.days / run.ticks_per_day to check the last tick against")
+    elif last_tick < expected:
+        reasons.append(f"last tick row {last_tick} of {expected}")
+    if not intact:
+        reasons.append("a metrics line does not parse")
+    return {"status": status, "last_tick": last_tick}, ("; ".join(reasons) or None)
 
 
 # --- statistics -------------------------------------------------------------------------------------------
@@ -240,14 +345,14 @@ def _memory_degenerate_pair(arms: dict[str, dict[int, Path]], names: list[str], 
     return flag, f"mean retrieved-set Jaccard between {a} and {b} = {mean_j:.3f} over {len(sims)} calls" + (" (degenerate pair)" if flag else "")
 
 
-def _daily_curves(arms: dict[str, dict[int, Path]], names: list[str], seeds: list[int], path: str) -> dict[str, dict[str, float | None]]:
-    """Per arm and day, the mean over seeds of the primary: a per-day run-level aggregate when the path has one
-    (:data:`DAILY`), else the value on the day's last tick row, else on the day row."""
+def _daily_curves(arms: dict[str, dict[int, Path]], names: list[str], seeds: dict[str, list[int]], path: str) -> dict[str, dict[str, float | None]]:
+    """Per arm and day, the mean over the arm's (complete) seeds of the primary: a per-day run-level aggregate when the
+    path has one (:data:`DAILY`), else the value on the day's last tick row, else on the day row."""
     head, _, rest = path.partition(".")
     curves: dict[str, dict[str, float | None]] = {}
     for arm in names:
         per_day: dict[int, list[float]] = {}
-        for seed in seeds:
+        for seed in seeds[arm]:
             tick_rows, day_rows = load_metrics(arms[arm][seed])
             days = sorted({int(r["day"]) for r in tick_rows} | {int(r["day"]) for r in day_rows})
             if head in DAILY:
@@ -276,8 +381,11 @@ def _daily_curves(arms: dict[str, dict[int, Path]], names: list[str], seeds: lis
 
 
 # --- the comparison -------------------------------------------------------------------------------------
-def compare(exp_dir: str | Path, primary: str | None = None, *, n_boot: int = N_BOOT, boot_seed: int = BOOT_SEED) -> dict[str, Any]:
-    """Compare the arms under ``exp_dir`` (see the module docstring); raises :class:`IncomparableRuns`."""
+def compare(exp_dir: str | Path, primary: str | None = None, *, allow_incomplete: bool = False,
+            n_boot: int = N_BOOT, boot_seed: int = BOOT_SEED) -> dict[str, Any]:
+    """Compare the arms under ``exp_dir`` (see the module docstring); raises :class:`IncomparableRuns`.
+
+    ``allow_incomplete`` drops every seed pair that touches an incomplete run instead of refusing."""
     exp_dir = Path(exp_dir)
     arms = discover_runs(exp_dir)
     if len(arms) < 2:
@@ -307,11 +415,16 @@ def compare(exp_dir: str | Path, primary: str | None = None, *, n_boot: int = N_
         mode = resolve_path(reps[arm], "entropy.degeneration.mode")
         if mode != "observe":
             raise IncomparableRuns(f"arm {arm!r}: entropy.degeneration.mode is {mode!r}; experiments must use 'observe'")
-    if exp_name.startswith(EQUALIZED_EXPERIMENTS):
+    if in_family(exp_name, EQUALIZED_EXPERIMENTS):
         for arm in names:
             wp = resolve_path(reps[arm], "economy.world_pricing")
             if wp != "equalized":
                 raise IncomparableRuns(f"{exp_name}: arm {arm!r} has economy.world_pricing={wp!r}; 'equalized' is required")
+    if in_family(exp_name, MUTATION_FREE_EXPERIMENTS):
+        for arm in names:
+            prob = resolve_path(reps[arm], "population.tier_mutation_prob")
+            if prob != 0:
+                raise IncomparableRuns(f"{exp_name}: arm {arm!r} has population.tier_mutation_prob={prob!r}; 0 is required")
     violations: list[str] = []
     for a, b in combinations(names, 2):
         for path in config_diff(reps[a], reps[b]):
@@ -320,7 +433,7 @@ def compare(exp_dir: str | Path, primary: str | None = None, *, n_boot: int = N_
             violations.append(f"{a} vs {b}: {path}")
     if violations:
         raise IncomparableRuns(f"configs differ outside experiment.independent_variables {ivs}: " + "; ".join(violations))
-    if exp_name.startswith(("exp_tiers", "exp_ladder")):  # rungs may differ only in hidden capability
+    if in_family(exp_name, TIER_INVARIANT_EXPERIMENTS):  # rungs may differ only in hidden capability
         invariants: dict[str, dict[str, Any]] = {}
         for arm in names:
             for agent in reps[arm].get("agents", []):
@@ -333,6 +446,23 @@ def compare(exp_dir: str | Path, primary: str | None = None, *, n_boot: int = N_
         if len(drains) > 1:
             raise IncomparableRuns(f"{exp_name}: arms differ in entropy.drain")
 
+    states: dict[str, dict[int, dict[str, Any]]] = {arm: {} for arm in names}
+    problems: dict[tuple[str, int], str] = {}
+    for arm in names:
+        for seed in seeds:
+            states[arm][seed], why = run_state(arms[arm][seed], cfgs[arm][seed])
+            if why:
+                problems[(arm, seed)] = why
+    listed = "; ".join(f"{arm} seed {seed}: {why}" for (arm, seed), why in problems.items())
+    if problems and not allow_incomplete:
+        raise IncomparableRuns(f"incomplete runs (allow_incomplete / --allow-incomplete drops the seed pairs they touch): {listed}")
+    complete = {arm: [s for s in seeds if (arm, s) not in problems] for arm in names}
+    pair_seeds = {(a, b): [s for s in seeds if (a, s) not in problems and (b, s) not in problems] for a, b in combinations(names, 2)}
+    empty = [f"{a} vs {b}" for (a, b), ss in pair_seeds.items() if not ss]
+    if empty:
+        raise IncomparableRuns(f"no complete seed pair left for {', '.join(empty)} after dropping incomplete runs: {listed}")
+    dropped = [{"arm": arm, "seed": seed, **states[arm][seed]} for (arm, seed) in problems]
+
     primary = primary or resolve_path(reps[ref], "experiment.primary_outcome")
     if not primary:
         raise IncomparableRuns("no primary outcome: set experiment.primary_outcome in the config or pass one explicitly")
@@ -343,34 +473,38 @@ def compare(exp_dir: str | Path, primary: str | None = None, *, n_boot: int = N_
             if s != primary and s not in secondaries:
                 secondaries.append(str(s))
     paths = [primary] + secondaries
-    values = {arm: {seed: {p: end_of_run_outcome(arms[arm][seed], p) for p in paths} for seed in seeds} for arm in names}
+    values = {arm: {seed: {p: end_of_run_outcome(arms[arm][seed], p) for p in paths} for seed in complete[arm]} for arm in names}
 
     comparisons: list[dict[str, Any]] = []
     for a, b in combinations(names, 2):
+        ps = pair_seeds[(a, b)]
         comparisons.append({
             "arm_a": a, "arm_b": b,
-            "primary": _outcome_stats(a, b, primary, values, seeds, n_boot=n_boot, boot_seed=boot_seed),
-            "secondary": [{**_outcome_stats(a, b, s, values, seeds, n_boot=n_boot, boot_seed=boot_seed), "exploratory": True}
+            "primary": _outcome_stats(a, b, primary, values, ps, n_boot=n_boot, boot_seed=boot_seed),
+            "secondary": [{**_outcome_stats(a, b, s, values, ps, n_boot=n_boot, boot_seed=boot_seed), "exploratory": True}
                           for s in secondaries],
         })
-    warnings: list[str] = []
+    warnings: list[str] = [f"dropped incomplete run {arm} seed {seed} ({why}); every seed pair that touches it is left out"
+                           for (arm, seed), why in problems.items()]
     models: dict[str, dict[int, tuple[str, ...]]] = {}
     for arm in names:
-        models[arm] = {seed: _served_models(arms[arm][seed]) for seed in seeds}
+        models[arm] = {seed: _served_models(arms[arm][seed]) for seed in complete[arm]}
         if len(set(models[arm].values())) > 1:
             warnings.append(f"arm {arm!r}: served models differ across runs: " + ", ".join(f"seed {s}: {list(m)}" for s, m in models[arm].items()))
     notes: list[str] = []
     degenerate: bool | None = None
     if exp_name.startswith("exp_memory"):
-        degenerate, note = _memory_degenerate_pair(arms, names, seeds)
+        degenerate, note = _memory_degenerate_pair(arms, names, pair_seeds[(names[0], names[1])])
         notes.append(note)
     return {
         "experiment": exp_name, "exp_dir": str(exp_dir), "arms": names, "seeds": seeds, "n_seeds": len(seeds),
         "independent_variables": ivs, "primary": primary, "secondaries": secondaries,
-        "values": {arm: {str(seed): values[arm][seed] for seed in seeds} for arm in names},
+        "values": {arm: {str(seed): values[arm][seed] for seed in complete[arm]} for arm in names},
+        "runs": {arm: {str(seed): states[arm][seed] for seed in seeds} for arm in names},
+        "dropped_incomplete": dropped,
         "comparisons": comparisons, "warnings": warnings, "notes": notes,
         "degenerate_pair": degenerate, "served_models": {arm: {str(s): list(m) for s, m in ms.items()} for arm, ms in models.items()},
-        "curves": _daily_curves(arms, names, seeds, primary),
+        "curves": _daily_curves(arms, names, complete, primary),
     }
 
 
