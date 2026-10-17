@@ -12,7 +12,8 @@
         "completed",
         "capped_total",
         "extinct",
-        "inconsistent"
+        "inconsistent",
+        "failed"
       ],
       "title": "Status",
       "type": "string"

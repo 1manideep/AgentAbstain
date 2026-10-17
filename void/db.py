@@ -179,6 +179,12 @@ CREATE TABLE IF NOT EXISTS exam_items (
   question TEXT NOT NULL, truth TEXT NOT NULL, options TEXT, source_ref TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_exam_items_agent ON exam_items(agent_id, tick_asked);
+-- Canary facts (§5.8), recorded kernel-side: delivered as ordinary observations (a chronicle line or a message), so
+-- agents cannot tell them from world events, and asked about by the reward exam days later. `options` is JSON.
+CREATE TABLE IF NOT EXISTS canary_facts (
+  fact_id TEXT PRIMARY KEY, day INTEGER NOT NULL, tick INTEGER NOT NULL, channel TEXT NOT NULL,
+  subject TEXT NOT NULL, text TEXT NOT NULL, answer TEXT NOT NULL, options TEXT NOT NULL, chronicle_item_id TEXT
+);
 CREATE TABLE IF NOT EXISTS exam_answers (
   item_id TEXT PRIMARY KEY REFERENCES exam_items(item_id), call_id TEXT, answer TEXT,
   correct INTEGER NOT NULL, abstained INTEGER NOT NULL DEFAULT 0, retrieved TEXT

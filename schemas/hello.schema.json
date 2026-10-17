@@ -22,6 +22,28 @@
           "title": "Degeneration Mode",
           "type": "string"
         },
+        "intelligence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IntelligencePublic"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "memory_layer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MemoryLayerPublic"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "name": {
           "title": "Name",
           "type": "string"
@@ -57,6 +79,19 @@
           "title": "Total Cap Usd",
           "type": "number"
         },
+        "view_radius": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fog radius (world.view_radius); null without fog",
+          "title": "View Radius"
+        },
         "world_size": {
           "title": "World Size",
           "type": "number"
@@ -78,11 +113,79 @@
       "title": "HelloConfig",
       "type": "object"
     },
+    "IntelligencePublic": {
+      "properties": {
+        "ladder": {
+          "description": "Tier names from smartest to dumbest; empty without a ladder",
+          "items": {
+            "type": "string"
+          },
+          "title": "Ladder",
+          "type": "array"
+        }
+      },
+      "title": "IntelligencePublic",
+      "type": "object"
+    },
+    "MemoryLayerPublic": {
+      "description": "Which parts of the evolving-memory layer are on (MEMORY_EVOLUTION \u00a75), so memory-only views can hide.",
+      "properties": {
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "exam": {
+          "title": "Exam",
+          "type": "boolean"
+        },
+        "maintenance": {
+          "title": "Maintenance",
+          "type": "boolean"
+        },
+        "policy": {
+          "title": "Policy",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled",
+        "policy",
+        "maintenance",
+        "exam"
+      ],
+      "title": "MemoryLayerPublic",
+      "type": "object"
+    },
     "TierPublic": {
       "properties": {
+        "collapse_temperature": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "T_c, so the T_eff histogram can draw it from the start",
+          "title": "Collapse Temperature"
+        },
         "color": {
           "title": "Color",
           "type": "string"
+        },
+        "max_temperature": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Temperature"
         },
         "model": {
           "title": "Model",
@@ -91,6 +194,19 @@
         "provider": {
           "title": "Provider",
           "type": "string"
+        },
+        "rank": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Rung on intelligence.ladder (0 = smartest); null off the ladder",
+          "title": "Rank"
         }
       },
       "required": [
@@ -135,7 +251,8 @@
         "completed",
         "capped_total",
         "extinct",
-        "inconsistent"
+        "inconsistent",
+        "failed"
       ],
       "title": "Status",
       "type": "string"
