@@ -6,6 +6,7 @@ import importlib
 import importlib.util
 import json
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -191,6 +192,126 @@ def test_analyze_json_parses(experiment: Path, tmp_path: Path, capsys: pytest.Ca
     text = capsys.readouterr().out
     assert "run_id: exp_mem_dep_mem-s1" in text and "\nmean_balance: " in text
     assert main(["analyze", str(tmp_path / "nope")]) == 1
+
+
+def _paid_tier(cfg: dict[str, Any], provider: str) -> str:
+    """The first tier of ``provider`` the resolved config defines (scripted configs keep the paid tiers around)."""
+    return next(name for name, tier in sorted(cfg["tiers"].items()) if tier["provider"] == provider)
+
+
+def _rostered_tier_on_anthropic(cfg: dict[str, Any]) -> None:
+    cfg["tiers"][cfg["agents"][0]["tier"]]["provider"] = "anthropic"
+
+
+def _agent_on(provider: str) -> Callable[[dict[str, Any]], None]:
+    def doctor(cfg: dict[str, Any]) -> None:
+        cfg["agents"][0]["tier"] = _paid_tier(cfg, provider)
+
+    return doctor
+
+
+def _arrival_on_gemini(cfg: dict[str, Any]) -> None:
+    cfg.setdefault("epochs", []).append({"day": 1, "kind": "arrival",
+                                         "arrival": {"name": "Kai", "tier": _paid_tier(cfg, "gemini")}})
+
+
+def _chronicle_by_model(cfg: dict[str, Any]) -> None:
+    cfg["chronicle"]["writer"] = "llm"  # every agent stays scripted, but the writer falls back to any provider tier
+
+
+# case -> (how the copied run's resolved config is doctored, the providers the refusal names)
+REPLAY_DOCTORINGS: dict[str, tuple[Callable[[dict[str, Any]], None], str]] = {
+    "rostered tier switched to anthropic": (_rostered_tier_on_anthropic, "anthropic"),
+    "agent on an anthropic tier": (_agent_on("anthropic"), "anthropic"),
+    "agent on a gemini tier": (_agent_on("gemini"), "gemini"),
+    "arrival on a gemini tier": (_arrival_on_gemini, "gemini"),
+    "chronicle written by a model": (_chronicle_by_model, "anthropic, gemini"),
+}
+
+
+@pytest.fixture
+def no_simulation(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """Make building a :class:`void.sim.loop.Simulation` fail loudly; returns the attempted constructions."""
+    import void.sim.loop as loop
+
+    built: list[Any] = []
+
+    class Refused:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            built.append((args, kwargs))
+            raise AssertionError("a Simulation was built for the replay")
+
+    monkeypatch.setattr(loop, "Simulation", Refused)
+    return built
+
+
+def _copy_and_doctor(experiment: Path, tmp_path: Path, doctor: Callable[[dict[str, Any]], None]) -> Path:
+    run_dir = tmp_path / "run"
+    shutil.copytree(experiment / "mem" / "seed_1", run_dir)
+    path = run_dir / "config.resolved.yaml"
+    cfg = yaml.safe_load(path.read_text())
+    doctor(cfg)
+    path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+    return run_dir
+
+
+@pytest.mark.parametrize("case", sorted(REPLAY_DOCTORINGS))
+def test_analyze_replay_refuses_a_run_that_could_call_a_provider(case: str, experiment: Path, tmp_path: Path,
+                                                                 no_simulation: list[Any],
+                                                                 capsys: pytest.CaptureFixture[str]) -> None:
+    """The replay re-runs the run from its resolved config in a temporary directory: a provider tier would spend real
+    money that no live-budget root ever sees, so it is refused before anything is built."""
+    doctor, providers = REPLAY_DOCTORINGS[case]
+    run_dir = _copy_and_doctor(experiment, tmp_path, doctor)
+    assert main(["analyze", str(run_dir), "--replay", "--json"]) == 2
+    out, err = capsys.readouterr()
+    assert out == "" and "Traceback" not in err
+    assert err.strip() == (f"refused: void analyze --replay: {run_dir} uses paid tiers ({providers}); replaying would "
+                           f"call the provider outside the live budget")
+    assert no_simulation == []
+    # only the replay is refused: the summary itself reads the files and calls nothing
+    assert main(["analyze", str(run_dir), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["run_id"] == "exp_mem_dep_mem-s1"
+    assert no_simulation == []
+
+
+def test_analyze_replay_refuses_a_run_whose_config_cannot_be_read(experiment: Path, tmp_path: Path,
+                                                                  no_simulation: list[Any],
+                                                                  capsys: pytest.CaptureFixture[str]) -> None:
+    run_dir = _copy_and_doctor(experiment, tmp_path, lambda cfg: cfg.update(tiers={}))
+    assert main(["analyze", str(run_dir), "--replay"]) == 2
+    out, err = capsys.readouterr()
+    assert out == "" and "Traceback" not in err
+    assert err.startswith(f"refused: void analyze --replay: cannot read the config of {run_dir} (ValidationError: ")
+    assert err.rstrip().endswith("so cannot tell whether replaying would call a provider")
+    assert no_simulation == []
+
+
+def test_analyze_replay_still_runs_for_a_scripted_run(experiment: Path, monkeypatch: pytest.MonkeyPatch,
+                                                      capsys: pytest.CaptureFixture[str]) -> None:
+    import void.research.analysis as analysis
+
+    calls: list[tuple[Path, bool]] = []
+
+    def probe_recall(run_dir: Any, *, replay: bool = False, min_notes: int = 3) -> float:
+        calls.append((Path(run_dir), replay))
+        return 0.25
+
+    monkeypatch.setattr(analysis, "probe_recall", probe_recall)
+    run_dir = experiment / "mem" / "seed_1"
+    assert main(["analyze", str(run_dir), "--replay", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["probe_recall"] == 0.25
+    assert [c for c in calls if c[1]] == [(run_dir, True)]
+
+
+def test_replay_guard_matches_the_committed_configs() -> None:
+    """Every live config (the only ones that roster a paid tier) is refused, and every scripted one may replay."""
+    from void.cli import _replay_providers
+    from void.config import load_config
+
+    for path in sorted((ROOT / "configs").glob("*.yaml")):
+        paid = _replay_providers(load_config(path))
+        assert bool(paid) == path.name.startswith("live_"), (path.name, sorted(paid))
 
 
 def test_export_writes_manifest(experiment: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

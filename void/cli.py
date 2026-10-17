@@ -8,7 +8,9 @@ plus the lazy subcommands ``report | transplant | generations | mcp``.
 * ``serve``       the simulation behind the HTTP/WebSocket server (DESIGN §15)
 * ``compare``     paired comparison of an experiment's arms (``void.research.compare``, DESIGN §17): ``EXP_DIR`` or
                   ``--exp NAME`` (= ``<out>/<NAME>``); an unfair comparison prints ``refused: <reason>`` and exits 2
-* ``analyze``     one run's summary (``void.research.analysis``), as ``scripts/analyze.py``
+* ``analyze``     one run's summary (``void.research.analysis``), as ``scripts/analyze.py``; ``--replay`` re-runs the
+                  whole run, so it is refused (exit 2) when the run's config could call any provider but ``scripted``
+                  (that spend would land in a temporary directory, outside the live budget)
 * ``export``      one file per table of a run (``void.research.export``, MEMORY_EVOLUTION §7.4);
                   ``void export parquet RUN_DIR`` is accepted for ``void export RUN_DIR --format parquet``
 * ``schema``      export the wire schemas for the frontend
@@ -349,6 +351,43 @@ def render_summary(summary: dict[str, Any], indent: str = "") -> str:
     return "\n".join(lines)
 
 
+def _replay_providers(cfg: VoidConfig) -> set[str]:
+    """Every provider other than ``scripted`` that re-running ``cfg`` could call.
+
+    That is the tiers the agents start on and the tiers arrival epochs bring in (children never cross a provider
+    boundary: ``void.agents.lifecycle.mutation_candidates``), plus every configured tier when the chronicle is written
+    by a model (``void.brain.utility_calls.chronicle_tier`` falls back to the first provider tier configured at all).
+    """
+    tiers = {a.tier for a in cfg.agents if a.tier}
+    tiers |= {e.arrival.tier for e in cfg.epochs if e.arrival is not None}
+    if cfg.chronicle.writer == "llm":
+        tiers |= set(cfg.tiers)
+    return {cfg.tiers[t].provider for t in tiers} - {"scripted"}
+
+
+def _replay_refusal(run_dir: Path) -> str | None:
+    """Why ``void analyze --replay`` may not re-run ``run_dir``, or None when the replay makes no provider call.
+
+    The replay rebuilds a :class:`void.sim.loop.Simulation` from the run's resolved config in a temporary directory,
+    so a provider tier would make real calls whose spend is deleted with that directory and never counted against the
+    live budget (``void.economy.budget``). Every provider other than ``scripted`` is refused, not only the budgeted
+    ones, and so is a config that cannot be read (nothing could tell the replay is free).
+    """
+    from void.research.analysis import run_config
+
+    try:
+        cfg = run_config(run_dir)
+    except Exception as e:  # any failure to read the config leaves the replay unchecked: refuse
+        first = (str(e).splitlines() or [""])[0]
+        return (f"void analyze --replay: cannot read the config of {run_dir} ({type(e).__name__}: {first}), so "
+                f"cannot tell whether replaying would call a provider")
+    paid = _replay_providers(cfg)
+    if paid:
+        return (f"void analyze --replay: {run_dir} uses paid tiers ({', '.join(sorted(paid))}); replaying would call "
+                f"the provider outside the live budget")
+    return None
+
+
 def cmd_analyze(args: argparse.Namespace) -> int:
     from void.research.analysis import probe_recall, summarize
 
@@ -356,6 +395,11 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     if not (run_dir / "world.db").is_file():
         print(f"error: {run_dir / 'world.db'} not found", file=sys.stderr)
         return 1
+    if args.replay:  # checked before any work: the replay re-runs the whole simulation
+        refusal = _replay_refusal(run_dir)
+        if refusal is not None:
+            print(f"refused: {refusal}", file=sys.stderr)
+            return 2
     summary = summarize(run_dir, benefactor=args.benefactor)
     if args.replay:
         summary["probe_recall"] = probe_recall(run_dir, replay=True)
@@ -711,7 +755,9 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("run_dir", metavar="RUN_DIR")
     a.add_argument("--benefactor", action="store_true", help="include the benefactor (windfall) outcomes")
     a.add_argument("--json", action="store_true", help="print JSON instead of text")
-    a.add_argument("--replay", action="store_true", help="recompute probe_recall by replaying the run with probes")
+    a.add_argument("--replay", action="store_true",
+                   help="recompute probe_recall by replaying the run with probes (scripted runs only: a run whose "
+                        "config could call a provider is refused, exit 2)")
     a.set_defaults(func=cmd_analyze)
 
     e = sub.add_parser("export", help="one file per table of a run (`void export parquet RUN_DIR` is an alias)",
