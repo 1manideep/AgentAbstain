@@ -29,7 +29,7 @@ describe.skipIf(!existsSync(path))('fixture replay', () => {
 
   it('contains only §15 message types, starting with hello', () => {
     expect(msgs[0]!.type).toBe('hello')
-    for (const m of msgs) expect(KNOWN.has(m.type)).toBe(true)
+    expect(msgs.map((m) => m.type).filter((t) => !KNOWN.has(t))).toEqual([])
     expect(snapshots.length).toBeGreaterThan(50)
   })
 
@@ -54,51 +54,75 @@ describe.skipIf(!existsSync(path))('fixture replay', () => {
     const h = new History(600, 16, 8)
     for (const s of snapshots) h.push(s)
     const out = new SampleOut(h.capacity, h.nodeCapacity)
+    // SampleOut never reallocates, so its arrays are hoisted once; per-sample checks only record
+    // violations and the test asserts once per loop (a per-sample expect() costs more than sample()).
+    const { x, y, vx, vy, alpha, scale, present, dead, ids, nx, ny, nodePresent } = out
     const lastX = new Float32Array(h.capacity).fill(Number.NaN)
     const lastY = new Float32Array(h.capacity).fill(Number.NaN)
     const lastId = new Array<string>(h.capacity).fill('')
+    const MAX_REPORTED = 20
+    const bad: string[] = []
+    let badCount = 0
     let maxJump = 0
+    let maxJumpAt = ''
     let presentSamples = 0
+    // Every 60 fps frame time across the buffer, i.e. many samples between every pair of frames.
     for (let v = h.oldestVts; v <= h.newestVts; v += 16.7) {
       h.sample(v, out)
       for (let s = 0; s < out.count; s++) {
-        if (!out.present[s]) {
+        if (!present[s]) {
           lastX[s] = Number.NaN
           lastId[s] = ''
           continue
         }
         presentSamples++
-        expect(Number.isFinite(out.x[s])).toBe(true)
-        expect(Number.isFinite(out.y[s])).toBe(true)
-        expect(out.alpha[s]).toBeGreaterThanOrEqual(0)
-        expect(out.scale[s]).toBeGreaterThanOrEqual(0)
+        const px = x[s]!
+        const py = y[s]!
+        if (!(Number.isFinite(px) && Number.isFinite(py) && alpha[s]! >= 0 && scale[s]! >= 0)) {
+          badCount++
+          if (bad.length < MAX_REPORTED) bad.push(`vts=${v.toFixed(1)} slot=${s} id=${ids[s]} x=${px} y=${py} alpha=${alpha[s]} scale=${scale[s]}`)
+        }
         // a slot changing hands (a tombstone replaced by a newborn) is not a teleport: the newborn
         // scales in at its own position; continuity is asserted per id, not per slot
-        if (Number.isFinite(lastX[s]!) && !out.dead[s] && lastId[s] === out.ids[s]) {
-          const d = Math.hypot(out.x[s]! - lastX[s]!, out.y[s]! - lastY[s]!)
-          if (d > maxJump) maxJump = d
+        if (Number.isFinite(lastX[s]!) && !dead[s] && lastId[s] === ids[s]) {
+          const d = Math.hypot(px - lastX[s]!, py - lastY[s]!)
+          if (d > maxJump) {
+            maxJump = d
+            maxJumpAt = `vts=${v.toFixed(1)} slot=${s} id=${ids[s]}`
+          }
         }
-        lastX[s] = out.x[s]!
-        lastY[s] = out.y[s]!
-        lastId[s] = out.ids[s]!
+        lastX[s] = px
+        lastY[s] = py
+        lastId[s] = ids[s]!
       }
     }
     expect(presentSamples).toBeGreaterThan(0)
+    expect({ badCount, bad }).toEqual({ badCount: 0, bad: [] })
     // display spread: nobody STANDS inside a node crystal (closer than NODE_FOOT - 0.5 to its centre);
     // a walker may still cut across the stones on its way past, which the kernel's straight paths allow
+    const inside: string[] = []
+    let insideCount = 0
+    let standingChecks = 0
     for (let v = h.oldestVts; v <= h.newestVts; v += 250) {
       h.sample(v, out)
       for (let s = 0; s < out.count; s++) {
-        if (!out.present[s] || out.dead[s] || Math.hypot(out.vx[s]!, out.vy[s]!) > 0.3) continue
+        if (!present[s] || dead[s] || Math.hypot(vx[s]!, vy[s]!) > 0.3) continue
         for (let n = 0; n < out.nodeCount; n++) {
-          if (!out.nodePresent[n]) continue
-          expect(Math.hypot(out.x[s]! - out.nx[n]!, out.y[s]! - out.ny[n]!)).toBeGreaterThan(NODE_FOOT - 0.5)
+          if (!nodePresent[n]) continue
+          standingChecks++
+          const d = Math.hypot(x[s]! - nx[n]!, y[s]! - ny[n]!)
+          if (!(d > NODE_FOOT - 0.5)) {
+            insideCount++
+            if (inside.length < MAX_REPORTED) inside.push(`vts=${v.toFixed(1)} slot=${s} id=${ids[s]} node=${n} dist=${d.toFixed(3)}`)
+          }
         }
       }
     }
+    expect(standingChecks).toBeGreaterThan(0)
+    expect({ insideCount, inside }).toEqual({ insideCount: 0, inside: [] })
     // max_speed is 2 u/tick and the shortest virtual tick is ≥ 200 ms → < 0.2 u per 16.7 ms frame,
     // plus births appear at their position (scale 0) rather than jumping.
-    expect(maxJump).toBeLessThan(0.5)
+    expect(maxJump, maxJumpAt).toBeLessThan(0.5)
   })
 
   it('feeds every event and metrics row through the reducers idempotently', () => {
