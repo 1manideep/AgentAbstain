@@ -4,8 +4,9 @@
   entry points) next to the titles and gossip hops it always had;
 * the per-tick ``remember`` / ``revise_self`` ops go through the command layer: one ``memory_commands`` row each
   (purpose ``tick``), the vault limits enforced, a refusal logged and nothing written;
-* a ``[[link]]`` to an agent, a node or a written chronicle day gets its entity stub on first mention, so a run
-  leaves no dangling links to them;
+* a ``[[link]]`` in a per-tick ``remember`` to another agent, a node or a written chronicle day gets its entity stub
+  on first mention, so the note's links resolve; gossip copies and inherited notes are not anchored (their stubs
+  would draw note ids and move the balances of worlds that do not use the feature);
 * long responses and command arguments are stored whole, so the audit rows replay into an empty vault;
 * the run records the code commit it ran on.
 """
@@ -23,6 +24,8 @@ from typing import Any
 import pytest
 from conftest import NO_PROVIDER_TIERS, REPO, SimRun, deep_merge
 
+from void.brain.decision import MemoryOp
+from void.brain.scripted import ScriptedBrain
 from void.config import load_config
 from void.db import Database
 from void.events import Kind
@@ -182,8 +185,12 @@ def test_the_amnesic_control_keeps_the_direct_path(run_sim) -> None:
 
 # --- entity stubs on first mention --------------------------------------------------------------------------
 def test_a_scripted_run_leaves_no_dangling_links_to_agents_nodes_or_chronicles(smoke: SimRun) -> None:
+    """A regression guard on the smoke world (whose scripted notes already leave none dangling without the mention
+    stubs; the wiring itself is tested by the planted op below). An agent's link to its own name is out of scope:
+    nobody keeps a stub of themselves."""
     db = smoke.db
-    names = {normalise_title(str(r["name"])) for r in db.fetchall("SELECT name FROM agents")}
+    own = {str(r["agent_id"]): normalise_title(str(r["name"])) for r in db.fetchall("SELECT agent_id, name FROM agents")}
+    names = set(own.values())
     written = int(smoke.kv("chronicle_day") or 0)
     assert written >= 2
     chronicles = {normalise_title(f"Chronicle of day {d}") for d in range(1, written + 1)}
@@ -196,6 +203,8 @@ def test_a_scripted_run_leaves_no_dangling_links_to_agents_nodes_or_chronicles(s
     for r in db.fetchall("SELECT n.agent_id, n.title, l.to_title FROM note_links l JOIN notes n ON n.note_id=l.from_note_id "
                          "WHERE n.archived=0 ORDER BY n.note_id, l.to_title"):
         key = normalise_title(str(r["to_title"]))
+        if key == own.get(str(r["agent_id"])):
+            continue
         kind = "agent" if key in names else "chronicle" if key in chronicles else "node" if key in nodes else None
         if kind is None:
             continue
@@ -215,7 +224,7 @@ def test_mention_stubs_name_only_known_entities(make_sim) -> None:
     unseen = sorted(set(sim.nodes) - set(seen))[0]
     before = {n.title for n in sim.memory.list_notes(me.agent_id)}
     sim._anchor_mentions(me.agent_id, [other.name.lower(), "Chronicle of day 1", "Chronicle of day 9", f"Node {unseen}", "Node n99",
-                                       "Nobody", "Self"], 1)
+                                       "Nobody", "Self", me.name], 1)
     stubs = {n.title: n for n in sim.memory.list_notes(me.agent_id) if n.title not in before}
     assert set(stubs) == {other.name, "Chronicle of day 1", f"Node {unseen}"}
     assert all(ENTITY_TAG in n.tags for n in stubs.values())
@@ -230,6 +239,100 @@ def test_mention_stubs_name_only_known_entities(make_sim) -> None:
     stub = next(n for n in clear.memory.list_notes(aid) if n.title == "Node n1")
     n = clear.nodes["n1"]
     assert stub.body == f"A resource node at ({n.x:.0f}, {n.y:.0f})."
+
+
+def test_a_planted_remember_gets_its_mention_stubs_through_the_tick(make_sim, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The wiring end to end: on day 2 one agent's decision carries a ``remember`` op whose links name an agent it has
+    never met, the chronicle of day 1 and a node it has never seen. None of the three titles is in its vault when the
+    op is planted, so without the call in the loop's per-tick path every one of those links would dangle. After the
+    tick each has its stub, written that very tick, and the note's links resolve; its own name and a stranger get none.
+    """
+    sim = make_sim("audit_planted", deep_merge(NO_PROVIDER_TIERS, {"run": {"days": 2}, "world": {"view_radius": 8.0}}))
+    original = ScriptedBrain._memory_ops
+    planted: dict[str, Any] = {}
+
+    def plant(self: ScriptedBrain, obs: Any, seed: Any, action: Any, rng: Any) -> list[MemoryOp]:
+        ops = original(self, obs, seed, action, rng)
+        if planted or obs.day < 2:
+            return ops
+        vault = {normalise_title(n.title) for n in sim.memory.list_notes(obs.agent_id)}
+        strangers = [r.name for r in sorted(sim.registry.alive(), key=lambda r: r.agent_id)
+                     if r.agent_id != obs.agent_id and normalise_title(r.name) not in vault]
+        unseen = [nid for nid in sorted(sim.nodes) if normalise_title(f"Node {nid}") not in vault]
+        if not strangers or not unseen or normalise_title("Chronicle of day 1") in vault:
+            return ops
+        planted.update(agent_id=obs.agent_id, name=obs.name, tick=obs.tick, stranger=strangers[0], node=unseen[0])
+        text = (f"[[{strangers[0]}]] told [[{obs.name}]] what [[Chronicle of day 1]] said about [[Node {unseen[0]}]]; "
+                "[[Nobody Here]] answered.")
+        return [MemoryOp(op="remember", title="Planted mention", text=text, tags=["people"], links_to=[strangers[0]])] + ops[:1]
+
+    monkeypatch.setattr(ScriptedBrain, "_memory_ops", plant)
+    assert asyncio.run(sim.run()) == "completed"
+    assert planted, "no agent on day 2 had a stranger, an unseen node and an unread chronicle"
+    aid, tick = planted["agent_id"], planted["tick"]
+    pair = {aid, next(r.agent_id for r in sim.registry.all() if r.name == planted["stranger"])}
+    for e in sim.db.fetchall("SELECT payload FROM events WHERE kind=? AND tick=?", (Kind.TALK, tick)):
+        p = json.loads(e["payload"])
+        assert {p["speaker_id"], p["listener_id"]} != pair  # no talk stub that tick: the stranger's stub is the mention's
+
+    notes = {normalise_title(n.title): n for n in sim.memory.list_notes(aid, include_archived=True)}
+    note = notes[normalise_title("Planted mention")]
+    assert note.created_tick == tick
+    assert sim.db.fetchone("SELECT COUNT(*) AS n FROM memory_commands WHERE purpose='tick' AND command='create' AND agent_id=? AND tick=? "
+                           "AND ok=1 AND json_extract(args, '$.title')='Planted mention'", (aid, tick))["n"] == 1
+    for title in (planted["stranger"], "Chronicle of day 1", f"Node {planted['node']}"):
+        stub = notes.get(normalise_title(title))
+        assert stub is not None, title
+        assert ENTITY_TAG in stub.tags and stub.created_tick == tick, (title, stub.tags, stub.created_tick)
+    assert notes[normalise_title(f"Node {planted['node']}")].body.startswith("A resource node")
+    assert normalise_title(planted["name"]) not in notes and normalise_title("Nobody Here") not in notes
+    links = [str(r["to_title"]) for r in sim.db.fetchall("SELECT to_title FROM note_links WHERE from_note_id=?", (note.note_id,))]
+    dangling = sorted(t for t in links if normalise_title(t) not in notes)
+    assert dangling == sorted([planted["name"], "Nobody Here"]), dangling
+
+
+def test_only_a_per_tick_remember_makes_mention_stubs(make_sim) -> None:
+    """Every agent or chronicle stub a run makes is explained by a talk that tick, a ``remember`` the vault's owner
+    wrote that tick linking the title, or an inherited copy, and no vault holds a stub of its own agent. A gossip copy
+    makes none. In this world (the E0 no-op arm as the CLI runs seed 5, cut to three days) anchoring gossip copies
+    made a 'Chronicle of day 1' stub and a stub of an agent in its own vault; each drew a note id from the run's
+    counter, which moved later gadget ids and with them the arm's balances (the E0 rule: they must not move).
+    """
+    sim = make_sim("audit_e0_stubs", deep_merge(NO_PROVIDER_TIERS, {"run": {"name": "exp_mem_e0_noop", "seed": 5, "days": 3}}),
+                   base=REPO / "configs" / "exp_mem_e0_noop.yaml")
+    assert asyncio.run(sim.run()) == "completed"
+    db = sim.db
+    agents = {str(r["agent_id"]): str(r["name"]) for r in db.fetchall("SELECT agent_id, name FROM agents")}
+    by_name = {normalise_title(n): aid for aid, n in agents.items()}
+    talks: set[tuple[int, frozenset[str]]] = set()
+    for e in db.fetchall("SELECT tick, payload FROM events WHERE kind=?", (Kind.TALK,)):
+        p = json.loads(e["payload"])
+        talks.add((int(e["tick"]), frozenset((p["speaker_id"], p["listener_id"]))))
+    mentions: set[tuple[str, int, str]] = set()
+    for e in db.fetchall("SELECT tick, payload FROM events WHERE kind=?", (Kind.REMEMBER,)):
+        p = json.loads(e["payload"])
+        for r in db.fetchall("SELECT to_title FROM note_links WHERE from_note_id=?", (p["note_id"],)):
+            mentions.add((str(p["agent_id"]), int(e["tick"]), normalise_title(str(r["to_title"]))))
+    # the world's gossip copies do link chronicle days and their listener's own name, so the case is exercised
+    gossip = [(str(r["agent_id"]), normalise_title(str(r["to_title"])))
+              for r in db.fetchall("SELECT n.agent_id, l.to_title FROM note_links l JOIN notes n ON n.note_id=l.from_note_id "
+                                   "WHERE n.channel='gossip'")]
+    assert any(key.startswith("chronicle of day ") for _, key in gossip), "no gossip copy links a chronicle day: pick another seed"
+    assert any(by_name.get(key) == aid for aid, key in gossip), "no gossip copy links its listener's name: pick another seed"
+    checked: Counter[str] = Counter()
+    unexplained: list[tuple[str, str, int]] = []
+    for r in db.fetchall("SELECT agent_id, title, created_tick, tags FROM notes ORDER BY note_id"):
+        tags = json.loads(r["tags"])
+        key, aid, tick = normalise_title(str(r["title"])), str(r["agent_id"]), int(r["created_tick"])
+        if ENTITY_TAG not in tags or "inherited" in tags or key.startswith("node "):
+            continue
+        assert by_name.get(key) != aid, (agents[aid], r["title"])  # never a stub of oneself
+        checked["agent" if key in by_name else "other"] += 1
+        talked = key in by_name and (tick, frozenset((aid, by_name[key]))) in talks
+        if not talked and (aid, tick, key) not in mentions:
+            unexplained.append((agents[aid], str(r["title"]), tick))
+    assert checked["agent"] > 0, checked
+    assert unexplained == []
 
 
 # --- whole text and replay ------------------------------------------------------------------------------------

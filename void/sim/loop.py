@@ -646,7 +646,6 @@ class Simulation:
                 if outcome.effects.get("child_id"):
                     births.append(str(outcome.effects["child_id"]))
                     self._ensure_entities(str(outcome.effects["child_id"]), tick)
-                    self._anchor_vault(str(outcome.effects["child_id"]), tick)  # inherited notes keep resolvable links
                 if decision.action.type == "talk" and outcome.ok and decision.action.target:
                     fn = getattr(self.memory, "ensure_entity", None)
                     tgt = self.registry.get(decision.action.target)
@@ -664,20 +663,14 @@ class Simulation:
                 )
                 self.calls_this_tick[aid] = {"t_eff": round(s.effective_temperature, 4), "degenerate": bool(mode),
                                              "coherence": text_coh, "world_cost": self.db.fetchone("SELECT world_cost FROM llm_calls WHERE call_id=?", (call_ids[aid],))["world_cost"]}
-        transfers: list[dict[str, Any]] = []
         if self.gossip is not None:
             # outside any transaction: a paid paraphrase commits its own metering the moment it happens
-            transfers = list(await self.gossip.flush(tick, day) or [])
+            await self.gossip.flush(tick, day)
         with self.db.tx():
-            for t in transfers:  # a copied note's links resolve in the listener's vault too
-                copy = self.memory.get_note(str(t.get("new_note_id", "")))
-                if copy is not None and not copy.archived:
-                    self._anchor_mentions(copy.agent_id, copy.links, tick)
             res = self.lifecycle.resolve(tick, day, order_ids, hold_min_map)
             deaths, births = res["deaths"], births + res["births"]
             for b in res["births"]:
                 self._ensure_entities(b, tick)
-                self._anchor_vault(b, tick)  # inherited notes keep resolvable links
             self._persist_nodes()
             probe_extra = self._probe_step(tick)
             self.wallet.clear_reservations()
@@ -839,9 +832,15 @@ class Simulation:
             "agent_id": agent_id, "command": command, "ok": False, "message": message[:120], "path": path, "purpose": "tick"}, agent_id))
 
     def _anchor_mentions(self, agent_id: str, links: Iterable[str], tick: int) -> None:
-        """Entity stubs on first mention (DESIGN §10): each link that names a known agent (any registry name, the dead
-        included), an existing node (``Node <id>``) or the chronicle of a day already written (``Chronicle of day N``)
-        gets a stub in ``agent_id``'s vault unless a note there already carries that title, so the link resolves.
+        """Entity stubs on first mention (DESIGN §10): each link that names another known agent (any registry name, the
+        dead included, never the vault's own agent), an existing node (``Node <id>``) or the chronicle of a day already
+        written (``Chronicle of day N``) gets a stub in ``agent_id``'s vault unless a note there already carries that
+        title, so the link resolves.
+
+        Only a per-tick ``remember`` calls this (:meth:`_apply_memory_ops`). Gossip copies and a newborn's inherited
+        notes are deliberately not anchored: each stub draws a note id from the run's counter, which moves the ids
+        and RNG placement of everything created after it (gadgets among them), and so the balances of worlds that
+        do not use the new features. Anchoring those channels is a separate change that re-runs E0 on purpose.
 
         Stub bodies follow the talk and node stubs. Under fog a node the agent has not seen gets a stub without its
         position, so a vault never holds a position its owner was not shown (MEMORY_EVOLUTION §5.2).
@@ -868,16 +867,11 @@ class Simulation:
                     fn(agent_id, f"Chronicle of day {d}", tick, f"The chronicle of day {d}, the world's daily column.")
                 continue
             if names is None:
-                names = {normalise_title(str(r["name"])): r for r in self.db.fetchall("SELECT name, model_tier FROM agents ORDER BY agent_id")}
+                names = {normalise_title(str(r["name"])): r
+                         for r in self.db.fetchall("SELECT agent_id, name, model_tier FROM agents ORDER BY agent_id")}
             rec = names.get(normalise_title(title))
-            if rec is not None:
+            if rec is not None and str(rec["agent_id"]) != agent_id:  # an agent needs no stub of itself
                 fn(agent_id, str(rec["name"]), tick, f"An inhabitant of the void on tier {rec['model_tier']}.")
-
-    def _anchor_vault(self, agent_id: str, tick: int) -> None:
-        """:meth:`_anchor_mentions` over every live note of a vault (a newborn's inherited notes)."""
-        for note in self.memory.list_notes(agent_id):
-            if "entity" not in note.tags:
-                self._anchor_mentions(agent_id, note.links, tick)
 
     @staticmethod
     def _parse_action(raw: str | None) -> Action | None:
