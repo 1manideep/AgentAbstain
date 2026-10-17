@@ -3,7 +3,8 @@
 
 ``--benefactor`` adds the windfall outcomes (lineage penetration, exogenous vocabulary, costly actions
 after grants, persistence). ``--replay`` recomputes ``probe_recall`` by re-running the simulation from
-the run's resolved config with probes enabled (in a temporary directory) instead of the offline copy.
+the run's resolved config with probes enabled (in a temporary directory) instead of the offline copy; it is
+refused (exit 2) for a run that could call a paid provider.
 """
 
 from __future__ import annotations
@@ -38,7 +39,11 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     summary = summarize(args.run_dir, benefactor=args.benefactor)
     if args.replay:
-        summary["probe_recall"] = probe_recall(args.run_dir, replay=True)
+        try:
+            summary["probe_recall"] = probe_recall(args.run_dir, replay=True)
+        except ValueError as e:  # a run that could call a paid provider is never replayed
+            print(f"refused: {e}", file=sys.stderr)
+            return 2
     if args.json:
         print(json.dumps(summary, indent=2, sort_keys=True, default=str))
     else:

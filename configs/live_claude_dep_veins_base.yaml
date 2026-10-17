@@ -4,7 +4,10 @@
 # this was the best of 11 world settings on tuning seeds 1-10 (memory +$0.087, interval spanning zero) and it did
 # not hold on held-out seeds 21-40 (-$0.078 [-0.219, 0.058]); it is run live because a real agent may use what it
 # remembers about veins where the scripted one cannot. Not an arm itself: live_claude_dep_veins_{mem,amnesic}.yaml
-# extend it. Per-run cap as in the base ($0.54); scripts/live_claude.sh runs 8 pairs by default (VEIN_SEEDS).
+# extend it. Caps and outcomes as in the base ($0.36 a run); scripts/live_claude.sh runs 32 pairs by default
+# (VEIN_SEEDS 21-52: never the tuning seeds 1-10 on which this setting was chosen). With the scripted brain's paired
+# spread in this world (about $0.32 per agent, from the held-out interval) 8 pairs could detect only about $0.36 per
+# agent and 32 pairs about $0.16 `[estimate]`.
 extends: live_claude_dep_base.yaml
 run:
   name: live_claude_dep_veins

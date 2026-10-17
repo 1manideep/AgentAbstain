@@ -5,16 +5,19 @@
 # differ only in the declared independent variables (world.scarcity, population.starting_balance_usd), so
 # scripts/compare.py accepts the pair; primary outcome false_claim_rate.
 # Three deliberate departures from exp_scarcity, the same in both arms:
-# * equalized_price_out_per_mtok 3.0 instead of 20: a live decision outputs about 850 tokens (visible JSON plus
-#   thinking) where the scripted stand-in wrote about 65; at 3.0 the load-time estimate of a call stays within the
-#   design's 0.3-2.0 of forage income in both arms (stage 3 uses 2.0 for the same reason in its own world).
+# * equalized_price_out_per_mtok 3.0 instead of 20: set when a live decision was assumed to output about 850 tokens
+#   (visible JSON plus thinking) where the scripted stand-in wrote about 65; at 3.0 the load-time estimate of a call
+#   stays within the design's 0.3-2.0 of forage income in both arms. The smoke run measured about 178 output tokens
+#   per swift decision, with no measurable thinking at effort low.
 # * tiers.swift.entropy_budget_max 30 (the scripted arms use 30 for their tier), so stress spans a useful range
 #   inside a 12-tick day; it reaches the model only as the "Inner state" line of its observation.
 # * population.cap 6 and tier_mutation_prob 0: no offspring and no tier drift.
-# The `swift` block repeats live_claude_ladder.yaml's (a test checks the request-shaping keys).
-# Cost `[estimate]` (scratch mock dry run through the real brain code, every agent acting every tick): about $0.20
-# per run; the per-run cap ($0.40) is the ceiling. Run through scripts/live_claude.sh (stage `scarcity`, 12 pairs by
-# default), which alternates the arms seed by seed; then
+# The `swift` block repeats live_claude_ladder.yaml's.
+# Cost `[estimate]` (the smoke run's measured tokens applied to a mock dry run of this world, every agent acting every
+# tick): about $0.10 per run at the measured output and $0.17 at three times it. Caps: $0.30 a run and $0.06 a day.
+# false_claim_rate counts only the claims a model lists itself in `claims`, and is undefined in a run with none, so
+# scripts/live_claude.sh (stage `scarcity`, 24 pairs by default) runs SCARCITY_PILOT pairs first and the rest only if
+# every pilot run listed MIN_CLAIMS claims; `talks` and `claims_made` are reported next to the rate. Then
 #   .venv/bin/python scripts/compare.py data/live/exp_scarcity_claude
 extends: exp_scarcity_low.yaml
 run:
@@ -26,8 +29,8 @@ population:
   cap: 6
   tier_mutation_prob: 0.0
 economy:
-  daily_cap_usd: 0.08
-  total_cap_usd: 0.40
+  daily_cap_usd: 0.06
+  total_cap_usd: 0.30
   equalized_price_out_per_mtok: 3.0
 tiers:
   swift:
@@ -58,3 +61,5 @@ server:
 experiment:
   name: exp_scarcity_claude
   arm: low
+  # lists are replaced, not merged, by `extends`: the first two repeat exp_scarcity_low.yaml's
+  secondary_outcomes: [invalid_action_rate, mean_stress, talks, claims_made]

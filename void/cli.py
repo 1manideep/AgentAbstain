@@ -2,11 +2,13 @@
 
 * ``run``       headless simulation (one seed or a ``--seeds A-B`` sweep); exit 0 when completed, 2 otherwise.
                 A config that puts agents on a paid Anthropic tier needs a live budget (``--budget-usd`` or
-                ``VOID_BUDGET_USD``): each run is refused when the real spend already recorded under the spend
-                roots plus the run's ``economy.total_cap_usd`` would exceed it (``void.economy.budget``)
+                ``VOID_BUDGET_USD``): each run is refused when the real spend already recorded (the repository's
+                ``data/live``, any ``--spend-root``, ``--out`` and the committed spend ledger) plus the run's
+                ``economy.total_cap_usd`` would exceed it (``void.economy.budget``)
 * ``serve``     the simulation behind the HTTP/WebSocket server (DESIGN §15)
 * ``schema``    export the wire schemas for the frontend
-* ``mock-feed`` record a genuine scripted run as the JSONL message stream a socket would receive
+* ``mock-feed`` record a genuine scripted run as the JSONL message stream a socket would receive (refuses a config
+                that could call a paid provider: its calls would land in a deleted temporary directory)
 * ``inspect``   look inside a run directory (lineage, money, events, reindex the notes index)
 """
 
@@ -31,8 +33,10 @@ DEFAULT_OUT = "data/runs"
 DEFAULT_STATIC = "web/dist"
 DEFAULT_MOCK_CONFIG = "configs/scripted_smoke.yaml"
 DEFAULT_MOCK_OUT = "web/public/fixtures/mock.jsonl"
-DEFAULT_SPEND_ROOT = "data/live"   # where live runs are written; always counted against the live budget
+DEFAULT_SPEND_ROOT = REPO_ROOT / "data" / "live"  # where live runs are written; always counted, whatever the cwd
 BUDGET_ENV = "VOID_BUDGET_USD"
+LEDGER_ENV = "VOID_LEDGER"            # the spend ledger to count (default void.economy.budget.LEDGER_FILE)
+ATTEMPT_ENV = "VOID_LEDGER_ATTEMPT"   # set by scripts/live_claude.sh: this start's own reservation in the ledger
 
 
 # --- helpers ------------------------------------------------------------------------------------------------
@@ -94,9 +98,18 @@ def _day_line(sim: Any, day: int, t0: float) -> str:
 
 
 def _live_providers(cfg: VoidConfig) -> set[str]:
-    from void.economy.budget import BUDGETED_PROVIDERS
+    from void.economy.budget import BUDGETED_PROVIDERS, reachable_providers
 
-    return {cfg.tiers[a.tier].provider for a in cfg.agents if a.tier} & set(BUDGETED_PROVIDERS)
+    return reachable_providers(cfg) & set(BUDGETED_PROVIDERS)
+
+
+def _ledger_path() -> Path:
+    import os
+
+    from void.economy.budget import LEDGER_FILE
+
+    env = (os.environ.get(LEDGER_ENV) or "").strip()
+    return Path(env) if env else LEDGER_FILE
 
 
 def _budget_usd(args: argparse.Namespace) -> float | None:
@@ -111,6 +124,8 @@ def _budget_usd(args: argparse.Namespace) -> float | None:
 
 def _budget_refusal(cfg: VoidConfig, run_dir: Path, args: argparse.Namespace) -> str | None:
     """Why this run may not start under the live budget, or None when it may (or needs no budget)."""
+    import os
+
     from void.economy.budget import run_spend, spend_under
 
     if not _live_providers(cfg):
@@ -119,16 +134,23 @@ def _budget_refusal(cfg: VoidConfig, run_dir: Path, args: argparse.Namespace) ->
     if budget is None:
         return (f"this config puts agents on a paid tier ({', '.join(sorted(_live_providers(cfg)))}); pass --budget-usd "
                 f"(or set {BUDGET_ENV}) so the run is counted against the live budget")
-    roots = [Path(getattr(args, "spend_root", None) or DEFAULT_SPEND_ROOT), Path(args.out)]
-    spent_micro, _ = spend_under(roots)
+    ledger = _ledger_path()
+    if not ledger.is_file():
+        return (f"no spend ledger at {ledger}: it is the record of real spend that survives a new machine (set {LEDGER_ENV} "
+                f"to its path); without it the spend already made cannot be counted")
+    roots = [DEFAULT_SPEND_ROOT, *[Path(r) for r in (getattr(args, "spend_root", None) or [])], Path(args.out)]
+    try:
+        spent_micro, _ = spend_under(roots, ledger=ledger, exclude_attempt=(os.environ.get(ATTEMPT_ENV) or "").strip() or None)
+    except ValueError as e:
+        return f"the spend ledger cannot be read: {e}"
     need = cfg.economy.total_cap_usd
     if (run_dir / "world.db").is_file():  # resuming: only the rest of this run's cap can still be spent
         mine = run_spend(run_dir)
         need = 0.0 if mine.status not in (None, "running") else max(0.0, need - micro_to_usd(mine.real_micro))
     spent = micro_to_usd(spent_micro)
     if spent + need > budget + 1e-9:
-        return (f"live budget: ${spent:.4f} already spent under {', '.join(str(r) for r in roots)} + this run's cap "
-                f"${need:.2f} > budget ${budget:.2f}")
+        return (f"live budget: ${spent:.4f} already spent under {', '.join(str(r) for r in roots)} and in {ledger} + this "
+                f"run's cap ${need:.2f} > budget ${budget:.2f}")
     print(f"live budget: ${spent:.4f} spent + cap ${need:.2f} <= ${budget:.2f}", file=sys.stderr)
     return None
 
@@ -272,8 +294,15 @@ async def record_feed(cfg: VoidConfig, run_dir: Path, ticks: int, *, seed: int |
 def cmd_mock_feed(args: argparse.Namespace) -> int:
     import tempfile
 
+    from void.economy.budget import reachable_providers
+
     ticks = int(args.ticks)
     base = load_config(_resolve(args.config))
+    paid = reachable_providers(base)
+    if paid:  # a real paid run whose records would be deleted with the temporary directory, outside any budget
+        print(f"refused: mock-feed records a scripted fixture; {args.config} can call a paid provider "
+              f"({', '.join(sorted(paid))})", file=sys.stderr)
+        return 2
     days = max(base.run.days, math.ceil(ticks / base.run.ticks_per_day))
     cfg = load_config(_resolve(args.config), _run_overrides(seed=args.seed, days=days, tick_seconds=0.0, name="mock_feed"))
     out = Path(args.out)
@@ -436,8 +465,9 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 def _budget_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--budget-usd", type=float, dest="budget_usd", default=None,
                    help=f"live budget in USD across all runs (default ${BUDGET_ENV}); required when agents use a paid Anthropic tier")
-    p.add_argument("--spend-root", dest="spend_root", default=None,
-                   help=f"directory whose runs count against the budget besides --out (default {DEFAULT_SPEND_ROOT})")
+    p.add_argument("--spend-root", dest="spend_root", action="append", default=None,
+                   help=f"another directory whose runs count against the budget (repeatable; {DEFAULT_SPEND_ROOT}, "
+                        f"--out and the spend ledger always count)")
 
 
 def build_parser() -> argparse.ArgumentParser:
