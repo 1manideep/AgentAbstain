@@ -9,7 +9,9 @@ Retrieval (DESIGN §10): cosine top-``entry_k`` of the agent's own non-archived 
 entry points; in ``graph`` mode a BFS follows wikilinks for ``hops`` hops with ``hop_decay``;
 the final rank is ``walk_score * (0.5 + importance) * recency_weight``. Only the querying
 agent's embeddings are ever loaded. Entity stubs are link anchors: they are walked through
-but never returned.
+but never returned. Under R1 (``memory.index_boost > 0``, MEMORY_EVOLUTION §5.3) a note the
+agent tagged ``index`` enters with ``cosine + index_boost``, so a well-kept index is a lever;
+at 0 (R0) that path is skipped and ranking is cosine alone.
 
 Auto-linking (A-MEM): a new note is linked both ways to the ``auto_link_k`` most similar
 existing notes above ``auto_link_min_sim`` via ``## Related`` sections. Embeddings are taken
@@ -49,12 +51,12 @@ from void.memory.notes import (
     Note,
     Provenance,
     add_related_links,
+    body_of,
     content_body,
     normalise_title,
     parse_note,
     parse_wikilinks,
     render_note,
-    split_frontmatter,
     strip_wikilinks,
 )
 from void.memory.vault import Vault
@@ -68,6 +70,7 @@ __all__ = [
     "ENTITY_TAG",
     "SELF_TAG",
     "PROBE_TAG",
+    "INDEX_TAG",
     "TRACER_TAGS",
     "TRACER_ORIGIN",
     "OPERATOR_TAG",
@@ -82,6 +85,7 @@ TITLE_MAX_CHARS = 80
 ENTITY_TAG = "entity"
 SELF_TAG = "self"
 PROBE_TAG = "probe"
+INDEX_TAG = "index"   # a note under /memories/index/ (void.memory.commands); boosted at entry under R1 (§5.3)
 TRACER_TAGS: tuple[str, ...] = ("strategy", "tracer")
 TRACER_ORIGIN = "tracer"
 OPERATOR_TAG = "operator_edited"   # set by reindex on a file whose manifest hash does not match (§5.9)
@@ -404,10 +408,13 @@ class MemoryStore:
     def retrieve_with_stats(
         self, agent_id: str, query: str, tick: int, *, k: int | None = None
     ) -> tuple[list[RetrievedNote], dict[str, object]]:
-        """:meth:`retrieve` plus per-call stats: ``hop_hist``, ``mean_age_ticks``, ``channel_mix``, ``entry_ids``.
+        """:meth:`retrieve` plus per-call stats: ``hop_hist``, ``mean_age_ticks``, ``channel_mix``, ``entry_ids``
+        and, when the agent has any live note, ``index_entries`` (how many entry points are ``index`` notes).
 
         Entity stubs and zero-score candidates are never returned; ``hop_hist`` covers depths
-        ``0..hops`` (all zero in ``vector`` mode beyond depth 0).
+        ``0..hops`` (all zero in ``vector`` mode beyond depth 0). Entry points are ranked by cosine,
+        plus ``index_boost`` for ``index`` notes under R1, ties broken by note id; an entry point's
+        walk weight is that score clamped at 0.
         """
         max_depth = max(0, self.cfg.hops) if self.cfg.mode == "graph" else 0
         stats: dict[str, object] = {
@@ -426,11 +433,17 @@ class MemoryStore:
         by_id: dict[str, Row] = {str(r["note_id"]): r for r in rows}
 
         qvec = self.embedder.embed(query)
-        sims = {nid: cosine(qvec, unpack(r["embedding"])) for nid, r in by_id.items()}
-        ranked = sorted(sims, key=lambda nid: (-sims[nid], nid))
+        scores = {nid: cosine(qvec, unpack(r["embedding"])) for nid, r in by_id.items()}
+        boost = float(self.cfg.index_boost)
+        if boost > 0.0:
+            # R1 (§5.3): an index note enters at cosine + boost; at 0 this is skipped, so R0 ranks exactly as before
+            index_ids = {nid for nid, r in by_id.items() if INDEX_TAG in _row_tags(r)}
+            scores = {nid: s + boost if nid in index_ids else s for nid, s in scores.items()}
+        ranked = sorted(scores, key=lambda nid: (-scores[nid], nid))
         entry_ids = ranked[: max(0, self.cfg.entry_k)]
-        entry = {nid: max(0.0, sims[nid]) for nid in entry_ids}
+        entry = {nid: max(0.0, scores[nid]) for nid in entry_ids}
         stats["entry_ids"] = list(entry_ids)
+        stats["index_entries"] = sum(1 for nid in entry_ids if INDEX_TAG in _row_tags(by_id[nid]))
 
         if self.cfg.mode == "graph":
             graph = NoteGraph(self._light_notes(agent_id, by_id), hub_tags=(ENTITY_TAG,))
@@ -754,7 +767,7 @@ class MemoryStore:
         the file supplies only the body (empty when the file is gone, e.g. after ``delete_note``)."""
         path = Path(str(row["path"]))
         try:
-            _, rest = split_frontmatter(path.read_text(encoding="utf-8"))
+            rest = body_of(path.read_text(encoding="utf-8"))  # the row holds everything else: no YAML to parse
         except OSError:
             body = ""
         else:
