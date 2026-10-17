@@ -10,11 +10,13 @@ What is here, and which promise each piece keeps:
 * :func:`bootstrap_ci` -- the paired percentile bootstrap. With the same inputs it reproduces
   :func:`void.research.compare.paired_stats`'s ``ci95`` exactly (same RNG, draw order and percentile rule).
 * :func:`superiority` / :func:`non_superiority` -- the pre-registered "the interval clears the margin"
-  rules, with a margin-shifted t p-value for :func:`holm`.
+  rules; a PASS also needs the margin-shifted t p-value (the one :func:`holm` adjusts) below alpha, so the
+  verdict and the reported p never disagree.
 * :func:`tost_paired` -- two one-sided tests: a claim of *no effect* needs equivalence within a stated
   margin, never a non-significant p-value (6.11; H1 uses a margin of 0.25 SD).
 * :func:`holm` -- Holm step-down adjustment across the pre-registered primary endpoints.
-* :func:`power_paired` / :func:`n_for_power` -- approximate power of the paired design (6.2, E0 gate).
+* :func:`power_paired` / :func:`n_for_power` -- approximate power of the paired design (6.2, E0 gate);
+  :func:`power_tost` -- approximate power of the equivalence test at a zero effect.
 * :func:`sign_test` -- exact two-sided sign test.
 * :func:`interaction_2x2` -- per-seed main effects and interaction of a 2x2 factorial (H4: rung x
   self-edit; Q2: scarcity x capability tier).
@@ -42,6 +44,7 @@ __all__ = [
     "non_superiority",
     "paired_t",
     "power_paired",
+    "power_tost",
     "sign_test",
     "slope_by_seed",
     "superiority",
@@ -301,13 +304,20 @@ def superiority(diffs: Sequence[float], margin: float, direction: str, alpha: fl
                 n_boot: int = N_BOOT, seed: int = BOOT_SEED) -> dict[str, Any]:
     """Is the effect beyond ``margin`` in ``direction``?
 
-    The decision is the pre-registered interval rule on the two-sided ``1 - alpha`` paired bootstrap
-    interval: ``greater`` passes when ``lo > margin``, ``less`` when ``hi < -margin`` (margin 0 is plain
-    superiority). ``p`` is the companion margin-shifted paired t p-value for :func:`holm`: twice the
-    one-sided p (capped at 1), so ``p < alpha`` agrees with the interval rule up to the t versus bootstrap
-    difference. ``passed`` is None (undetermined) with fewer than two differences.
+    Two rules, both required:
 
-    Returns ``{passed, ci, p, n, mean}``.
+    * the pre-registered interval rule on the two-sided ``1 - alpha`` paired bootstrap interval:
+      ``greater`` clears when ``lo > margin``, ``less`` when ``hi < -margin`` (margin 0 is plain
+      superiority) -- ``ci_clears``;
+    * the margin-shifted paired t-test: ``p`` is twice its one-sided p-value (capped at 1), the p that
+      :func:`holm` adjusts, and ``p_clears`` is ``p < alpha`` (the ``1 - alpha`` t interval clearing the margin).
+
+    The percentile bootstrap and the t interval disagree near the boundary (with few pairs the bootstrap
+    interval is the narrower one), so ``passed`` is ``ci_clears and p_clears``: a PASS always carries
+    ``p < alpha``, and a reported p at or above alpha is always a FAIL. ``passed`` is None (undetermined)
+    with fewer than two differences.
+
+    Returns ``{passed, ci, p, n, mean, ci_clears, p_clears}``.
     """
     _check_direction(direction)
     margin = _check_margin(margin)
@@ -316,28 +326,32 @@ def superiority(diffs: Sequence[float], margin: float, direction: str, alpha: fl
     ci = bootstrap_ci(d, n_boot=n_boot, seed=seed, level=1.0 - alpha)
     lo, hi = ci
     if lo is None or hi is None:
-        passed: bool | None = None
+        ci_clears: bool | None = None
     elif direction == "greater":
-        passed = lo > margin
+        ci_clears = lo > margin
     else:
-        passed = hi < -margin
+        ci_clears = hi < -margin
     shift = margin if direction == "greater" else -margin
-    return {"passed": passed, "ci": ci, "p": _shifted_p(d, shift, direction), "n": len(d),
-            "mean": (sum(d) / len(d)) if d else None}
+    p = _shifted_p(d, shift, direction)
+    p_clears = None if p is None else p < alpha
+    passed = None if ci_clears is None or p_clears is None else (ci_clears and p_clears)
+    return {"passed": passed, "ci": ci, "p": p, "n": len(d), "mean": (sum(d) / len(d)) if d else None,
+            "ci_clears": ci_clears, "p_clears": p_clears}
 
 
 def non_superiority(diffs: Sequence[float], margin: float, direction: str, alpha: float = 0.05, *,
                     n_boot: int = N_BOOT, seed: int = BOOT_SEED) -> dict[str, Any]:
     """The complement of :func:`superiority`: passes when the effect is *not* significantly beyond
-    ``margin`` in ``direction`` (``greater``: ``lo <= margin``; ``less``: ``hi >= -margin``), on the same
-    two-sided ``1 - alpha`` paired bootstrap interval. ``passed`` is None with fewer than two differences.
+    ``margin`` in ``direction`` -- superiority's interval rule (``greater``: ``lo > margin``; ``less``:
+    ``hi < -margin`` on the two-sided ``1 - alpha`` paired bootstrap interval) or its shifted t-test
+    (``p < alpha``) does not hold. ``p`` is superiority's p. ``passed`` is None with fewer than two differences.
 
     This is a "does not clear the bar" check, not a claim of no effect; that needs :func:`tost_paired`.
-    Returns ``{passed, ci, n, mean}``.
+    Returns ``{passed, ci, p, n, mean}``.
     """
     sup = superiority(diffs, margin, direction, alpha, n_boot=n_boot, seed=seed)
     passed = None if sup["passed"] is None else not sup["passed"]
-    return {"passed": passed, "ci": sup["ci"], "n": sup["n"], "mean": sup["mean"]}
+    return {"passed": passed, "ci": sup["ci"], "p": sup["p"], "n": sup["n"], "mean": sup["mean"]}
 
 
 def tost_paired(diffs: Sequence[float], margin: float, alpha: float = 0.05) -> dict[str, Any]:
@@ -418,6 +432,19 @@ def power_paired(d_z: float, n: int, alpha: float = 0.05, method: str = "normal"
         return _NORMAL.cdf(delta - _NORMAL.inv_cdf(1.0 - alpha / 2.0))
     df = n - 1
     return t_sf(t_ppf(1.0 - alpha / 2.0, df) - delta, df)
+
+
+def power_tost(margin_z: float, n: int, alpha: float = 0.05) -> float:
+    """Approximate power of :func:`tost_paired` to declare equivalence when the true effect is zero, for a
+    margin of ``margin_z`` standard deviations of the differences and ``n`` pairs: the normal approximation
+    ``max(0, 2 Phi(margin_z sqrt(n) - z_{1-alpha}) - 1)``. Like :func:`power_paired`'s default it ignores the
+    t distribution's heavier tails, so it overstates power at small n."""
+    if not 0.0 < alpha < 0.5:
+        raise ValueError("alpha must lie strictly between 0 and 0.5")
+    if n < 1:
+        raise ValueError("n is too small")
+    margin_z = abs(float(margin_z))
+    return max(0.0, 2.0 * _NORMAL.cdf(margin_z * math.sqrt(n) - _NORMAL.inv_cdf(1.0 - alpha)) - 1.0)
 
 
 def n_for_power(d_z: float, power: float = 0.8, alpha: float = 0.05, method: str = "normal") -> int:
