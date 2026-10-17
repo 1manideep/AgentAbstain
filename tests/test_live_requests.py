@@ -271,6 +271,30 @@ def test_retries_stop_at_max_attempts_and_at_the_call_timeout() -> None:
     assert len(captured) == 1 and r.error.startswith("api_529") and r.usage.total == 0
 
 
+def test_time_queued_for_a_slot_does_not_count_against_the_call_timeout() -> None:
+    import anthropic
+
+    # two calls share one slot; each takes 0.3 s against a 0.5 s timeout, so the second waits 0.3 s for the slot and
+    # would have only 0.2 s left if the clock started before the wait: it must get its full timeout instead
+    cfg = load_config(LADDER, {"server": {"call_timeout_seconds": 0.5}})
+
+    class SlowMessages:
+        async def create(self, **_: Any) -> Any:
+            await asyncio.sleep(0.3)
+            return anthropic.types.Message.model_validate(message_body(cfg.tiers["swift"].model, DECISION))
+
+    class SlowClient:
+        messages = SlowMessages()
+
+    async def both() -> list[Any]:
+        slot = asyncio.Semaphore(1)
+        brains = [AnthropicBrain("swift", cfg, client=SlowClient(), semaphore=slot) for _ in range(2)]
+        return await asyncio.gather(*(b.decide(obs(tier="swift"), Sampling(1.0, 0.2, False)) for b in brains))
+
+    first, second = asyncio.run(both())
+    assert first.ok and second.ok, (first.error, second.error)
+
+
 def test_other_failures_are_never_retried() -> None:
     import httpx2
 
