@@ -634,7 +634,7 @@ def test_commands_over_a_living_agents_vault_in_a_real_run(run) -> None:
     stub = next(n for n in sim.memory.list_notes(agent) if "entity" in n.tags)
     assert not apply(command="delete", path=virtual_path(stub)).ok
     assert len(sim.memory.list_notes(agent)) == before + 1
-    audits = run.db.fetchall("SELECT command, ok FROM memory_commands WHERE agent_id=? ORDER BY cmd_id", (agent,))
+    audits = run.db.fetchall("SELECT command, ok FROM memory_commands WHERE agent_id=? AND purpose='maintain' ORDER BY cmd_id", (agent,))
     assert [(r["command"], r["ok"]) for r in audits] == [("view", 1), ("create", 1), ("str_replace", 1), ("delete", 0), ("delete", 0)]
     # every vault file still round-trips byte for byte and the manifest still matches every live note
     for n in sim.memory.list_notes(agent):

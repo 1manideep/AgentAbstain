@@ -348,7 +348,8 @@ def test_every_living_agent_is_charged_once_per_day_boundary(index_run: SimRun) 
             assert [tuple(r) for r in ledger] == [(ev["agent_id"], -c["world_cost"], "maintenance_call")]
             audits = run.db.fetchall("SELECT ok FROM memory_commands WHERE call_id=? AND purpose='maintain'", (c["call_id"],))
             assert len(audits) == p["commands"] and sum(int(a["ok"]) for a in audits) == p["ok"]
-    assert len(run.events(Kind.MEMORY_COMMAND)) == int(run.db.fetchone("SELECT COUNT(*) AS n FROM memory_commands")["n"])
+    nightly = [e for e in run.events(Kind.MEMORY_COMMAND) if e["payload"].get("purpose") != "tick"]  # per-tick ops audit as 'tick'
+    assert len(nightly) == int(run.db.fetchone("SELECT COUNT(*) AS n FROM memory_commands WHERE purpose='maintain'")["n"])
 
 
 def test_index_builder_keeps_one_index_file_per_known_node_in_the_vault(index_run: SimRun) -> None:
@@ -414,7 +415,7 @@ def test_decoy_rewrites_only_the_policy(decoy_run: SimRun) -> None:
 def test_noop_pays_the_same_price_and_changes_nothing(noop_run: SimRun) -> None:
     maint = noop_run.events(Kind.MAINTENANCE)
     assert maint and all(e["payload"]["commands"] == 0 and e["payload"]["strategy"] == "noop" and e["payload"]["real_cost"] > 0 for e in maint)
-    assert int(noop_run.db.fetchone("SELECT COUNT(*) AS n FROM memory_commands")["n"]) == 0
+    assert int(noop_run.db.fetchone("SELECT COUNT(*) AS n FROM memory_commands WHERE purpose='maintain'")["n"]) == 0
     assert int(noop_run.db.fetchone("SELECT COUNT(*) AS n FROM llm_calls WHERE purpose='maintain'")["n"]) == len(maint)
     assert noop_run.db.fetchone("SELECT COUNT(*) AS n FROM policy_versions WHERE source != 'seed'")["n"] == 0
     assert noop_run.db.fetchone("SELECT COUNT(*) AS n FROM notes WHERE tags LIKE '%\"index\"%'")["n"] == 0

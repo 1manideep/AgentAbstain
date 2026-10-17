@@ -68,12 +68,15 @@ BASE_GOLDEN = {
     "ledger": "69cc1acf2f945851cd6d75ee5c73bf715048ae2366f340d9658728b9b5cd7b37",
 }
 
+# "calls" re-recorded when decision responses stopped being cut at 4000 characters under run.log_prompts (full response
+# text per call, MEMORY_EVOLUTION §7.4): one scripted call in this world (tick 25, an oversized gadget proposal of 25953
+# characters) is now stored whole; its first 4000 characters and every other column of every call are unchanged.
 AMNESIC_FOG_GOLDEN = {
     "status": "completed",
     "config_hash": "fb105920e6b0993e29971b43cf9f1c984343500dcb33fa8178b837499498c47d",
     "metrics": "912052045831afd8c6301e9455eaa8024cbc20e6bb71739da627a0a08849c6b9",
     "events": "75e82ce6cb6f8ee827b7293a303f35a15829efc68c589294df1420c6f3686294",
-    "calls": "f266313eec9dc6d017a7b03951e90880d8ad5943d9958f0f1d69ce93233d7da1",
+    "calls": "b1a777debe18bfcaab06321b2cbdbfcdeddbf965a6a809acc30268eb72553cbb",
     "ledger": "61b2acd093d556e97364681d40ca452c4b623a9508cab9b1959579be5ff77905",
 }
 

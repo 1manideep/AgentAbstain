@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from void.agents.models import AgentRecord
 from void.agents.registry import AgentRegistry
@@ -45,6 +46,10 @@ class ObservationBuilder:
     gadgets: GadgetRegistry | None = None
     taskboard: TaskBoard | None = None
     policy: PolicyStore | None = None
+    # per-call retrieval stats of the last observation built for each agent (MemoryStore.retrieve_with_stats:
+    # hop_hist by graph depth, mean_age_ticks, channel_mix, entry_ids); the loop logs them in the decision call's
+    # extras. An observation that retrieved nothing (amnesic control, empty query) stores empty stats.
+    last_stats: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def burn_rate(self, agent_id: str) -> float:
         rows = self.db.fetchall("SELECT world_cost FROM llm_calls WHERE agent_id=? AND purpose='decide' ORDER BY tick DESC LIMIT 6", (agent_id,))
@@ -105,10 +110,14 @@ class ObservationBuilder:
         heard = self._heard(agent.agent_id)
         self_summary = self.memory.get_self(agent.agent_id)
         memories = []
-        if retrieve and self.cfg.memory.enabled:  # the amnesic control retrieves nothing (MEMORY_EVOLUTION §5.2)
-            query_bits = [self_summary] + [h.text for h in heard[:3]] + [f"Node {n.node_id} {n.stock_bucket}" for n in nodes[:2]]
-            query = " ".join(b for b in query_bits if b)
-            memories = self.memory.retrieve(agent.agent_id, query, clock.tick) if query.strip() else []
+        if retrieve:
+            stats: dict[str, Any] = {"hop_hist": {}, "mean_age_ticks": 0.0, "channel_mix": {}, "entry_ids": []}
+            if self.cfg.memory.enabled:  # the amnesic control retrieves nothing (MEMORY_EVOLUTION §5.2)
+                query_bits = [self_summary] + [h.text for h in heard[:3]] + [f"Node {n.node_id} {n.stock_bucket}" for n in nodes[:2]]
+                query = " ".join(b for b in query_bits if b)
+                if query.strip():
+                    memories, stats = self.memory.retrieve_with_stats(agent.agent_id, query, clock.tick)
+            self.last_stats[agent.agent_id] = stats
         obs = Observation(
             tick=clock.tick, day=clock.day, tick_of_day=clock.tick_of_day, ticks_left_today=clock.ticks_left_today,
             agent_id=agent.agent_id, name=agent.name, tier=agent.model_tier, generation=agent.generation, position=pos,

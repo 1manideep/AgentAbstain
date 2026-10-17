@@ -274,7 +274,7 @@ def test_memory_command_requires_the_fields_of_its_command() -> None:
     with pytest.raises(ValueError, match="rename requires old_path, new_path"):
         MemoryCommand(command="rename")
     cmd = MemoryCommand(command="str_replace", path="/memories/index/Nodes.md", old_str="x" * 500, new_str="y")
-    assert cmd.args()["old_str"].endswith("…") and "command" not in cmd.args()
+    assert cmd.args()["old_str"] == "x" * 500 and "command" not in cmd.args()  # stored whole, so the audit replays
 
 
 @pytest.mark.parametrize("raw, area, name", [
