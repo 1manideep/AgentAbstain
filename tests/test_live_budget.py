@@ -138,15 +138,15 @@ def test_void_run_counts_the_ledger_and_refuses_without_it(tmp_path: Path, monke
     args = argparse.Namespace(budget_usd=60.0, spend_root=None, out=str(tmp_path / "out"))
     monkeypatch.setattr(cli, "DEFAULT_SPEND_ROOT", tmp_path / "data_live")
     monkeypatch.setenv(cli.LEDGER_ENV, str(tmp_path / "missing.jsonl"))
-    assert "no spend ledger" in cli._budget_refusal(cfg, run_dir, args)
+    assert "no spend ledger" in cli._budget_refusal(cfg, run_dir, args, Path(args.out))
     ledger = write_ledger(tmp_path / "ledger.jsonl",
                           {"attempt": "old", "run_id": "live_claude_ladder-s42", "state": "final", "real_micro": 59_600_000},
                           {"attempt": "now", "run_id": "live_claude_dep_mem-s3", "state": "reserved", "cap_micro": 360_000})
     monkeypatch.setenv(cli.LEDGER_ENV, str(ledger))
     monkeypatch.delenv(cli.ATTEMPT_ENV, raising=False)
-    assert "budget $60.00" in cli._budget_refusal(cfg, run_dir, args)  # 59.60 + 0.36 reserved + 0.36 > 60
+    assert "budget $60.00" in cli._budget_refusal(cfg, run_dir, args, Path(args.out))  # 59.60 + 0.36 reserved + 0.36 > 60
     monkeypatch.setenv(cli.ATTEMPT_ENV, "now")  # live_claude.sh: this start's own reservation is the cap it adds
-    assert cli._budget_refusal(cfg, run_dir, args) is None  # 59.60 + 0.36 <= 60
+    assert cli._budget_refusal(cfg, run_dir, args, Path(args.out)) is None  # 59.60 + 0.36 <= 60
 
 
 def test_the_default_spend_root_does_not_depend_on_the_working_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -164,7 +164,7 @@ def test_the_default_spend_root_does_not_depend_on_the_working_directory(tmp_pat
     monkeypatch.setenv(cli.LEDGER_ENV, str(write_ledger(tmp_path / "ledger.jsonl")))
     monkeypatch.chdir(tmp_path / "default_root")
     ns = argparse.Namespace(budget_usd=60.0, spend_root=[str(tmp_path / "extra")], out=str(tmp_path / "out"))
-    assert "budget $60.00" in cli._budget_refusal(cfg, tmp_path / "out" / "live_claude_ladder", ns)  # 55 + 10 > 60
+    assert "budget $60.00" in cli._budget_refusal(cfg, tmp_path / "out" / "live_claude_ladder", ns, Path(ns.out))  # 55 + 10 > 60
 
 
 # --- nothing starts a paid simulation outside the budget ----------------------------------------------------------
