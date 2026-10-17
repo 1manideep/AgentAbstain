@@ -61,22 +61,35 @@ describe('buildHumanoid', () => {
       expect(h.height).toBeCloseTo(preset.height, 6)
       expect(h.skinned.length).toBe(2)
       let tris = 0
-      for (const m of h.skinned) {
+      // Every vertex of every mesh of every preset is checked; violations are collected and asserted
+      // once per mesh, since a per-vertex expect() costs far more than the check itself.
+      for (const [mi, m] of h.skinned.entries()) {
         const g = m.geometry
         const idx = g.getAttribute('skinIndex')
         const w = g.getAttribute('skinWeight')
         const pos = g.getAttribute('position')
         expect(idx.count).toBe(pos.count)
+        expect(idx.count).toBeGreaterThan(0)
+        const bad: string[] = []
+        let badCount = 0
         for (let i = 0; i < idx.count; i++) {
           let sum = 0
+          let inRange = true
           for (let k = 0; k < 4; k++) {
             const bi = idx.getComponent(i, k)
-            expect(bi).toBeGreaterThanOrEqual(0)
-            expect(bi).toBeLessThan(BONE_NAMES.length)
+            if (!(bi >= 0 && bi < BONE_NAMES.length)) inRange = false
             sum += w.getComponent(i, k)
           }
-          expect(sum).toBeCloseTo(1, 4)
+          // toBeCloseTo(1, 4) passes when |sum - 1| < 0.5e-4
+          if (!inRange || !(Math.abs(sum - 1) < 0.5e-4)) {
+            badCount++
+            if (bad.length < 20) {
+              const bones = [0, 1, 2, 3].map((k) => idx.getComponent(i, k)).join(',')
+              bad.push(`${preset.name} mesh ${mi} vertex ${i}: bones [${bones}] weight sum ${sum}`)
+            }
+          }
         }
+        expect({ badCount, bad }).toEqual({ badCount: 0, bad: [] })
         tris += (g.index ? g.index.count : pos.count) / 3
       }
       expect(tris).toBeLessThanOrEqual(4000)
@@ -124,7 +137,10 @@ describe('buildClips', () => {
           expect(tr.times[tr.times.length - 1]).toBeCloseTo(clip.duration, 5)
           const stride = tr.getValueSize()
           expect(tr.values.length).toBe(tr.times.length * stride)
-          for (let i = 0; i < tr.values.length; i++) expect(Number.isFinite(tr.values[i])).toBe(true)
+          // every key value is checked; the non-finite ones are collected and asserted once per track
+          const nonFinite: number[] = []
+          for (let i = 0; i < tr.values.length; i++) if (!Number.isFinite(tr.values[i])) nonFinite.push(i)
+          expect(nonFinite, `${name} ${tr.name}: non-finite values at`).toEqual([])
           if (CLIP_LOOPS[name]) {
             const n = tr.times.length
             for (let k = 0; k < stride; k++) expect(tr.values[k]).toBeCloseTo(tr.values[(n - 1) * stride + k]!, 6)
