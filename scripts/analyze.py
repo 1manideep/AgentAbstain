@@ -9,7 +9,8 @@ majority baseline (``exam``), the nightly maintenance (``maintenance``) and the 
 
 ``--benefactor`` adds the windfall outcomes (lineage penetration, exogenous vocabulary, costly actions
 after grants, persistence). ``--replay`` recomputes ``probe_recall`` by re-running the simulation from
-the run's resolved config with probes enabled (in a temporary directory) instead of the offline copy.
+the run's resolved config with probes enabled (in a temporary directory) instead of the offline copy; it is
+refused (exit 2) for a run that could call a paid provider.
 ``--outcome PATH`` (repeatable) adds ``outcomes: {PATH: value}`` resolved exactly as ``compare`` resolves
 them; ``--list-outcomes`` prints every computed outcome name (built-in and registered) and exits.
 """
@@ -59,7 +60,11 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("run_dir is required")
     summary = summarize(args.run_dir, benefactor=args.benefactor)
     if args.replay:
-        summary["probe_recall"] = probe_recall(args.run_dir, replay=True)
+        try:
+            summary["probe_recall"] = probe_recall(args.run_dir, replay=True)
+        except ValueError as e:  # a run that could call a paid provider is never replayed
+            print(f"refused: {e}", file=sys.stderr)
+            return 2
     if args.outcome:
         summary["outcomes"] = {p: end_of_run_outcome(args.run_dir, p) for p in args.outcome}
     if args.json:

@@ -262,6 +262,43 @@ def false_claim_rate(run_dir: str | Path, tier: str | None = None, day: int | No
     return (int(row["f"] or 0) / made) if made else None
 
 
+def _per_starting_agent(run_dir: str | Path, micro: int) -> float | None:
+    n = len(run_config(run_dir).agents)
+    return micro_to_usd(micro) / n if n else None
+
+
+def forage_income(run_dir: str | Path) -> float | None:
+    """Gross foraging income in USD per starting agent (every ``forage`` credit in the wallet ledger): what memory
+    earns, before what it costs. With :func:`decision_world_cost` it splits ``mean_balance`` into its two sides."""
+    with connect(run_dir) as db:
+        row = db.execute("SELECT COALESCE(SUM(delta), 0) AS s FROM wallet_ledger WHERE kind='forage'").fetchone()
+    return _per_starting_agent(run_dir, int(row["s"]))
+
+
+def decision_world_cost(run_dir: str | Path) -> float | None:
+    """In-world price of every decide call, in USD per starting agent: what agents paid to think, retrieved notes
+    included (the run total; the metrics' ``world_cost_usd`` is per tick)."""
+    with connect(run_dir) as db:
+        row = db.execute("SELECT COALESCE(SUM(world_cost), 0) AS s FROM llm_calls WHERE purpose='decide'").fetchone()
+    return _per_starting_agent(run_dir, int(row["s"]))
+
+
+def claims_made(run_dir: str | Path, tier: str | None = None) -> float | None:
+    """Claims the agents listed themselves over every decide call: the denominator of ``false_claim_rate``."""
+    extra, params = _call_filter(run_dir, tier, None)
+    with connect(run_dir) as db:
+        row = db.execute("SELECT COALESCE(SUM(claims_made), 0) AS m FROM llm_calls WHERE purpose='decide'" + extra, params).fetchone()
+    return float(row["m"])
+
+
+def talks(run_dir: str | Path, tier: str | None = None) -> float | None:
+    """Decide calls whose action was ``talk`` (the only action that carries claims to a listener)."""
+    extra, params = _call_filter(run_dir, tier, None)
+    with connect(run_dir) as db:
+        row = db.execute("SELECT COUNT(*) AS n FROM llm_calls WHERE purpose='decide' AND action_type='talk'" + extra, params).fetchone()
+    return float(row["n"])
+
+
 def notes_by_channel(run_dir: str | Path, channel: str | None = None, day: int | None = None) -> float | None:
     """Live note count for ``channel`` from the day rows (``day`` selects one, default the last); a channel
     absent from the row counts as 0, so ``notes_by_channel.chronicle`` is 0 rather than None when the
@@ -521,11 +558,19 @@ def _probe_recall_offline(run_dir: str | Path, *, min_notes: int = 3) -> float |
 
 
 def _probe_recall_replay(run_dir: str | Path) -> float | None:
+    """Re-run the simulation with probes. Only a scripted run replays: a run that could call a paid provider is
+    refused (ValueError) before anything is built, since its replay would make real calls outside the live budget
+    in a directory deleted afterwards, and would not reproduce the original run anyway."""
     import asyncio
 
+    from void.economy.budget import reachable_providers
     from void.sim.loop import Simulation
 
     cfg = run_config(run_dir).model_copy(deep=True)
+    paid = reachable_providers(cfg)
+    if paid:
+        raise ValueError(f"replay would re-run paid calls ({', '.join(sorted(paid))}) outside the live budget and only "
+                         f"reproduces scripted runs; use the offline probe_recall (without --replay)")
     if cfg.memory.probe_every_ticks <= 0:
         cfg.memory.probe_every_ticks = 6
     with tempfile.TemporaryDirectory(prefix="void-replay-") as tmp:
@@ -816,6 +861,10 @@ COMPUTED: dict[str, Callable[[str | Path, str | None], float | None]] = {
     "gadgets": lambda rd, status: float(gadget_count(rd, status)),
     "recovered_collapse_stress": _with_tier(recovered_collapse_stress),
     "false_claim_rate": _with_tier(false_claim_rate),
+    "claims_made": _with_tier(claims_made),
+    "talks": _with_tier(talks),
+    "forage_income": _no_arg(forage_income),
+    "decision_world_cost": _no_arg(decision_world_cost),
     "notes_by_channel": _with_tier(notes_by_channel),
     **{name: _with_tier(lambda rd, tier=None, col=col: _call_rate(rd, col, tier)) for name, col in _CALL_COLUMNS.items()},
     "probe_recall": _no_arg(probe_recall),
