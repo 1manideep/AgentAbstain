@@ -16,26 +16,27 @@ from pathlib import Path
 import pytest
 from test_experiments import CONFIGS, run_arm
 
-from void.config import usd_to_micro
+from void.config import load_config, usd_to_micro
 from void.research.analysis import end_of_run_outcome, run_config
 from void.research.compare import compare, render
 
 ARMS = ("noop", "index_builder", "hoarder", "decoy")
 SEEDS = (1, 2)
 RUN = {"days": 4, "ticks_per_day": 12}
-# Since the scripted brain follows DESIGN §7.2 (offspring from 2 x min_reserve + endowment), the six founders of
-# this world ($1.50 each) have children on day 1 and the population doubles, and with it the price of the fixture
-# (eight runs with nightly maintenance and exams). The plumbing checked here does not depend on births (they are
-# covered by tests/test_e2e.py and tests/test_scripted_selection.py), so every arm runs without reproduction; the
-# override is the same in every arm, so the arms still differ only in the maintenance strategy.
-POPULATION = {"reproduction_enabled": False}
+# E0 and the memory-dependence check (exp_mem_dep_*, which extends exp_mem_e0_base.yaml) are fixed-population
+# controls: their recorded results (MEMORY_EVOLUTION §10.4) are means over six founders. Since the scripted brain
+# follows DESIGN §7.2 (offspring from 2 x min_reserve + endowment, $1.20 in this world's base.yaml economics), the
+# founders' $1.50 would buy a child each on day 1 and mean_balance would mix in newborns. The shipped
+# exp_mem_e0_base.yaml must therefore turn reproduction off (checked below), and this module runs the shipped configs
+# as they are, with no override of its own.
+DEPENDENCE_ARMS = ("mem", "amnesic")
 
 
 @pytest.fixture(scope="module")
 def e0_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     out = tmp_path_factory.mktemp("exp_mem_e0")
     for arm in ARMS:
-        run_arm(CONFIGS / f"exp_mem_e0_{arm}.yaml", out, SEEDS, run=RUN, population=POPULATION)
+        run_arm(CONFIGS / f"exp_mem_e0_{arm}.yaml", out, SEEDS, run=RUN)
     return out
 
 
@@ -45,6 +46,22 @@ def _db(path: Path):
     conn = sqlite3.connect(str(path / "world.db"))
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def test_e0_and_the_dependence_check_are_fixed_population_controls() -> None:
+    configs = [CONFIGS / f"exp_mem_e0_{arm}.yaml" for arm in ARMS] + [CONFIGS / f"exp_mem_dep_{arm}.yaml" for arm in DEPENDENCE_ARMS]
+    for path in configs:
+        cfg = load_config(path)
+        assert cfg.population.reproduction_enabled is False, f"{path.name}: E0 and exp_mem_dep must not reproduce"
+
+
+def test_no_arm_has_offspring(e0_dir: Path) -> None:
+    for arm in ARMS:
+        for seed in SEEDS:
+            db = _db(e0_dir / arm / f"seed_{seed}")
+            assert db.execute("SELECT COUNT(*) AS n FROM agents WHERE generation > 0").fetchone()["n"] == 0, (arm, seed)
+            births = [json.loads(r["payload"]) for r in db.execute("SELECT payload FROM events WHERE kind='birth'")]
+            assert births and all(b["parent_id"] is None for b in births), (arm, seed)
 
 
 def test_every_arm_pays_for_maintenance_once_per_agent_per_day(e0_dir: Path) -> None:
