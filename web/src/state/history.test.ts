@@ -323,3 +323,110 @@ describe('slots', () => {
     expect(out.count).toBe(h.capacity)
   })
 })
+
+describe('replayed backlog and runs', () => {
+  function walk(n: number, from = 1, ts0 = 0, dt = 500): SnapshotMsg[] {
+    const out: SnapshotMsg[] = []
+    for (let i = 0; i < n; i++) out.push(snap(from + i, ts0 + i * dt, [agent('a', i * 0.5, 0), agent('b', 3, i * 0.25)]))
+    return out
+  }
+
+  it('ignores the last 60 snapshots pushed again: frames, tick order and vtsOfTick are unchanged', () => {
+    const h = new History(600, 8, 4)
+    const snaps = walk(100)
+    for (const s of snaps) h.push(s)
+    const count = h.count
+    const ticks = Array.from({ length: count }, (_, i) => h.frameAt(i).tick)
+    const vts = new Map<number, number | undefined>()
+    for (const s of snaps) vts.set(s.tick, h.vtsOfTick(s.tick))
+    const newestVts = h.newestVts
+    const ema = h.ema
+
+    // A reconnect replays the server's 60-snapshot backlog, sent later and so with later ts_ms.
+    for (const s of snaps.slice(-60)) {
+      const f = h.push({ ...s, ts_ms: s.ts_ms + 120_000 })
+      expect(f.tick).toBe(s.tick)
+    }
+
+    expect(h.count).toBe(count)
+    expect(h.count).toBe(100)
+    expect(h.replayed).toBe(60)
+    for (let i = 0; i < h.count; i++) expect(h.frameAt(i).tick).toBe(ticks[i])
+    for (let i = 1; i < h.count; i++) {
+      expect(h.frameAt(i).tick).toBeGreaterThan(h.frameAt(i - 1).tick)
+      expect(h.frameAt(i).vts).toBeGreaterThanOrEqual(h.frameAt(i - 1).vts)
+    }
+    for (const s of snaps) {
+      expect(h.vtsOfTick(s.tick)).toBe(vts.get(s.tick))
+      expect(h.indexAtTick(s.tick)).toBe(s.tick - 1)
+    }
+    expect(h.newestVts).toBe(newestVts)
+    expect(h.ema).toBe(ema)
+
+    // The live stream then continues where the buffer ended.
+    expect(h.acceptsTick(100)).toBe(false)
+    expect(h.acceptsTick(101)).toBe(true)
+    h.push(snap(101, snaps[99]!.ts_ms + 500, [agent('a', 50, 0)]))
+    expect(h.count).toBe(101)
+    expect(h.vtsOfTick(101)).toBe(h.newestVts)
+  })
+
+  it('drops a snapshot older than the newest frame even when its tick was never stored', () => {
+    const h = new History(64, 8, 4)
+    h.push(snap(1, 0, [agent('a', 0, 0)]))
+    h.push(snap(3, 1000, [agent('a', 1, 0)]))
+    const f = h.push(snap(2, 2000, [agent('a', 9, 9)]))
+    expect(f.tick).toBe(3)
+    expect(h.count).toBe(2)
+    expect(h.vtsOfTick(2)).toBeUndefined()
+  })
+
+  it('keeps frames for the same run and resets on a run change', () => {
+    const h = new History(64, 8, 4)
+    expect(h.beginRun('r1')).toBe(false)
+    for (const s of walk(10)) h.push(s)
+    expect(h.beginRun('r1')).toBe(false)
+    expect(h.count).toBe(10)
+    // A different run starts from an empty buffer, and its (lower) ticks are accepted.
+    expect(h.beginRun('r2')).toBe(true)
+    expect(h.count).toBe(0)
+    expect(h.runId).toBe('r2')
+    for (const s of walk(5)) h.push(s)
+    expect(h.count).toBe(5)
+    expect(h.vtsOfTick(1)).toBe(0)
+    // A plain reset (as ingest does on a new run) keeps the binding.
+    h.reset()
+    expect(h.runId).toBe('r2')
+    expect(h.beginRun('r2')).toBe(false)
+  })
+
+  it('resets frames pushed before any run was bound', () => {
+    const h = new History(64, 8, 4)
+    for (const s of walk(4)) h.push(s)
+    expect(h.beginRun('r1')).toBe(true)
+    expect(h.count).toBe(0)
+  })
+
+  it('uses render_delay_ticks as a floor on the live delay', () => {
+    const h = new History(64, 8, 4)
+    for (const s of walk(30, 1, 0, 1000)) h.push(s)
+    const ema = h.ema
+    expect(h.delay()).toBeCloseTo(1.25 * ema, 9)
+    h.setRenderDelayTicks(2)
+    expect(h.delay()).toBeCloseTo(2 * ema, 9)
+    h.snap()
+    expect(h.playback.renderVts).toBeCloseTo(h.newestVts - 2 * ema, 6)
+    // Below the default factor the default wins.
+    h.setRenderDelayTicks(1)
+    expect(h.delay()).toBeCloseTo(1.25 * ema, 9)
+    // Not a positive finite number: no floor.
+    h.setRenderDelayTicks(Number.NaN)
+    expect(h.renderDelayTicks).toBe(0)
+    h.setRenderDelayTicks(-3)
+    expect(h.renderDelayTicks).toBe(0)
+    // The floor is configuration: a reset keeps it.
+    h.setRenderDelayTicks(3)
+    h.reset()
+    expect(h.renderDelayTicks).toBe(3)
+  })
+})

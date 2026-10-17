@@ -10,6 +10,13 @@
  * `sample(renderVts, out)` is the hot path: no allocation, binary search for the
  * bracketing frames, linear position, shortest-arc heading, linear stress and
  * balance, births scale in over 400 ms, deaths hold position and fade for 1 s.
+ *
+ * Ticks are strictly increasing within a run: `push` ignores a snapshot whose
+ * tick is not newer than the newest frame (a reconnect replays the server's
+ * backlog), so the binary searches by tick and vts stay valid. `beginRun` binds
+ * the buffer to a run and resets it when the run changes. The render delay is
+ * `max(1.25, render_delay_ticks)·ema` once the server's `render_delay_ticks`
+ * has been applied with `setRenderDelayTicks`.
  */
 
 import type { AgentStatus, AnimState, SnapshotMsg } from '../protocol'
@@ -221,6 +228,12 @@ export class History {
   newestVts = 0
   oldestVts = 0
   newestTs = 0
+  /** The run the frames belong to (null until `beginRun`). Kept across `reset`. */
+  runId: string | null = null
+  /** `hello.config.render_delay_ticks`: a floor on the live render delay, in ticks of ema. Kept across `reset`. */
+  renderDelayTicks = 0
+  /** Snapshots ignored by `push` because their tick was not newer than the newest frame. */
+  replayed = 0
 
   capacity: number
   readonly agentIndex = new Map<string, number>()
@@ -296,6 +309,23 @@ export class History {
     }
   }
 
+  /**
+   * Bind the buffer to a run. A different run (or frames held before any run was bound) resets it;
+   * the same run keeps its frames, so a reconnect only appends what is newer. Returns whether it reset.
+   */
+  beginRun(runId: string): boolean {
+    if (this.runId === runId) return false
+    const stale = this.runId !== null || this._count > 0
+    this.runId = runId
+    if (stale) this.reset()
+    return stale
+  }
+
+  /** Apply `hello.config.render_delay_ticks`; anything not a positive finite number clears the floor. */
+  setRenderDelayTicks(ticks: number): void {
+    this.renderDelayTicks = typeof ticks === 'number' && Number.isFinite(ticks) && ticks > 0 ? ticks : 0
+  }
+
   reset(): void {
     this.frames.fill(null)
     this.head = 0
@@ -305,6 +335,7 @@ export class History {
     this.newestVts = 0
     this.oldestVts = 0
     this.newestTs = 0
+    this.replayed = 0
     this.agentIndex.clear()
     this.nodeIndex.clear()
     this.freeSlots = []
@@ -438,9 +469,25 @@ export class History {
 
   // ------------------------------------------------------------ ingest
 
-  /** Parse a snapshot into a frame and append it. Returns the frame. */
+  /** Whether `push` would store a snapshot of this tick (it is newer than the newest frame). */
+  acceptsTick(tick: number): boolean {
+    const prev = this.newest()
+    return prev === null || tick > prev.tick
+  }
+
+  /**
+   * Parse a snapshot into a frame and append it. Returns the frame. A snapshot whose tick is not newer
+   * than the newest frame (a replayed backlog after a reconnect) is ignored: nothing changes and the
+   * frame already stored for that tick, or the newest frame when there is none, is returned.
+   */
   push(snap: SnapshotMsg): Frame {
     const prev = this.newest()
+    if (prev && snap.tick <= prev.tick) {
+      this.replayed++
+      const i = this.indexAtTick(snap.tick)
+      const f = i >= 0 ? this.frameAt(i) : prev
+      return f.tick === snap.tick ? f : prev
+    }
     // Virtual timeline: clamp each step so pauses never freeze interpolation.
     let vts: number
     if (!prev) {
@@ -602,8 +649,10 @@ export class History {
     return this._count === 0 ? -1 : this.indexAtVts(this.playback.renderVts)
   }
 
+  /** Live render delay: `max(DELAY_FACTOR·ema, render_delay_ticks·ema)`. */
   delay(): number {
-    return DELAY_FACTOR * this.ema
+    const k = this.renderDelayTicks > DELAY_FACTOR ? this.renderDelayTicks : DELAY_FACTOR
+    return k * this.ema
   }
 
   liveTarget(): number {
