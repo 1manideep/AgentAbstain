@@ -59,10 +59,14 @@ def fingerprint(config: Path, overrides: dict[str, Any], workdir: Path, monkeypa
 
 NO_CHILD_PROVIDERS = {"population": {"tier_mutation_prob": 0.0}, "run": {"days": 2}}
 
+# The metrics digests were re-recorded when metrics rows gained keys (tick gadget fields, the full by_tier /
+# by_generation fields with stress_bins, day link_density / vault / vault_by_agent). That change was checked to be
+# purely additive: removing the new keys from the new rows gives back the old rows exactly; nothing else moved.
+
 BASE_GOLDEN = {
     "status": "completed",
     "config_hash": "f589277f12656996537c99ed2f9968389a7d067d6bb94a5b6683ba201fbc1b51",
-    "metrics": "2a14273e6ff02408e32eb9823ba48f8631f4a0293e4c31295fb3c321e06087db",
+    "metrics": "c2be52a599c4ff3e282ce931ca3145ebef011ed16c5df42991f951192ad5e427",
     "events": "3f9ddd5211be312b1f17d4af60967f3e0b2a5ed5da5ca61f8511597603993807",
     "calls": "8e3f88341f07b77eff388dbccc83737e01792e6398cdfb6d6eb13b772ae8c5dc",
     "ledger": "69cc1acf2f945851cd6d75ee5c73bf715048ae2366f340d9658728b9b5cd7b37",
@@ -71,7 +75,7 @@ BASE_GOLDEN = {
 AMNESIC_FOG_GOLDEN = {
     "status": "completed",
     "config_hash": "fb105920e6b0993e29971b43cf9f1c984343500dcb33fa8178b837499498c47d",
-    "metrics": "912052045831afd8c6301e9455eaa8024cbc20e6bb71739da627a0a08849c6b9",
+    "metrics": "e26476ceec9018344294c550a42a3c40e45b3b825106081920b882aed01cc72f",
     "events": "75e82ce6cb6f8ee827b7293a303f35a15829efc68c589294df1420c6f3686294",
     "calls": "f266313eec9dc6d017a7b03951e90880d8ad5943d9958f0f1d69ce93233d7da1",
     "ledger": "61b2acd093d556e97364681d40ca452c4b623a9508cab9b1959579be5ff77905",
