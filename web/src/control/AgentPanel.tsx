@@ -1,12 +1,14 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import type { AgentDetail, NoteRecord } from '../protocol'
+import type { AgentDetail, CallRecord, NoteRecord } from '../protocol'
 import { apiGet } from '../net/api'
 import { cameraCommands } from '../scene/sceneState'
 import { selectTierColor, useStore } from '../state/store'
 import { fmtNum, fmtUsd, SERIES } from './charts/chartTheme'
 import { Sparkline } from './charts/Sparkline'
+import { NoteProvenance } from './NoteProvenance'
 import { NoteText } from './NoteText'
+import { PolicyHistory } from './PolicyHistory'
 import { wordDiff } from './wordDiff'
 
 const REFRESH_MS = 20000
@@ -45,7 +47,17 @@ const SelfHistory = memo(function SelfHistory({ versions }: { versions: AgentDet
   )
 })
 
-const Notes = memo(function Notes({ notes }: { notes: NoteRecord[] }) {
+/** Channels whose notes came from another agent; opening one fetches its provenance. */
+const PROVENANCE_CHANNELS = new Set(['gossip', 'inherited', 'chronicle'])
+
+interface NotesProps {
+  agentId: string
+  notes: NoteRecord[]
+  nameOf: (id: string) => string
+  onSelectAgent: (id: string) => void
+}
+
+const Notes = memo(function Notes({ agentId, notes, nameOf, onSelectAgent }: NotesProps) {
   const [active, setActive] = useState<string | null>(null)
   const refs = useRef(new Map<string, HTMLLIElement>())
   const byTitle = useMemo(() => {
@@ -66,28 +78,159 @@ const Notes = memo(function Notes({ notes }: { notes: NoteRecord[] }) {
   if (notes.length === 0) return <div className="muted small">No notes.</div>
   return (
     <ul className="notes">
-      {notes.map((n) => (
-        <li
-          key={n.note_id}
-          className={'note' + (active === n.note_id ? ' active' : '') + (n.archived ? ' archived' : '')}
-          ref={(el) => {
-            if (el) refs.current.set(n.note_id, el)
-            else refs.current.delete(n.note_id)
-          }}
-          onClick={() => setActive(n.note_id)}
-        >
-          <div className="note-head">
-            <span className="note-title">{n.title}</span>
-            <span className={'tag ' + n.channel}>{n.channel}</span>
-            {n.hop > 0 ? <span className="muted small">hop {n.hop}</span> : null}
-            <span className="muted small tnum">t{n.created_tick}</span>
-          </div>
-          <div className="note-body">
-            <NoteText text={n.body} onLink={onLink} resolves={resolves} />
-          </div>
-        </li>
-      ))}
+      {notes.map((n) => {
+        const transferred = PROVENANCE_CHANNELS.has(n.channel)
+        return (
+          <li
+            key={n.note_id}
+            className={'note' + (active === n.note_id ? ' active' : '') + (n.archived ? ' archived' : '')}
+            ref={(el) => {
+              if (el) refs.current.set(n.note_id, el)
+              else refs.current.delete(n.note_id)
+            }}
+            title={transferred ? 'click to see where this note came from' : undefined}
+            onClick={(e) => {
+              // a wikilink in the body already moved the selection to its target; do not take it back
+              if (e.target instanceof Element && e.target.closest('.wikilink[role="button"]')) return
+              setActive(n.note_id)
+            }}
+          >
+            <div className="note-head">
+              <span className="note-title">{n.title}</span>
+              <span className={'tag ' + n.channel}>{n.channel}</span>
+              {n.hop > 0 ? <span className="muted small">hop {n.hop}</span> : null}
+              <span className="muted small tnum">t{n.created_tick}</span>
+            </div>
+            <div className="note-body">
+              <NoteText text={n.body} onLink={onLink} resolves={resolves} />
+            </div>
+            {transferred && active === n.note_id ? (
+              <NoteProvenance agentId={agentId} noteId={n.note_id} nameOf={nameOf} onSelectAgent={onSelectAgent} onLink={onLink} resolves={resolves} />
+            ) : null}
+          </li>
+        )
+      })}
     </ul>
+  )
+})
+
+/** The purposes a call is metered under that the panel always lists; others (gossip, chronicle) follow when present. */
+const CORE_PURPOSES = ['decide', 'maintain', 'exam']
+
+interface PurposeCost {
+  purpose: string
+  calls: number
+  realUsd: number
+  worldUsd: number
+}
+
+/**
+ * Cost of the agent's recent calls by purpose, or null when no call carries a purpose (a server that only
+ * records decide calls). A call without a purpose counts as decide, the llm_calls default.
+ */
+function splitByPurpose(calls: CallRecord[]): PurposeCost[] | null {
+  if (!calls.some((c) => typeof c.purpose === 'string' && c.purpose !== '')) return null
+  const by = new Map<string, PurposeCost>(CORE_PURPOSES.map((p) => [p, { purpose: p, calls: 0, realUsd: 0, worldUsd: 0 }]))
+  for (const c of calls) {
+    const p = typeof c.purpose === 'string' && c.purpose !== '' ? c.purpose : 'decide'
+    let row = by.get(p)
+    if (!row) by.set(p, (row = { purpose: p, calls: 0, realUsd: 0, worldUsd: 0 }))
+    row.calls += 1
+    if (Number.isFinite(c.real_cost_usd)) row.realUsd += c.real_cost_usd
+    const world = c.world_cost_usd ?? c.cost_usd
+    if (typeof world === 'number' && Number.isFinite(world)) row.worldUsd += world
+  }
+  const core = CORE_PURPOSES.map((p) => by.get(p)!)
+  const rest = [...by.values()].filter((r) => !CORE_PURPOSES.includes(r.purpose)).sort((a, b) => a.purpose.localeCompare(b.purpose))
+  return [...core, ...rest]
+}
+
+const NUM_CELL = { textAlign: 'right', padding: '1px 0 1px 10px' } as const
+const NAME_CELL = { textAlign: 'left', padding: '1px 0', fontWeight: 400 } as const
+
+/**
+ * The agent's recent call cost split by purpose (decide, maintain, exam, then any other purpose present), in
+ * real and world dollars. When the calls carry no purpose the costs are labelled decide only.
+ */
+export const CallCostSplit = memo(function CallCostSplit({ calls }: { calls: CallRecord[] }) {
+  const split = useMemo(() => splitByPurpose(calls), [calls])
+  if (calls.length === 0) return null
+  if (!split) {
+    return (
+      <div className="chart-sub" data-purpose="decide-only">
+        decide only · {calls.length} calls · {fmtUsd(calls.reduce((s, c) => s + (Number.isFinite(c.real_cost_usd) ? c.real_cost_usd : 0), 0), 4)} real
+      </div>
+    )
+  }
+  const hasWorld = calls.some((c) => typeof (c.world_cost_usd ?? c.cost_usd) === 'number')
+  return (
+    <table className="cost-split small" style={{ borderCollapse: 'collapse', width: '100%', margin: '2px 0 6px' }}>
+      <thead>
+        <tr className="muted">
+          <th style={NAME_CELL}>last {calls.length} calls</th>
+          <th style={NUM_CELL}>calls</th>
+          <th style={NUM_CELL}>real</th>
+          {hasWorld ? <th style={NUM_CELL}>world</th> : null}
+        </tr>
+      </thead>
+      <tbody>
+        {split.map((r) => (
+          <tr key={r.purpose} data-purpose={r.purpose} className={r.calls === 0 ? 'muted' : undefined}>
+            <td style={NAME_CELL}>{r.purpose}</td>
+            <td className="tnum" style={NUM_CELL}>
+              {r.calls}
+            </td>
+            <td className="tnum" style={NUM_CELL}>
+              {fmtUsd(r.realUsd, 4)}
+            </td>
+            {hasWorld ? (
+              <td className="tnum" style={NUM_CELL}>
+                {fmtUsd(r.worldUsd, 4)}
+              </td>
+            ) : null}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+})
+
+/** Server order of the six personality traits (void/agents/models.py TRAITS); unknown ones follow. */
+const TRAIT_ORDER = ['greed', 'sociability', 'curiosity', 'caution', 'industriousness', 'honesty']
+
+/** The roster's motto and personality traits (each in [0, 1], drawn as a bar). Nothing when the roster has neither. */
+export const Persona = memo(function Persona({ motto, traits }: { motto?: string; traits?: Record<string, number> }) {
+  const entries = useMemo(() => {
+    const t = traits && typeof traits === 'object' ? traits : {}
+    const keys = [...TRAIT_ORDER.filter((k) => k in t), ...Object.keys(t).filter((k) => !TRAIT_ORDER.includes(k))]
+    return keys.map((k) => [k, t[k]] as const).filter((e): e is readonly [string, number] => typeof e[1] === 'number' && Number.isFinite(e[1]))
+  }, [traits])
+  const text = typeof motto === 'string' ? motto.trim() : ''
+  if (!text && entries.length === 0) return null
+  return (
+    <>
+      <h3 className="sub">Persona</h3>
+      {text ? (
+        <p className="motto" style={{ margin: '0 0 6px', fontStyle: 'italic', color: 'var(--text-2)' }}>
+          “{text}”
+        </p>
+      ) : null}
+      {entries.length > 0 ? (
+        <div className="traits" style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr 34px', gap: '2px 10px', alignItems: 'center' }}>
+          {entries.map(([k, v]) => (
+            <Fragment key={k}>
+              <span className="muted">{k}</span>
+              <span style={{ height: 6, borderRadius: 3, background: 'var(--surface-3)', overflow: 'hidden' }}>
+                <span data-trait={k} style={{ display: 'block', height: '100%', width: `${Math.round(Math.min(1, Math.max(0, v)) * 100)}%`, background: SERIES[6] }} />
+              </span>
+              <span className="tnum small" style={{ textAlign: 'right' }}>
+                {fmtNum(v, 2)}
+              </span>
+            </Fragment>
+          ))}
+        </div>
+      ) : null}
+    </>
   )
 })
 
@@ -129,6 +272,7 @@ export const AgentPanel = memo(function AgentPanel() {
   const balances = useMemo(() => (detail ? detail.balance_series.map((b) => b.balance_usd) : []), [detail])
   const fmtCost = useCallback((v: number) => fmtUsd(v, 4), [])
   const fmtBal = useCallback((v: number) => fmtUsd(v, 3), [])
+  const nameOf = useCallback((aid: string) => rosterById.get(aid)?.name ?? aid, [rosterById])
 
   if (!id) return <div className="muted small">Click an agent in the scene (double-click to follow). Esc clears.</div>
   const color = selectTierColor(config, agent?.tier ?? '')
@@ -198,16 +342,26 @@ export const AgentPanel = memo(function AgentPanel() {
         </dd>
       </dl>
 
+      <Persona motto={agent?.motto} traits={agent?.traits} />
+
       <h3 className="sub">Call history · cost per call</h3>
       <Sparkline values={costs} color={SERIES[0]} format={fmtCost} />
+      {detail ? <CallCostSplit calls={detail.calls} /> : null}
       <h3 className="sub">Balance</h3>
       <Sparkline values={balances} color={color} format={fmtBal} />
 
       <h3 className="sub">Self summary · versions</h3>
       {detail ? <SelfHistory versions={detail.self_versions} /> : err ? <div className="error small">{err}</div> : <div className="muted small">loading…</div>}
 
+      {config?.memory_layer?.policy ? (
+        <>
+          <h3 className="sub">Memory policy · versions</h3>
+          <PolicyHistory agentId={id} nameOf={nameOf} onSelectAgent={select} />
+        </>
+      ) : null}
+
       <h3 className="sub">Notes</h3>
-      {detail ? <Notes notes={detail.notes} /> : null}
+      {detail ? <Notes key={id} agentId={id} notes={detail.notes} nameOf={nameOf} onSelectAgent={select} /> : null}
     </div>
   )
 })
