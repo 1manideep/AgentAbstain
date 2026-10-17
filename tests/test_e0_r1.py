@@ -96,12 +96,10 @@ def test_every_e0_arm_resolves_the_same_index_boost() -> None:
             assert "tiers.scripted.maintenance_strategy" in diff, (a, b, diff)
 
 
-def test_the_dependence_arms_inherit_the_value_and_run_no_maintenance() -> None:
-    base = load_config(CONFIGS / "exp_mem_e0_base.yaml").memory.index_boost
+def test_the_dependence_arms_run_no_maintenance() -> None:
     for arm in ("mem", "amnesic"):
         cfg = load_config(CONFIGS / f"exp_mem_dep_{arm}.yaml")
-        assert cfg.memory.index_boost == base
-        assert not cfg.memory.maintenance.enabled  # no nightly batch, so no file under /memories/index/: R1 is R0 there
+        assert not cfg.memory.maintenance.enabled  # no nightly batch, so no file under /memories/index/
 
 
 # --- the index builder under R1 ----------------------------------------------------------------------------------
@@ -154,3 +152,11 @@ def test_the_hoarder_holds_no_index_note_so_r1_ranks_as_r0(tmp_path: Path) -> No
                 assert stats1 == stats0 and stats1.get("index_entries", 0) == 0
     finally:
         sim.db.close()
+
+
+@pytest.mark.parametrize("config", ["exp_mem_dep_mem", "exp_mem_dep_amnesic", "live_claude_dep_mem", "live_claude_dep_amnesic",
+                                    "live_claude_dep_veins_mem", "live_claude_dep_veins_amnesic"])
+def test_the_memory_dependence_check_stays_on_r0(config: str) -> None:
+    # the dependence configs extend the E0 base, but the check is about the default scaffold: a live agent may tag a
+    # note `index` itself, which R1 would boost, so exp_mem_dep_base.yaml pins the boost back to 0
+    assert load_config(CONFIGS / f"{config}.yaml").memory.index_boost == 0.0
