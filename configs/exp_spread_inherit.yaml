@@ -2,6 +2,10 @@
 # The three arms (gossip / inherit / both) toggle gossip.enabled and population.reproduction_enabled
 # and nothing else. A tracer note is planted in Ada's vault on day 1. Primary `tracer_reach`
 # (alive agents holding a descendant of the tracer note, last tick row); secondary `tracer_adopters`.
+# Starting balance $1.30 (base $1.50), the same in every arm: under the scripted offspring rule (DESIGN §7.2,
+# 2 x min_reserve + endowment = $1.20) each founder can afford one child at once, so the six places under the cap
+# go one per founder rather than to whoever reproduces twice first. The tracer holder then has a child in most
+# seeds, without which inheritance cannot carry the note at all.
 # VoidConfig.warnings() is empty for this config.
 extends: base.yaml
 run:
@@ -9,6 +13,7 @@ run:
   days: 4
   ticks_per_day: 12
 population:
+  starting_balance_usd: 1.30
   reproduction_enabled: true
 entropy:
   degeneration:

@@ -13,6 +13,10 @@ fallback):
 Each run happens in its own working directory with a relative run dir, so no absolute path reaches a payload.
 If one of these fails after an intended change to an *enabled* mechanism, the change leaked into worlds that do
 not use it; re-record a digest only for a deliberate change to the old behaviour, and say so in the commit.
+
+Re-recorded once, deliberately, when the scripted brain started to follow DESIGN §7.2 (offspring from
+2 x min_reserve + endowment under per-parent names, greed-scaled transfers, nudges toward yield-positive weather,
+random gadget parameters, sleep when calls burn more than a forage earns): both worlds now have births.
 """
 
 from __future__ import annotations
@@ -62,23 +66,25 @@ NO_CHILD_PROVIDERS = {"population": {"tier_mutation_prob": 0.0}, "run": {"days":
 # The metrics digests were re-recorded when metrics rows gained keys (tick gadget fields, the full by_tier /
 # by_generation fields with stress_bins, day link_density / vault / vault_by_agent). That change was checked to be
 # purely additive: removing the new keys from the new rows gives back the old rows exactly; nothing else moved.
+# The DESIGN §7.2 scripted brain then moved every digest (births in both worlds); its metrics digests were recorded
+# on top of the added keys, and stripping those keys from these rows gives back the §7.2 rows recorded without them.
 
 BASE_GOLDEN = {
     "status": "completed",
     "config_hash": "f589277f12656996537c99ed2f9968389a7d067d6bb94a5b6683ba201fbc1b51",
-    "metrics": "c2be52a599c4ff3e282ce931ca3145ebef011ed16c5df42991f951192ad5e427",
-    "events": "3f9ddd5211be312b1f17d4af60967f3e0b2a5ed5da5ca61f8511597603993807",
-    "calls": "8e3f88341f07b77eff388dbccc83737e01792e6398cdfb6d6eb13b772ae8c5dc",
-    "ledger": "69cc1acf2f945851cd6d75ee5c73bf715048ae2366f340d9658728b9b5cd7b37",
+    "metrics": "8b7a0f7a23744324bff96edc96f5c2f3ef08d9ad412ae786aaeaf722f86bbbd8",
+    "events": "7b86641db05416f9e6777345858843f861e952465fea8623ecb28a5081fc4038",
+    "calls": "8cbe69f9a6789fb9a9f14a703bdd5ae15dc5af98636f2868b5013580e92660e8",
+    "ledger": "7270da6251493fa8fef512b3eb91b864d03c3f873a1c0eebe3e7c2791c29cd86",
 }
 
 AMNESIC_FOG_GOLDEN = {
     "status": "completed",
     "config_hash": "fb105920e6b0993e29971b43cf9f1c984343500dcb33fa8178b837499498c47d",
-    "metrics": "e26476ceec9018344294c550a42a3c40e45b3b825106081920b882aed01cc72f",
-    "events": "75e82ce6cb6f8ee827b7293a303f35a15829efc68c589294df1420c6f3686294",
-    "calls": "f266313eec9dc6d017a7b03951e90880d8ad5943d9958f0f1d69ce93233d7da1",
-    "ledger": "61b2acd093d556e97364681d40ca452c4b623a9508cab9b1959579be5ff77905",
+    "metrics": "aceec8505aae9bb3c3ebb685df68af7f53c882f738faa09d3e9dd799ca08871e",
+    "events": "4c2857075a953610723d500bca16e048f78b2d80dc6c370cc63582aaed0a11fb",
+    "calls": "e5a71250b2af8c467a1e7c9cce6b400851cb464f6c49016b2108cc29809ff954",
+    "ledger": "53cef13500522cca21b3096354dcf1f1f0a30da269d27fa5488a11e0f8ea61f6",
 }
 
 

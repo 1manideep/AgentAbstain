@@ -23,13 +23,19 @@ from void.research.compare import compare, render
 ARMS = ("noop", "index_builder", "hoarder", "decoy")
 SEEDS = (1, 2)
 RUN = {"days": 4, "ticks_per_day": 12}
+# Since the scripted brain follows DESIGN §7.2 (offspring from 2 x min_reserve + endowment), the six founders of
+# this world ($1.50 each) have children on day 1 and the population doubles, and with it the price of the fixture
+# (eight runs with nightly maintenance and exams). The plumbing checked here does not depend on births (they are
+# covered by tests/test_e2e.py and tests/test_scripted_selection.py), so every arm runs without reproduction; the
+# override is the same in every arm, so the arms still differ only in the maintenance strategy.
+POPULATION = {"reproduction_enabled": False}
 
 
 @pytest.fixture(scope="module")
 def e0_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     out = tmp_path_factory.mktemp("exp_mem_e0")
     for arm in ARMS:
-        run_arm(CONFIGS / f"exp_mem_e0_{arm}.yaml", out, SEEDS, run=RUN)
+        run_arm(CONFIGS / f"exp_mem_e0_{arm}.yaml", out, SEEDS, run=RUN, population=POPULATION)
     return out
 
 
