@@ -32,6 +32,7 @@ __all__ = [
     "normalise_title",
     "render_frontmatter",
     "split_frontmatter",
+    "body_of",
     "render_note",
     "parse_note",
     "split_related",
@@ -42,6 +43,24 @@ __all__ = [
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]]+?)\]\]")
 _YAML_WIDTH = 1_000_000  # never fold long scalars onto several lines
 DEFAULT_TITLE = "untitled"
+
+# Frontmatter is *read* with libyaml when PyYAML was built with it (several times faster than the pure loader and
+# identical on everything the kernel writes; the two differ only on malformed hand edits, e.g. a tab before a value).
+# It is *written* with the pure dumper only: libyaml escapes characters outside the Basic Multilingual Plane (an
+# emoji in a title) and treats NEL and long mapping keys differently, so its bytes differ and manifest hashes would
+# move; the speed comes from memoising fragments instead (``_FRAGMENTS``).
+_SAFE_LOADER: Any = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+# A frontmatter block: the first line is ``---``, then whole lines up to the first other ``---`` line (each
+# delimiter may carry trailing carriage returns, as ``split_frontmatter`` allows), then a newline or the end.
+_FRONTMATTER_RE = re.compile(r"---\r*\n(?:[^\n]*\n)*?---\r*(?:\n|\Z)")
+
+# Memo of rendered ``key: value`` fragments. A note's frontmatter is rendered at least twice per write (the file
+# and its manifest hash) and again on every backlink, and most fragments (importance, created tick, tags, the
+# native provenance block) repeat across notes; the pure dumper costs about a millisecond a call. Values are
+# frozen with their types so ``1``, ``1.0`` and ``True`` never share an entry; the memo is cleared when full.
+_FRAGMENTS: dict[tuple[str, object], str] = {}
+_FRAGMENTS_MAX = 65_536
 
 # ``operator`` is never written by the kernel on a fresh note: ``MemoryStore.reindex`` assigns it to a vault file
 # whose content hash does not match the manifest (a hand edit in Obsidian, or a file the kernel never wrote), so
@@ -208,29 +227,59 @@ def render_frontmatter(mapping: dict[str, Any]) -> str:
     """``---`` block for ``mapping``: scalar keys in block style, collections in flow style.
 
     Keys are the module's own identifiers (never user text), so they are written verbatim.
+    Fragments are memoised (see ``_FRAGMENTS``); the bytes are exactly what the pure dumper writes.
     """
-    parts: list[str] = []
-    for key, value in mapping.items():
-        if isinstance(value, (list, tuple, dict)):
-            flow = yaml.safe_dump(
-                list(value) if isinstance(value, tuple) else value,
-                default_flow_style=True,
-                sort_keys=False,
-                allow_unicode=True,
-                width=_YAML_WIDTH,
-            ).strip()
-            parts.append(f"{key}: {flow}\n")
-        else:
-            parts.append(
-                yaml.safe_dump(
-                    {key: value},
-                    default_flow_style=False,
-                    sort_keys=False,
-                    allow_unicode=True,
-                    width=_YAML_WIDTH,
-                )
-            )
-    return "---\n" + "".join(parts) + "---\n"
+    return "---\n" + "".join(_fragment(key, value) for key, value in mapping.items()) + "---\n"
+
+
+def _fragment(key: str, value: Any) -> str:
+    """The ``key: value`` line(s) for one frontmatter entry, from the memo when this exact value was rendered before."""
+    try:
+        memo_key = (key, _freeze(value))
+    except TypeError:  # not a plain value: render it without the memo
+        return _render_fragment(key, value)
+    hit = _FRAGMENTS.get(memo_key)
+    if hit is None:
+        hit = _render_fragment(key, value)
+        if len(_FRAGMENTS) >= _FRAGMENTS_MAX:
+            _FRAGMENTS.clear()
+        _FRAGMENTS[memo_key] = hit
+    return hit
+
+
+def _render_fragment(key: str, value: Any) -> str:
+    if isinstance(value, (list, tuple, dict)):
+        flow = yaml.safe_dump(
+            list(value) if isinstance(value, tuple) else value,
+            default_flow_style=True,
+            sort_keys=False,
+            allow_unicode=True,
+            width=_YAML_WIDTH,
+        ).strip()
+        return f"{key}: {flow}\n"
+    return yaml.safe_dump(
+        {key: value},
+        default_flow_style=False,
+        sort_keys=False,
+        allow_unicode=True,
+        width=_YAML_WIDTH,
+    )
+
+
+def _freeze(value: Any) -> object:
+    """A hashable stand-in for a plain value (str, int, bool, float, None, and lists, tuples and dicts of them) that
+    keeps every exact type and the dict key order, so two values share a key only when the dumper writes the same
+    bytes for both. Anything else raises ``TypeError`` and is rendered without the memo."""
+    kind = type(value)
+    if kind is list or kind is tuple:
+        return (kind, tuple(_freeze(v) for v in value))
+    if kind is dict:
+        return (kind, tuple((_freeze(k), _freeze(v)) for k, v in value.items()))
+    if kind is float:
+        return (kind, repr(value))  # repr tells -0.0 from 0.0 (equal as floats, written differently)
+    if kind is str or kind is int or kind is bool or value is None:
+        return (kind, value)
+    raise TypeError(f"{kind.__name__} values are not memoised")
 
 
 def split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
@@ -246,13 +295,34 @@ def split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
         if lines[i].rstrip("\r") != "---":
             continue
         try:
-            data = yaml.safe_load("\n".join(lines[1:i]))
+            data = _safe_load("\n".join(lines[1:i]))
         except yaml.YAMLError:
             return {}, text
         if not isinstance(data, dict):
             data = {}
         return data, "\n".join(lines[i + 1 :])
     return {}, text
+
+
+def _safe_load(text: str) -> Any:
+    try:
+        return yaml.load(text, Loader=_SAFE_LOADER)  # a safe loader: the C one or the pure one
+    except UnicodeError:
+        # libyaml cannot encode a lone surrogate (possible in agent text decoded from JSON); the pure loader
+        # reports it as a YAMLError, which is what callers expect for a malformed block
+        return yaml.safe_load(text)
+
+
+def body_of(text: str) -> str:
+    """The text after the frontmatter block, without parsing the YAML in it: ``split_frontmatter(text)[1]``.
+
+    For the read paths that discard the mapping (``MemoryStore._load``). It equals ``split_frontmatter`` on every
+    file the kernel writes and wherever there is no block (no leading ``---`` line, or no closing one). The one
+    difference is a delimited block that is not valid YAML (only a hand edit can produce one): ``split_frontmatter``
+    then returns the whole text, ``body_of`` still the text after the block.
+    """
+    match = _FRONTMATTER_RE.match(text)
+    return text if match is None else text[match.end() :]
 
 
 # --- note <-> markdown --------------------------------------------------------------------
