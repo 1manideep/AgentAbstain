@@ -1,0 +1,10 @@
+# exp_mem_e2, arm a: selection arm A, pure ecological selection. Canary facts are still printed (the worlds match);
+# no reward exam is asked and nothing is paid for recall.
+extends: exp_mem_e2_base.yaml
+run:
+  name: exp_mem_e2_a
+memory:
+  selection:
+    arm: A
+experiment:
+  arm: a

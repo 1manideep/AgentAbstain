@@ -1,4 +1,4 @@
-"""The audit exam (MEMORY_EVOLUTION §5.8, Appendix E).
+"""The audit exam (MEMORY_EVOLUTION §5.8, Appendix E) and the reward exam of selection arm B.
 
 Questions are generated from what the kernel recorded as *shown to that agent* (the ``observation`` JSON
 stored with every decision call), asked at least ``memory.exam.delay_days`` later, and graded by exact
@@ -61,6 +61,24 @@ tokens never reads as an agent choosing to abstain. Every item emits ``EXAM_ASKE
 visibility). All of an agent's rows (items, answers, the call row) commit in one transaction; only the
 wallet meter commits on its own, as every paid call does. ``exam_day`` in ``world_kv`` and a per-agent check
 on ``exam_items`` make the step resume-safe: a restarted run never asks a day twice.
+
+The reward exam (§5.8, arm B only: ``memory.selection.arm: B``). Each day, after the audit exam, every living agent
+is asked up to ``memory.selection.reward_questions_per_agent`` items (``exam_items.exam = 'reward'``, kind
+``canary``) about canary facts (:mod:`void.research.canary`) published at least ``reward_delay_days`` before (counted
+from the tick their chronicle was published) and while the agent was alive (published at or after its birth tick);
+distinct facts within a day, those never asked to the agent first (:meth:`Exams.reward_drafts`). The facts are drawn
+from ``rng.stream("reward_exam", agent_id, day)``, so the audit exam's draws are the same in every arm. The question is
+the fact's line with the answer blanked (:func:`void.research.canary.question`) and the options are its closed answer
+set, finalised like the audit's. Scripted tiers answer from retrieval: the first retrieved note that holds the line
+with one of the options in the blank (:func:`void.research.canary.fill_from`) answers it, else they abstain; scripted
+brains remember the chronicle's headline, not its lines, so they abstain on canaries unless something else put the line
+in their notes. Provider tiers get the same paid call as the audit exam (research pool, purpose ``exam``) with a system
+prompt that names the reward (:func:`reward_system_prompt`). Grading is the same exact match. Each correct answer is
+paid ``recall_reward_usd`` from the ``research_pool`` kernel wallet to the agent (``Wallet.transfer``, both ledger rows
+of kind ``recall_reward``, ``ref`` the item id), after the agent's items commit and outside any transaction, and emits
+``RECALL_REWARD`` (operator visibility; ``paid`` false with a reason when the pool cannot cover it or the reward is 0).
+The audit exam stays as it was: never rewarded, its items and events unchanged. ``reward_exam_day`` in ``world_kv``
+and the per-agent check make the reward step resume-safe too.
 """
 
 from __future__ import annotations
@@ -80,6 +98,8 @@ from void.brain.decision import _strictify, parse_lenient, sanitize_text
 from void.brain.prompt import estimate_tokens, fence, system_prompt
 from void.config import micro_to_usd, usd_to_micro
 from void.events import OPERATOR, Event, Kind
+from void.research.canary import Canaries, CanaryFact, cloze, fill_from
+from void.research.canary import question as canary_question
 from void.types import RetrievedNote
 
 if TYPE_CHECKING:
@@ -88,11 +108,13 @@ if TYPE_CHECKING:
     from void.sim.loop import Simulation
 
 __all__ = [
-    "ABSTAIN", "BALANCE_BUCKETS", "BALANCE_CUTS", "BALANCE_LABELS", "KINDS", "NOBODY", "SELF_SOURCE", "STOCK_LABELS",
-    "Draft", "ExamAnswer", "ExamItem", "ExamReport", "Exams", "answer_choices", "answer_from_memory", "balance_label",
-    "day_of", "exam_schema", "exam_system_prompt", "finalize_options", "grade", "match_option", "node_questions",
-    "normalise", "parse_answer", "question_balance", "question_claim", "question_heard", "question_neighbour",
-    "question_node", "question_transfer", "relevant_texts", "render_exam_prompt", "score",
+    "ABSTAIN", "AUDIT", "BALANCE_BUCKETS", "BALANCE_CUTS", "BALANCE_LABELS", "CANARY_KIND", "KINDS", "NOBODY",
+    "RECALL_REWARD_KIND", "RESEARCH_POOL", "REWARD", "SELF_SOURCE", "STOCK_LABELS",
+    "Draft", "ExamAnswer", "ExamItem", "ExamReport", "Exams", "RewardReport", "answer_choices", "answer_from_memory",
+    "balance_label", "day_of", "exam_schema", "exam_system_prompt", "finalize_options", "grade", "match_option",
+    "node_questions", "normalise", "parse_answer", "question_balance", "question_claim", "question_heard",
+    "question_neighbour", "question_node", "question_transfer", "relevant_texts", "render_exam_prompt",
+    "reward_clause", "reward_draft", "reward_system_prompt", "score",
 ]
 
 ABSTAIN = "I do not remember"
@@ -112,6 +134,11 @@ EXAM_CLAUSE = (
     "\n\nEXAM: answer the question from memory with exactly one of the options; choose '" + ABSTAIN
     + "' when unsure (wrong answers are penalised, abstentions are not)."
 )
+AUDIT = "audit"
+REWARD = "reward"
+CANARY_KIND = "canary"                 # the reward exam's only kind: a question about a canary fact
+RESEARCH_POOL = "research_pool"        # the kernel wallet that pays exam calls and recall rewards
+RECALL_REWARD_KIND = "recall_reward"   # ledger kind of both rows of a reward payment (Appendix D)
 MAX_ANSWER_CHARS = 120
 MAX_NAME_CHARS = 20
 MAX_ABOUT_CHARS = 40
@@ -157,6 +184,13 @@ class ExamAnswer(BaseModel):
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
+def reward_clause(reward_usd: float) -> str:
+    """The reward exam's clause: what a correct answer pays (a pure function of the config)."""
+    return ("\n\nREWARD EXAM: answer the question from memory with exactly one of the options; each correct answer "
+            f"pays ${float(reward_usd):.2f} into your purse; choose '{ABSTAIN}' when unsure (a wrong answer or an "
+            "abstention pays nothing).")
+
+
 @dataclass
 class ExamReport:
     day: int
@@ -195,6 +229,15 @@ class ExamReport:
         k["asked"] += 1
         k["correct"] += int(correct)
         k["abstained"] += int(abstained)
+
+
+@dataclass
+class RewardReport(ExamReport):
+    """A reward-exam day: the exam's counts plus what the research pool paid for correct answers."""
+
+    paid: int = 0             # correct answers paid
+    paid_micro: int = 0       # micro-dollars moved from the research pool to agents
+    unpaid: int = 0           # correct answers not paid (pool short, or a zero reward)
 
 
 def score(correct: int, abstained: int, asked: int, guess_penalty: float) -> float | None:
@@ -340,6 +383,13 @@ def question_claim(day: int, tick_about: int, feedbacks: Sequence[tuple[str, str
     return Draft("claim", tick_about, question, truth, tuple(alive_names), f"events:claim_feedback:day:{day}")
 
 
+def reward_draft(fact: CanaryFact) -> Draft:
+    """The reward exam's question about one canary fact: its line with the answer blanked (``subject`` holds the
+    blanked line, which is what a scripted answer matches against), the fact's closed answer set as options."""
+    return Draft(CANARY_KIND, int(fact.tick), canary_question(fact.text, fact.answer), fact.answer, tuple(fact.options),
+                 f"canary_facts:{fact.fact_id}", subject=cloze(fact.text, fact.answer))
+
+
 def finalize_options(options: Iterable[str], truth: str, rng: random.Random) -> list[str]:
     """The closed answer set: deduplicated, truth included, sorted then shuffled by the exam stream, ABSTAIN last."""
     pool = {str(o) for o in options if o and str(o) != ABSTAIN}
@@ -405,8 +455,9 @@ def relevant_texts(draft: Draft, options: Sequence[str], notes: Sequence[Retriev
 
     Subjects: ``balance``, notes tagged ``money`` or ``self`` or titled with the purse or the balance; ``transfer``,
     notes tagged ``money`` or titled with money words; ``node``, notes naming the node id (``draft.subject``);
-    ``neighbour``, ``heard`` and ``claim``, notes naming one of the inhabitants offered. ``tags`` maps note ids to
-    their tags (a note missing from it has none).
+    ``neighbour``, ``heard`` and ``claim``, notes naming one of the inhabitants offered; ``canary`` (the reward exam),
+    notes that hold the blanked line (``draft.subject``) with one of the options in the blank. ``tags`` maps note ids
+    to their tags (a note missing from it has none).
     """
     tags = tags or {}
 
@@ -423,6 +474,9 @@ def relevant_texts(draft: Draft, options: Sequence[str], notes: Sequence[Retriev
     elif kind in PEOPLE_KINDS:
         names = answer_choices(draft, options)
         keep = [m for m in notes if any(_names(f"{m.title} {m.body}", n) for n in names)]
+    elif kind == CANARY_KIND:
+        choices = answer_choices(draft, options)
+        keep = [m for m in notes if fill_from(f"{m.title} {m.body}", draft.subject, choices) is not None]
     else:
         keep = list(notes)
     out = [(m.title, f"{m.title} {m.body}") for m in keep]
@@ -434,11 +488,15 @@ def relevant_texts(draft: Draft, options: Sequence[str], notes: Sequence[Retriev
 def answer_from_memory(draft: Draft, options: Sequence[str], notes: Sequence[RetrievedNote],
                        tags: Mapping[str, Iterable[str]] | None = None, self_summary: str = "") -> tuple[str, str | None]:
     """The scripted answer and where it came from: the first subject text (:func:`relevant_texts`) in which an
-    allowed option (:func:`answer_choices`) occurs, answered with :func:`match_option`; ``(ABSTAIN, None)`` when no
-    subject text names one."""
+    allowed option (:func:`answer_choices`) occurs, answered with :func:`match_option` (for a canary question, the
+    option that fills the blank of the line the text holds, :func:`void.research.canary.fill_from`); ``(ABSTAIN,
+    None)`` when no subject text names one."""
     choices = answer_choices(draft, options)
     for source, text in relevant_texts(draft, options, notes, tags, self_summary):
-        hit = match_option(text, choices)
+        if draft.kind == CANARY_KIND:
+            hit = fill_from(text, draft.subject, choices) or ABSTAIN
+        else:
+            hit = match_option(text, choices)
         if hit != ABSTAIN:
             return hit, source
     return ABSTAIN, None
@@ -459,20 +517,26 @@ def exam_schema() -> dict[str, Any]:
     return _strictify(ExamAnswer.model_json_schema())
 
 
-def exam_system_prompt(cfg: Any, tier_name: str) -> str:
+def exam_system_prompt(cfg: Any, tier_name: str, clause: str = EXAM_CLAUSE) -> str:
     """Cache-stable: the tier's standing rules plus the exam clause (a pure function of ``(config, tier)``).
 
     A provider tier gets an OUTPUT clause that names the exam's own schema and output cap instead of the
     decision's (conflicting instructions only lengthen a thinking model's deliberation); a scripted tier keeps
-    the decision prompt unchanged (it makes no call)."""
+    the decision prompt unchanged (it makes no call). ``clause`` is :data:`EXAM_CLAUSE` for the audit exam and
+    :func:`reward_clause` for the reward exam."""
     tier = cfg.tiers[tier_name]
     if tier.provider == "scripted":
-        return system_prompt(cfg, tier_name) + EXAM_CLAUSE
+        return system_prompt(cfg, tier_name) + clause
     cap = min(int(tier.max_tokens), int(cfg.memory.exam.max_tokens))
     output = ("OUTPUT: this call is an exam, not a turn in the world: respond with one JSON object matching the provided "
               "schema: `answer` (the exact text of one option) and `confidence` (0 to 1, or null). "
               f"Your output cap for this call is {cap} tokens.")
-    return system_prompt(cfg, tier_name, output_clause=output) + EXAM_CLAUSE
+    return system_prompt(cfg, tier_name, output_clause=output) + clause
+
+
+def reward_system_prompt(cfg: Any, tier_name: str) -> str:
+    """The reward exam's system prompt: :func:`exam_system_prompt` with the reward clause in place of the audit's."""
+    return exam_system_prompt(cfg, tier_name, reward_clause(cfg.memory.selection.recall_reward_usd))
 
 
 def render_exam_prompt(name: str, agent_id: str, tick: int, self_summary: str, retrieved: Sequence[RetrievedNote],
@@ -513,16 +577,25 @@ _CALL_INSERT = (
 
 
 class Exams:
-    """Generates, asks and grades audit-exam items for one day. No-op while ``memory.exam.enabled`` is false."""
+    """Generates, asks and grades audit-exam items for one day (no-op while ``memory.exam.enabled`` is false), and
+    the reward exam in selection arm B (no-op in every other arm)."""
 
     def __init__(self, sim: Simulation) -> None:
         self.sim = sim
         self.cfg = sim.cfg.memory.exam
+        self.selection = sim.cfg.memory.selection
+        self.canaries = Canaries(sim.cfg, sim.db, sim.bus, sim.rng)  # refuses canaries without the chronicle
         self.last_report: ExamReport | None = None
+        self.last_reward_report: RewardReport | None = None
 
     @property
     def enabled(self) -> bool:
         return bool(self.cfg.enabled)
+
+    @property
+    def reward_enabled(self) -> bool:
+        """Arm B with canaries on (the config refuses arm B without them)."""
+        return self.selection.arm == "B" and self.canaries.enabled
 
     @property
     def ticks_per_day(self) -> int:
@@ -680,16 +753,16 @@ class Exams:
             return lambda prompt, **kw: helper(brain, prompt, **kw)
         return brain.complete_json
 
-    async def ask(self, rec: AgentRecord, draft: Draft, options: list[str], tick: int) -> _Asked:
+    async def ask(self, rec: AgentRecord, draft: Draft, options: list[str], tick: int, *, system: str | None = None) -> _Asked:
         """Scripted tiers answer by matching an option in what they retrieve about the question's subject;
-        provider tiers get one paid call."""
+        provider tiers get one paid call (``system`` overrides the audit exam's system prompt)."""
         tier = self.sim.cfg.tiers[rec.model_tier]
         retrieved = self.retrieve(rec.agent_id, draft.question, options, tick)
         titles = [m.title for m in retrieved]
         if tier.provider == "scripted":
             answer, source = self.scripted_answer(rec, draft, options, retrieved)
             return _Asked(draft, options, answer, titles + [SELF_SOURCE] if source == SELF_SOURCE else titles)
-        return await self._ask_provider(rec, tier, draft, options, retrieved, tick)
+        return await self._ask_provider(rec, tier, draft, options, retrieved, tick, system=system)
 
     def scripted_answer(self, rec: AgentRecord, draft: Draft, options: Sequence[str],
                         retrieved: Sequence[RetrievedNote]) -> tuple[str, str | None]:
@@ -706,12 +779,12 @@ class Exams:
         return answer_from_memory(draft, options, retrieved, tags, summary)
 
     async def _ask_provider(self, rec: AgentRecord, tier: TierConfig, draft: Draft, options: list[str],
-                            retrieved: Sequence[RetrievedNote], tick: int) -> _Asked:
+                            retrieved: Sequence[RetrievedNote], tick: int, *, system: str | None = None) -> _Asked:
         titles = [m.title for m in retrieved]
         call = self.structured_call(self.sim.brains.get(rec.model_tier))
         if call is None:
             return _Asked(draft, options, None, titles, reason="no_structured_call")
-        system = exam_system_prompt(self.sim.cfg, rec.model_tier)
+        system = system if system is not None else exam_system_prompt(self.sim.cfg, rec.model_tier)
         prompt = render_exam_prompt(rec.name, rec.agent_id, tick, self.sim.memory.get_self(rec.agent_id), retrieved,
                                     draft.question, options)
         schema = exam_schema()
@@ -738,13 +811,14 @@ class Exams:
                       real_cost=m.real_cost, world_cost=m.world_cost)
 
     # --- the day --------------------------------------------------------------------------------------------------------
-    def already_examined(self, agent_id: str, tick: int) -> bool:
-        row = self.sim.db.fetchone("SELECT 1 AS one FROM exam_items WHERE agent_id=? AND exam='audit' AND tick_asked=? LIMIT 1",
-                                   (agent_id, int(tick)))
+    def already_examined(self, agent_id: str, tick: int, exam: str = AUDIT) -> bool:
+        row = self.sim.db.fetchone("SELECT 1 AS one FROM exam_items WHERE agent_id=? AND exam=? AND tick_asked=? LIMIT 1",
+                                   (agent_id, exam, int(tick)))
         return row is not None
 
-    def _commit(self, rec: AgentRecord, asked: _Asked, tick: int, day: int, report: ExamReport) -> None:
-        """Rows and events for one asked item; runs inside the agent's transaction."""
+    def _commit(self, rec: AgentRecord, asked: _Asked, tick: int, day: int, report: ExamReport, exam: str = AUDIT) -> tuple[str, bool]:
+        """Rows and events for one asked item; runs inside the agent's transaction. Returns ``(item_id, correct)``.
+        A reward item's events carry ``"exam": "reward"``; an audit item's payloads are as they always were."""
         db = self.sim.db
         d = asked.draft
         correct, abstained = grade(asked.answer, d.truth, asked.options)
@@ -753,7 +827,7 @@ class Exams:
         db.execute(
             "INSERT INTO exam_items(item_id, exam, agent_id, tick_asked, tick_about, kind, question, truth, options, source_ref) "
             "VALUES(?,?,?,?,?,?,?,?,?,?)",
-            (item_id, "audit", rec.agent_id, tick, d.tick_about, d.kind, d.question, d.truth, json.dumps(asked.options), d.source_ref))
+            (item_id, exam, rec.agent_id, tick, d.tick_about, d.kind, d.question, d.truth, json.dumps(asked.options), d.source_ref))
         if asked.call_row is not None:
             db.execute(_CALL_INSERT, asked.call_row)
             report.calls += 1
@@ -764,6 +838,8 @@ class Exams:
         extra: dict[str, Any] = {"reason": asked.reason} if asked.reason else {}
         if failed:
             extra["failed"] = True
+        if exam != AUDIT:
+            extra["exam"] = exam
         single = {"single_truth": True} if d.single_truth else {}
         self.sim.bus.emit(Event(tick, day, Kind.EXAM_ASKED, {
             "item_id": item_id, "agent_id": rec.agent_id, "kind": d.kind, "question": d.question, "truth": d.truth,
@@ -774,6 +850,7 @@ class Exams:
             "abstained": abstained, "call_id": asked.call_id, "retrieved": len(asked.retrieved), **extra,
         }, rec.agent_id, visibility=OPERATOR))
         report.tally(d.kind, correct, abstained, failed)
+        return item_id, correct
 
     async def examine(self, rec: AgentRecord, tick: int, day: int, report: ExamReport) -> int:
         """Generate, ask and commit one agent's items for the day; returns how many were asked."""
@@ -789,6 +866,13 @@ class Exams:
         return len(asked)
 
     async def run_day(self, day: int, tick: int) -> ExamReport | None:
+        """The day's exams: the audit exam (:meth:`run_audit_day`, whose report this returns), then, in arm B only,
+        the reward exam (:meth:`run_reward_day`, its report kept in :attr:`last_reward_report`)."""
+        report = await self.run_audit_day(day, tick)
+        await self.run_reward_day(day, tick)
+        return report
+
+    async def run_audit_day(self, day: int, tick: int) -> ExamReport | None:
         """Ask every living agent ``questions_per_agent`` questions about days at least ``delay_days`` back.
 
         Returns None when disabled, when no agent has observations old enough, or when ``day`` was already
@@ -810,3 +894,80 @@ class Exams:
         self.sim.db.kv_set("exam_day", day)
         self.last_report = report
         return report if report.asked else None
+
+    # --- the reward exam (arm B) ----------------------------------------------------------------------------------------
+    def reward_drafts(self, rec: AgentRecord, tick: int, rng: random.Random) -> list[tuple[Draft, list[str]]]:
+        """Up to ``reward_questions_per_agent`` canary questions for ``rec`` about distinct facts published at least
+        ``reward_delay_days`` before ``tick`` and at or after its birth, drawn from ``rng``: facts never asked to it
+        first (so a fact is first asked as soon as it is old enough), then, for the slots left, facts asked before
+        (the exam call writes nothing to the agent's memory, so asking again measures retention, as the audit exam
+        may ask about an old observation again)."""
+        before = tick - int(self.selection.reward_delay_days) * self.ticks_per_day
+        asked = {str(r["source_ref"]) for r in self.sim.db.fetchall(
+            "SELECT source_ref FROM exam_items WHERE agent_id=? AND exam=?", (rec.agent_id, REWARD))}
+        facts = [f for f in self.canaries.eligible(before_tick=before, born_tick=rec.born_tick) if f.answer in f.options]
+        fresh = [f for f in facts if f"canary_facts:{f.fact_id}" not in asked]
+        again = [f for f in facts if f"canary_facts:{f.fact_id}" in asked]
+        n = int(self.selection.reward_questions_per_agent)
+        chosen = rng.sample(fresh, min(n, len(fresh)))
+        if len(chosen) < n and again:
+            chosen += rng.sample(again, min(n - len(chosen), len(again)))
+        out: list[tuple[Draft, list[str]]] = []
+        for fact in chosen:
+            draft = reward_draft(fact)
+            out.append((draft, finalize_options(draft.options, draft.truth, rng)))
+        return out
+
+    def _pay(self, rec: AgentRecord, item_id: str, draft: Draft, tick: int, day: int, report: RewardReport) -> bool:
+        """Pay one correct reward answer from the research pool; outside any transaction, like every money move that
+        must commit on its own. Emits ``RECALL_REWARD`` either way."""
+        if self.sim.db._depth != 0:
+            raise RuntimeError("recall rewards are paid outside a transaction (the items commit first)")
+        amount = usd_to_micro(float(self.selection.recall_reward_usd))
+        paid = amount > 0 and self.sim.wallet.transfer(RESEARCH_POOL, rec.agent_id, tick, amount, kind_out=RECALL_REWARD_KIND,
+                                                       kind_in=RECALL_REWARD_KIND, ref=item_id)
+        payload: dict[str, Any] = {"item_id": item_id, "agent_id": rec.agent_id, "fact_id": draft.source_ref.partition(":")[2],
+                                   "amount_usd": micro_to_usd(amount) if paid else 0.0, "paid": bool(paid)}
+        if paid:
+            report.paid += 1
+            report.paid_micro += amount
+        else:
+            report.unpaid += 1
+            payload["reason"] = "zero_reward" if amount <= 0 else "research_pool_short"
+        self.sim.bus.emit(Event(tick, day, Kind.RECALL_REWARD, payload, rec.agent_id, visibility=OPERATOR))
+        return bool(paid)
+
+    async def reward_examine(self, rec: AgentRecord, tick: int, day: int, report: RewardReport) -> int:
+        """Ask, commit and pay one agent's reward items for the day; returns how many were asked."""
+        drafts = self.reward_drafts(rec, tick, self.sim.rng.stream("reward_exam", rec.agent_id, day))
+        if not drafts:
+            return 0
+        tier = self.sim.cfg.tiers[rec.model_tier]
+        system = None if tier.provider == "scripted" else reward_system_prompt(self.sim.cfg, rec.model_tier)
+        asked = [await self.ask(rec, draft, options, tick, system=system) for draft, options in drafts]
+        with self.sim.db.tx():
+            results = [self._commit(rec, a, tick, day, report, exam=REWARD) for a in asked]
+        for a, (item_id, correct) in zip(asked, results, strict=True):
+            if correct:
+                self._pay(rec, item_id, a.draft, tick, day, report)
+        return len(asked)
+
+    async def run_reward_day(self, day: int, tick: int) -> RewardReport | None:
+        """Arm B: ask every living agent its canary questions and pay each correct answer.
+
+        Returns None outside arm B, when ``day`` was already done (``reward_exam_day`` in ``world_kv``) or when no agent
+        had a fact old enough. Agents go in ``agent_id`` order; an agent that already has reward items for this tick (a
+        run restarted mid-exam) is skipped, so nothing is ever asked or paid twice."""
+        if not self.reward_enabled:
+            return None
+        done = self.sim.db.kv_get("reward_exam_day")
+        if done is not None and int(done) >= day:
+            return None
+        report = RewardReport(day=day, tick=tick)
+        for rec in sorted(self.sim.registry.alive(), key=lambda a: a.agent_id):
+            if self.already_examined(rec.agent_id, tick, REWARD):
+                continue
+            await self.reward_examine(rec, tick, day, report)
+        self.sim.db.kv_set("reward_exam_day", day)
+        self.last_reward_report = report
+        return report if (report.asked or report.failed) else None

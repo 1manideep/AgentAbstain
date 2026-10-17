@@ -10,6 +10,13 @@ benefactor's grants (§9.5), are never read, so the chronicle cannot reveal them
 Each line gets an item id ``d<day>-<n>`` stored in ``chronicle_items``; the headline goes to
 ``world_kv`` so it can appear in every observation the next day. An optional LLM writer may
 rewrite the template prose; when it returns ``None`` the template stands.
+
+Canary facts (MEMORY_EVOLUTION §5.8, :mod:`void.research.canary`): with ``memory.selection.canary``
+on, the day's canary lines are printed as ordinary items at the end of "Weather and land", in the
+same ``- <line>`` format, with the section's item kind and no event behind them, exactly like the
+weather line; nothing on the page or in ``chronicle_items`` marks them. The kernel records each one
+in ``canary_facts`` with the id of the item that carried it, in the same transaction as the items.
+They never reach the headline. With canaries off the page is exactly what it was before they existed.
 """
 
 from __future__ import annotations
@@ -17,7 +24,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -27,6 +34,7 @@ from void.brain.decision import sanitize_text
 from void.config import VoidConfig
 from void.db import Database
 from void.events import PUBLIC, Event, EventBus, Kind
+from void.research.canary import Canaries
 
 __all__ = ["Chronicle", "ChronicleDoc", "KV_HEADLINE", "KV_DAY", "KV_REV", "TITLE"]
 
@@ -41,6 +49,9 @@ LlmWriter = Callable[[str], Awaitable[str | None]]
 Item = tuple[str, str, int | None, str]
 
 _SECTIONS = ("Births and deaths", "Fortunes", "Weather and land", "Works", "Board", "Tempers", "Voices", "Notes")
+# where canary lines are printed, and the item kind they share with the section's weather line
+CANARY_SECTION = "Weather and land"
+CANARY_ITEM_KIND = "weather"
 _NUMBER_WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
 _EPOCH_PHRASES = {
     "drought": "a drought set in",
@@ -149,6 +160,7 @@ class _DayBuilder:
         self.gossip = 0
         self._items: list[Item] = []
         self._sections: dict[str, list[str]] = {s: [] for s in _SECTIONS}
+        self.canary_item_ids: list[str] = []
 
     # --- input -----------------------------------------------------------------------
     def consume(self, seq: int, kind: str, agent_id: str | None, p: dict[str, Any]) -> None:
@@ -198,12 +210,15 @@ class _DayBuilder:
         # every other kind (remember, llm_call, claim, ...) is ignored: it may carry prose
 
     # --- output ----------------------------------------------------------------------
-    def finish(self) -> tuple[str, dict[str, list[str]], list[Item]]:
+    def finish(self, canaries: Sequence[str] = ()) -> tuple[str, dict[str, list[str]], list[Item]]:
+        """Headline, sections and items; ``canaries`` are printed as ordinary lines at the end of "Weather and
+        land" (their item ids land in :attr:`canary_item_ids`, in order)."""
         headline = self._headline()
         self._add_item("headline", headline)
         self._births_and_deaths()
         self._fortunes()
         self._weather_and_land()
+        self.canary_item_ids = [self._line(CANARY_SECTION, CANARY_ITEM_KIND, text) for text in canaries]
         self._works()
         self._board()
         self._tempers()
@@ -218,9 +233,10 @@ class _DayBuilder:
         self._items.append((item_id, kind, seq, text))
         return item_id
 
-    def _line(self, section: str, kind: str, text: str, seq: int | None = None) -> None:
-        self._add_item(kind, text, seq)
+    def _line(self, section: str, kind: str, text: str, seq: int | None = None) -> str:
+        item_id = self._add_item(kind, text, seq)
         self._sections[section].append(text)
+        return item_id
 
     def name(self, agent_id: Any, given: Any = None) -> str:
         if given:
@@ -427,6 +443,7 @@ class Chronicle:
         self.registry = registry
         self.chronicle_dir = Path(chronicle_dir)
         self.llm_writer = llm_writer
+        self.canaries = Canaries(cfg, db, bus)  # refuses canaries without the chronicle (void.research.canary.validate)
 
     def path_for(self, day: int) -> Path:
         return self.chronicle_dir / f"day_{int(day):03d}.md"
@@ -442,7 +459,8 @@ class Chronicle:
         builder = _DayBuilder(day, self._names(), self._task_titles())
         for r in rows:
             builder.consume(int(r["seq"]), str(r["kind"]), r["agent_id"], _payload(r))
-        headline, sections, items = builder.finish()
+        canaries, fresh = self.canaries.plan(day, tick)
+        headline, sections, items = builder.finish([f.text for f in canaries])
         markdown = _render(day, headline, sections)
 
         if self.cfg.chronicle.writer == "llm" and self.llm_writer is not None:
@@ -460,10 +478,13 @@ class Chronicle:
                     "INSERT INTO chronicle_items(day, item_id, kind, event_seq, text) VALUES(?,?,?,?,?)",
                     (int(day), item_id, kind, seq, text),
                 )
+            planted = self.canaries.record(canaries, builder.canary_item_ids, fresh=fresh) if canaries else []
             rev = (_int(self.db.kv_get(KV_REV, 0)) or 0) + 1
             self.db.kv_set(KV_HEADLINE, headline)
             self.db.kv_set(KV_DAY, int(day))
             self.db.kv_set(KV_REV, rev)
+        if fresh:
+            self.canaries.announce(planted, tick)
         self.bus.emit(
             Event(
                 tick,
