@@ -26,10 +26,49 @@ The result always carries ``runs: {arm: {seed: {status, last_tick}}}`` for every
 A family name such as ``exp_mem`` covers an experiment name that starts with it when the next character, if any,
 is not a letter, so ``exp_mem`` covers ``exp_mem_e0`` and ``exp_mem_dep_claude`` but not ``exp_memory``.
 
+Configs are compared as loaded (``load_config(path).model_dump(mode="json")``), not as raw YAML: the stored file
+leaves out fields added later while they hold their defaults (``world.veins``, ``world.fallow_ticks``,
+``memory.practices``, ``memory.selection``, ``memory.policy.mutate_at_birth``, ``experiment.hypotheses``), so an arm
+that turns such a block on is compared with one that leaves it at its defaults path by path, and runs stored before
+and after a field existed compare. A resolved config that no longer loads is refused.
+
 Arms are paired by seed. For the primary outcome (``experiment.primary_outcome`` of the first arm unless
 overridden) each pair of arms gets n, per-arm means, the paired mean delta (b - a), Cohen's d_z, a paired
 bootstrap 95% CI (2000 resamples, ``random.Random(0)``) and an exact two-sided sign test. Secondaries get
 the same statistics flagged ``exploratory``. Daily curves are reported, not tested.
+
+**Pre-registered hypotheses** (MEMORY_EVOLUTION 5.2, 6.2, 6.11; ``experiment.hypotheses``) are read from the first
+arm's config; the comparison is refused when the arms disagree on them. Each is decided on its outcome's per-seed
+differences ``delta = arm_b - arm_a`` over the seeds both arms completed (``alpha`` 0.05); the margin is absolute or,
+with ``margin_unit: sd``, in standard deviations of those paired differences:
+
+* ``superiority`` passes when the two-sided 95% paired bootstrap CI clears the margin on the stated side (``greater``:
+  lower bound above ``margin``; ``less``: upper bound below ``-margin``) and the margin-shifted paired t-test agrees
+  (:func:`void.research.stats.superiority`: ``p``, then ``p_holm`` for a primary hypothesis, below alpha); with
+  ``min_power`` set, ``power`` (:func:`~void.research.stats.power_paired` at the observed standardized effect beyond
+  the margin in the stated direction, which is d_z itself at margin 0) must also reach it.
+* ``non_superiority`` passes when superiority does not hold (:func:`~void.research.stats.non_superiority`, decided
+  without the Holm adjustment so the correction never makes a "does not clear the bar" claim easier); ``p`` is
+  superiority's p and ``power`` the power to detect an effect as large as the margin.
+* ``equivalence`` passes when the two one-sided t-tests (:func:`~void.research.stats.tost_paired`) give ``p`` (``p_holm``
+  when primary) below alpha; ``ci`` is then the 90% t interval and ``power`` the TOST power at a zero effect
+  (:func:`~void.research.stats.power_tost`).
+* Holm's step-down adjustment runs across the hypotheses with ``primary: true``; the others are exploratory
+  (``p_holm`` None). A hypothesis with fewer than two paired seeds, or naming an arm without runs, fails.
+
+``result["hypotheses"]`` holds one row per hypothesis (``name, kind, outcome, n, delta, ci, d_z, power, p, p_holm,
+passed, reason`` and the inputs); :func:`render` prints a PASS or FAIL line for each.
+
+**2x2 factorial** (DESIGN §17 ``exp_press``): with exactly four arms whose declared independent variables include
+exactly two that vary, each over exactly two values, crossed so every combination is one arm, ``result["factorial"]``
+holds the main effects and the interaction of the primary outcome per seed
+(:func:`~void.research.stats.interaction_2x2`; level 0 is the lower value, ``false`` before ``true``). Otherwise None.
+
+**Per-tier difference-in-differences** (PLAN §8 Q2, scarcity x capability tier): when every arm rosters the same two
+or more tiers, each bare tier-resolvable primary or secondary outcome (:data:`TIER_OUTCOMES`, e.g.
+``false_claim_rate``) is resolved per tier (``false_claim_rate.<tier>``) and ``result["tier_did"]`` reports, for each
+pair of arms, the per-tier paired deltas and, for each pair of tiers, the per-seed difference of those deltas
+(``delta[tier_b] - delta[tier_a]``) with a paired bootstrap 95% CI. Exploratory. Otherwise None.
 """
 
 from __future__ import annotations
@@ -40,12 +79,15 @@ import random
 import re
 import sqlite3
 import statistics
+from collections.abc import Mapping, Sequence
 from itertools import combinations
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from void.config import VoidConfig, load_config
+from void.research import stats
 from void.research.analysis import (
     CONFIG_FILE,
     DAILY,
@@ -58,15 +100,21 @@ from void.research.analysis import (
 )
 
 __all__ = [
+    "ALPHA",
     "ALWAYS_ALLOWED",
+    "TIER_OUTCOMES",
     "IncomparableRuns",
     "compare",
     "config_diff",
     "covered_by",
+    "decide_hypotheses",
     "discover_runs",
+    "evaluate_hypothesis",
+    "factorial_design",
     "in_family",
     "paired_stats",
     "render",
+    "render_hypotheses",
     "run_state",
     "sign_test_p",
 ]
@@ -79,7 +127,15 @@ TIER_INVARIANTS = ("collapse_temperature", "max_temperature", "entropy_budget_ma
 N_BOOT = 2000
 BOOT_SEED = 0
 JACCARD_DEGENERATE = 0.8
+ALPHA = 0.05
+_YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 _RETRIEVED_KEYS = ("retrieved_titles", "retrieved", "retrieved_ids", "memories", "entry_ids")
+# computed outcomes (void.research.analysis.COMPUTED) whose argument is a tier name: ``false_claim_rate.<tier>``
+TIER_OUTCOMES = (
+    "false_claim_rate", "invalid_action_rate", "stale_rate", "perseveration_rate", "action_regret_mean",
+    "text_coherence_mean", "p_chosen_mean", "action_entropy_w8_mean", "recovered_collapse_stress",
+    "exam_score", "exam_accuracy", "exam_abstain_rate",
+)
 
 
 class IncomparableRuns(RuntimeError):
@@ -141,10 +197,19 @@ def _seed_placed(path: str, a: dict[str, Any], b: dict[str, Any]) -> bool:
 
 # --- discovery -----------------------------------------------------------------------------------------
 def _load_cfg(run_dir: Path) -> dict[str, Any]:
-    data = yaml.safe_load((run_dir / CONFIG_FILE).read_text()) or {}
-    if not isinstance(data, dict):
-        raise IncomparableRuns(f"{run_dir / CONFIG_FILE} does not hold a mapping")
-    return data
+    """The run's resolved config as loaded, every default filled in (see the module docstring):
+    ``load_config(path).model_dump(mode="json")``. A resolved config never ``extends`` another file, so it is parsed
+    with libyaml when available and validated directly, which is what ``load_config`` does for such a file, about
+    seven times faster on a large experiment."""
+    path = run_dir / CONFIG_FILE
+    try:
+        data = yaml.load(path.read_text(encoding="utf-8"), Loader=_YAML_LOADER) or {}
+        if not isinstance(data, dict):
+            raise IncomparableRuns(f"{path} does not hold a mapping")
+        cfg = load_config(path) if "extends" in data else VoidConfig.model_validate(data)
+    except (ValueError, yaml.YAMLError) as e:  # pydantic's ValidationError is a ValueError
+        raise IncomparableRuns(f"{path} does not load as a config: {e}") from e
+    return cfg.model_dump(mode="json")
 
 
 def discover_runs(exp_dir: str | Path) -> dict[str, dict[int, Path]]:
@@ -295,8 +360,217 @@ def _outcome_stats(a: str, b: str, path: str, values: dict[str, dict[int, dict[s
             dropped += 1
             continue
         pairs.append((va, vb))
-    stats = paired_stats(pairs, n_boot=n_boot, seed=boot_seed)
-    return {"path": path, "arm_a": a, "arm_b": b, **stats, "dropped": dropped, "per_seed": per_seed}
+    st = paired_stats(pairs, n_boot=n_boot, seed=boot_seed)
+    return {"path": path, "arm_a": a, "arm_b": b, **st, "dropped": dropped, "per_seed": per_seed}
+
+
+# --- pre-registered hypotheses -------------------------------------------------------------------------------
+_HYP_FIELDS = ("name", "kind", "outcome", "arm_a", "arm_b", "direction", "margin", "margin_unit", "primary", "min_power")
+
+
+def _std_power(effect: float, sd: float | None, n: int, fn: Any) -> float | None:
+    """``fn(effect / sd, n)`` for an effect in outcome units (negative counts as none); with ``sd == 0`` any
+    positive effect is certain to show (power 1). None below two pairs."""
+    if n < 2 or sd is None:
+        return None
+    effect = max(0.0, effect)
+    if sd == 0:
+        return 1.0 if effect > 0 else float(fn(0.0, n))
+    return float(fn(effect / sd, n))
+
+
+def evaluate_hypothesis(h: Mapping[str, Any], diffs: Sequence[float], *, alpha: float = ALPHA, n_boot: int = N_BOOT,
+                        boot_seed: int = BOOT_SEED) -> dict[str, Any]:
+    """The unadjusted test of one ``experiment.hypotheses`` entry (as a dict) on its per-seed differences
+    ``arm_b - arm_a`` (see the module docstring for each kind's rule).
+
+    Returns ``{n, delta, sd, d_z, margin_abs, ci, ci_level, p, power, power_at, holds, ci_clears}``: ``holds`` is the
+    kind's own verdict before any Holm adjustment (None below two pairs) and ``ci_clears`` superiority's interval rule
+    (None for an equivalence hypothesis). :func:`decide_hypotheses` turns rows into verdicts."""
+    d = [float(x) for x in diffs]
+    n = len(d)
+    kind, direction = str(h.get("kind", "superiority")), str(h.get("direction", "greater"))
+    mean = sum(d) / n if n else None
+    sd = statistics.stdev(d) if n >= 2 else None
+    d_z = mean / sd if mean is not None and sd else None
+    margin = float(h.get("margin", 0.0))
+    margin_abs: float | None = margin
+    if h.get("margin_unit") == "sd":
+        margin_abs = margin * sd if sd is not None else None
+    power_at = {"superiority": "observed effect beyond the margin", "non_superiority": "an effect the size of the margin",
+                "equivalence": "a zero effect (TOST)"}[kind]
+    out: dict[str, Any] = {"n": n, "delta": mean, "sd": sd, "d_z": d_z, "margin_abs": margin_abs, "ci": [None, None],
+                           "ci_level": 1.0 - 2.0 * alpha if kind == "equivalence" else 1.0 - alpha, "p": None,
+                           "power": None, "power_at": power_at, "holds": None, "ci_clears": None}
+    if n < 2 or margin_abs is None or mean is None:
+        return out
+    if kind == "equivalence":
+        tost = stats.tost_paired(d, margin_abs, alpha)
+        out.update(ci=tost["ci90"], p=tost["p"], holds=tost["equivalent"],
+                   power=_std_power(margin_abs, sd, n, lambda z, k: stats.power_tost(z, k, alpha)))
+        return out
+    sup = stats.superiority(d, margin_abs, direction, alpha, n_boot=n_boot, seed=boot_seed)
+    out.update(ci=sup["ci"], p=sup["p"], ci_clears=sup["ci_clears"])
+    if kind == "superiority":
+        beyond = (mean - margin_abs) if direction == "greater" else (-mean - margin_abs)
+        out.update(holds=sup["passed"], power=_std_power(beyond, sd, n, lambda z, k: stats.power_paired(z, k, alpha)))
+    else:
+        non = stats.non_superiority(d, margin_abs, direction, alpha, n_boot=n_boot, seed=boot_seed)
+        out.update(holds=non["passed"], power=_std_power(margin_abs, sd, n, lambda z, k: stats.power_paired(z, k, alpha)))
+    return out
+
+
+def _g(v: float | None) -> str:
+    return "n/a" if v is None else f"{v:.4g}"
+
+
+def _verdict(r: Mapping[str, Any], alpha: float) -> tuple[bool, str]:
+    """``(passed, reason)`` for one evaluated row whose ``p_holm`` is set."""
+    if r.get("missing_arms"):
+        return False, f"arm(s) {r['missing_arms']} have no runs in this experiment"
+    if r["n"] < 2 or r["holds"] is None:
+        return False, f"undetermined: {r['n']} seed pair(s) with values for both arms, at least 2 needed"
+    kind, greater = r["kind"], r["direction"] == "greater"
+    lo, hi = r["ci"]
+    m = r["margin_abs"]
+    side = f"> {_g(m)}" if greater else f"< {_g(-m if m else 0.0)}"
+    p_name, p_used = ("p_holm", r["p_holm"]) if r["primary"] else ("p", r["p"])
+    ok: list[str] = []
+    bad: list[str] = []
+    if kind == "superiority":
+        bound = lo if greater else hi
+        (ok if r["ci_clears"] else bad).append(f"CI95 {'lower' if greater else 'upper'} bound {_g(bound)} "
+                                               f"{'clears' if r['ci_clears'] else 'does not clear'} {side}")
+        (ok if p_used < alpha else bad).append(f"{p_name} {_g(p_used)} {'<' if p_used < alpha else '>='} {alpha}")
+    elif kind == "non_superiority":
+        if r["holds"]:
+            ok.append(f"superiority {side} does not hold (CI95 [{_g(lo)}, {_g(hi)}], p {_g(r['p'])})")
+        else:
+            bad.append(f"superiority {side} holds (CI95 [{_g(lo)}, {_g(hi)}], p {_g(r['p'])} < {alpha})")
+    else:
+        inside = f"CI90 [{_g(lo)}, {_g(hi)}] vs +/-{_g(m)}"
+        (ok if p_used < alpha else bad).append(f"TOST {p_name} {_g(p_used)} {'<' if p_used < alpha else '>='} {alpha}; {inside}")
+    if r["min_power"] is not None:
+        power = r["power"]
+        enough = power is not None and power >= r["min_power"]
+        (ok if enough else bad).append(f"power {_g(power)} {'>=' if enough else '<'} min_power {_g(r['min_power'])} "
+                                       f"(at {r['power_at']})")
+    return not bad, "; ".join(bad + ok)  # what failed first, then what held
+
+
+def decide_hypotheses(rows: list[dict[str, Any]], alpha: float = ALPHA) -> list[dict[str, Any]]:
+    """Holm-adjust the p-values of the primary rows (``p_holm``; None for exploratory rows and untestable ones) and
+    set ``passed`` / ``reason`` on every row from :func:`evaluate_hypothesis`'s fields. Mutates and returns ``rows``."""
+    adjusted = stats.holm({r["name"]: r["p"] for r in rows if r["primary"]})
+    for r in rows:
+        r["p_holm"] = adjusted.get(r["name"]) if r["primary"] else None
+        r["passed"], r["reason"] = _verdict(r, alpha)
+    return rows
+
+
+def _hypotheses(reps: Mapping[str, Mapping[str, Any]], names: list[str]) -> list[dict[str, Any]]:
+    """``experiment.hypotheses`` of the first arm; refused when another arm's differ."""
+    ref = names[0]
+    hyps = resolve_path(reps[ref], "experiment.hypotheses") or []
+    for arm in names[1:]:
+        other = resolve_path(reps[arm], "experiment.hypotheses") or []
+        if other != hyps:
+            where = config_diff(hyps, other, "experiment.hypotheses")
+            raise IncomparableRuns(f"arms disagree on experiment.hypotheses ({ref} vs {arm}: {where}); "
+                                   "every arm must carry the same pre-registered hypotheses")
+    return [dict(h) for h in hyps]
+
+
+def _arm_lookup(reps: Mapping[str, Mapping[str, Any]], names: list[str]) -> dict[str, str]:
+    """Arm directory by the names a hypothesis may use: the directory name, else the run's ``experiment.arm``."""
+    out = {n: n for n in names}
+    for n in names:
+        label = resolve_path(reps[n], "experiment.arm")
+        if isinstance(label, str) and label not in out:
+            out[label] = n
+    return out
+
+
+# --- factorial and per-tier analyses -------------------------------------------------------------------------
+def _canon(v: Any) -> str:
+    return json.dumps(v, sort_keys=True, default=str)
+
+
+def _level_key(v: Any) -> tuple[int, float, str]:
+    if isinstance(v, bool | int | float):
+        return (0, float(v), "")
+    return (1, 0.0, _canon(v))
+
+
+def factorial_design(reps: Mapping[str, Mapping[str, Any]], ivs: Sequence[str]) -> dict[str, Any] | None:
+    """The 2x2 layout of four arms: ``{"factors": [{path, levels}, {path, levels}], "cells": {(i, j): arm}}`` when
+    exactly two of the declared independent variables vary across the arms, each over exactly two values, and every
+    combination is exactly one arm; None otherwise. Level 0 is the lower value (``false`` before ``true``)."""
+    names = list(reps)
+    if len(names) != 4:
+        return None
+    factors: list[tuple[str, list[Any], dict[str, int]]] = []
+    for iv in ivs:
+        vals = {arm: resolve_path(reps[arm], iv) for arm in names}
+        distinct: dict[str, Any] = {}
+        for v in vals.values():
+            distinct.setdefault(_canon(v), v)
+        if len(distinct) == 1:
+            continue
+        if len(distinct) != 2:
+            return None
+        levels = sorted(distinct.values(), key=_level_key)
+        index = [_canon(level) for level in levels]
+        factors.append((iv, levels, {arm: index.index(_canon(vals[arm])) for arm in names}))
+    if len(factors) != 2:
+        return None
+    cells: dict[tuple[int, int], str] = {}
+    for arm in names:
+        key = (factors[0][2][arm], factors[1][2][arm])
+        if key in cells:
+            return None
+        cells[key] = arm
+    return {"factors": [{"path": iv, "levels": levels} for iv, levels, _ in factors], "cells": cells}
+
+
+def _roster_tiers(cfg: Mapping[str, Any]) -> set[str]:
+    return {str(a["tier"]) for a in cfg.get("agents") or [] if isinstance(a, dict) and a.get("tier")}
+
+
+def _tier_did(names: list[str], tiers: list[str], outcomes: list[str], pair_seeds: Mapping[tuple[str, str], list[int]],
+              get: Any, *, n_boot: int, boot_seed: int) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for outcome in outcomes:
+        for a, b in combinations(names, 2):
+            seeds = pair_seeds[(a, b)]
+            per_tier: dict[str, Any] = {}
+            deltas: dict[str, dict[int, float]] = {}
+            for t in tiers:
+                path = f"{outcome}.{t}"
+                pairs: list[tuple[float, float]] = []
+                per_seed: dict[str, list[float | None]] = {}
+                deltas[t] = {}
+                for s in seeds:
+                    va, vb = get(a, s, path), get(b, s, path)
+                    per_seed[str(s)] = [va, vb]
+                    if va is not None and vb is not None:
+                        pairs.append((va, vb))
+                        deltas[t][s] = vb - va
+                per_tier[t] = {"path": path, **paired_stats(pairs, n_boot=n_boot, seed=boot_seed),
+                               "dropped": len(seeds) - len(pairs), "per_seed": per_seed}
+            differences: list[dict[str, Any]] = []
+            for t1, t2 in combinations(tiers, 2):
+                common = [s for s in seeds if s in deltas[t1] and s in deltas[t2]]
+                st = paired_stats([(deltas[t1][s], deltas[t2][s]) for s in common], n_boot=n_boot, seed=boot_seed)
+                differences.append({
+                    "tier_a": t1, "tier_b": t2, "n": st["n"], "did": st["delta"], "ci95": st["ci95"], "d_z": st["d_z"],
+                    "sign_test_p": st["sign_test_p"], "positive": st["positive"], "negative": st["negative"], "ties": st["ties"],
+                    "dropped": len(seeds) - len(common),
+                    "per_seed": {str(s): deltas[t2][s] - deltas[t1][s] for s in common},
+                })
+            rows.append({"outcome": outcome, "arm_a": a, "arm_b": b, "per_tier": per_tier, "differences": differences,
+                         "exploratory": True})
+    return rows
 
 
 # --- extras -----------------------------------------------------------------------------------------------
@@ -382,10 +656,11 @@ def _daily_curves(arms: dict[str, dict[int, Path]], names: list[str], seeds: dic
 
 # --- the comparison -------------------------------------------------------------------------------------
 def compare(exp_dir: str | Path, primary: str | None = None, *, allow_incomplete: bool = False,
-            n_boot: int = N_BOOT, boot_seed: int = BOOT_SEED) -> dict[str, Any]:
+            n_boot: int = N_BOOT, boot_seed: int = BOOT_SEED, alpha: float = ALPHA) -> dict[str, Any]:
     """Compare the arms under ``exp_dir`` (see the module docstring); raises :class:`IncomparableRuns`.
 
-    ``allow_incomplete`` drops every seed pair that touches an incomplete run instead of refusing."""
+    ``allow_incomplete`` drops every seed pair that touches an incomplete run instead of refusing. ``alpha`` is the
+    level of the pre-registered hypotheses' decisions."""
     exp_dir = Path(exp_dir)
     arms = discover_runs(exp_dir)
     if len(arms) < 2:
@@ -425,6 +700,7 @@ def compare(exp_dir: str | Path, primary: str | None = None, *, allow_incomplete
             prob = resolve_path(reps[arm], "population.tier_mutation_prob")
             if prob != 0:
                 raise IncomparableRuns(f"{exp_name}: arm {arm!r} has population.tier_mutation_prob={prob!r}; 0 is required")
+    hypotheses = _hypotheses(reps, names)
     violations: list[str] = []
     for a, b in combinations(names, 2):
         for path in config_diff(reps[a], reps[b]):
@@ -474,6 +750,14 @@ def compare(exp_dir: str | Path, primary: str | None = None, *, allow_incomplete
                 secondaries.append(str(s))
     paths = [primary] + secondaries
     values = {arm: {seed: {p: end_of_run_outcome(arms[arm][seed], p) for p in paths} for seed in complete[arm]} for arm in names}
+    cache: dict[tuple[str, int, str], float | None] = {
+        (arm, seed, p): v for arm in names for seed, row in values[arm].items() for p, v in row.items()}
+
+    def get(arm: str, seed: int, path: str) -> float | None:
+        key = (arm, seed, path)
+        if key not in cache:
+            cache[key] = end_of_run_outcome(arms[arm][seed], path)
+        return cache[key]
 
     comparisons: list[dict[str, Any]] = []
     for a, b in combinations(names, 2):
@@ -484,6 +768,41 @@ def compare(exp_dir: str | Path, primary: str | None = None, *, allow_incomplete
             "secondary": [{**_outcome_stats(a, b, s, values, ps, n_boot=n_boot, boot_seed=boot_seed), "exploratory": True}
                           for s in secondaries],
         })
+
+    lookup = _arm_lookup(reps, names)
+    hyp_rows: list[dict[str, Any]] = []
+    for h in hypotheses:
+        a_dir, b_dir = lookup.get(str(h["arm_a"])), lookup.get(str(h["arm_b"]))
+        missing = [str(h[k]) for k, d in (("arm_a", a_dir), ("arm_b", b_dir)) if d is None]
+        if a_dir is not None and a_dir == b_dir:
+            missing = [f"{h['arm_a']} and {h['arm_b']} name the same runs"]
+        diffs: list[float] = []
+        per_seed: dict[str, list[float | None]] = {}
+        if not missing and a_dir is not None and b_dir is not None:
+            for s in pair_seeds[(a_dir, b_dir) if (a_dir, b_dir) in pair_seeds else (b_dir, a_dir)]:
+                va, vb = get(a_dir, s, str(h["outcome"])), get(b_dir, s, str(h["outcome"]))
+                per_seed[str(s)] = [va, vb]
+                if va is not None and vb is not None:
+                    diffs.append(vb - va)
+        hyp_rows.append({**{k: h.get(k) for k in _HYP_FIELDS}, "missing_arms": missing,
+                         **evaluate_hypothesis(h, diffs, alpha=alpha, n_boot=n_boot, boot_seed=boot_seed),
+                         "dropped": len(per_seed) - len(diffs), "per_seed": per_seed})
+    decide_hypotheses(hyp_rows, alpha)
+
+    factorial: dict[str, Any] | None = None
+    design = factorial_design(reps, ivs)
+    if design is not None:
+        cells = {key: {s: values[arm][s][primary] for s in complete[arm]} for key, arm in design["cells"].items()}
+        factorial = {"outcome": primary, "factor_a": design["factors"][0], "factor_b": design["factors"][1],
+                     "cells": {f"{i},{j}": arm for (i, j), arm in sorted(design["cells"].items())},
+                     **stats.interaction_2x2(cells, n_boot=n_boot, seed=boot_seed)}
+
+    tier_did: dict[str, Any] | None = None
+    tiers = sorted(set.intersection(*(_roster_tiers(reps[arm]) for arm in names)))
+    tier_outcomes = [p for p in paths if p in TIER_OUTCOMES]
+    if len(tiers) >= 2 and tier_outcomes:
+        tier_did = {"tiers": tiers, "rows": _tier_did(names, tiers, tier_outcomes, pair_seeds, get,
+                                                       n_boot=n_boot, boot_seed=boot_seed)}
     warnings: list[str] = [f"dropped incomplete run {arm} seed {seed} ({why}); every seed pair that touches it is left out"
                            for (arm, seed), why in problems.items()]
     models: dict[str, dict[int, tuple[str, ...]]] = {}
@@ -502,7 +821,8 @@ def compare(exp_dir: str | Path, primary: str | None = None, *, allow_incomplete
         "values": {arm: {str(seed): values[arm][seed] for seed in complete[arm]} for arm in names},
         "runs": {arm: {str(seed): states[arm][seed] for seed in seeds} for arm in names},
         "dropped_incomplete": dropped,
-        "comparisons": comparisons, "warnings": warnings, "notes": notes,
+        "comparisons": comparisons, "alpha": alpha, "hypotheses": hyp_rows, "factorial": factorial, "tier_did": tier_did,
+        "warnings": warnings, "notes": notes,
         "degenerate_pair": degenerate, "served_models": {arm: {str(s): list(m) for s, m in ms.items()} for arm, ms in models.items()},
         "curves": _daily_curves(arms, names, complete, primary),
     }
@@ -520,6 +840,61 @@ def _stat_line(s: dict[str, Any]) -> str:
             f"sign p={_fmt(s['sign_test_p'], 3)} (+{s['positive']}/-{s['negative']}/={s['ties']})")
 
 
+def _hypothesis_line(h: dict[str, Any]) -> str:
+    lo, hi = h["ci"]
+    tag = h["kind"] if h["kind"] == "equivalence" else f"{h['kind']} {h['direction']}"
+    unit = " SD" if h["margin_unit"] == "sd" else ""
+    tag += f", margin {_g(h['margin'])}{unit}, " + ("primary" if h["primary"] else "exploratory")
+    level = round(100 * h["ci_level"])
+    return (f"{'PASS' if h['passed'] else 'FAIL'}  {h['name']} [{tag}] {h['arm_b']} - {h['arm_a']} on {h['outcome']}: "
+            f"n={h['n']} delta={_fmt(h['delta'])} CI{level}=[{_fmt(lo)}, {_fmt(hi)}] d_z={_fmt(h['d_z'], 3)} "
+            f"power={_fmt(h['power'], 3)} p={_g(h['p'])} p_holm={_g(h['p_holm'])} -- {h['reason']}")
+
+
+def render_hypotheses(result: dict[str, Any]) -> str:
+    """One PASS or FAIL line per pre-registered hypothesis of :func:`compare`'s result."""
+    hyps = result.get("hypotheses") or []
+    if not hyps:
+        return "pre-registered hypotheses: none (experiment.hypotheses is empty)"
+    n_primary = sum(1 for h in hyps if h["primary"])
+    lines = [f"pre-registered hypotheses (alpha {result.get('alpha', ALPHA)}; Holm across {n_primary} primary):"]
+    lines.extend(f"  {_hypothesis_line(h)}" for h in hyps)
+    return "\n".join(lines)
+
+
+def _effect_line(label: str, e: dict[str, Any]) -> str:
+    lo, hi = e["ci"]
+    return (f"  {label}: mean={_fmt(e['mean'])} CI95=[{_fmt(lo)}, {_fmt(hi)}] sign p={_fmt(e['sign_test_p'], 3)} "
+            f"(+{e['positive']}/-{e['negative']}/={e['ties']})")
+
+
+def _render_factorial(f: dict[str, Any]) -> list[str]:
+    fa, fb = f["factor_a"], f["factor_b"]
+    lines = [f"factorial 2x2 on {f['outcome']} (n={f['n']}, dropped {f['dropped']}): "
+             f"A={fa['path']} {_canon(fa['levels'][0])} -> {_canon(fa['levels'][1])}, "
+             f"B={fb['path']} {_canon(fb['levels'][0])} -> {_canon(fb['levels'][1])}; "
+             "cells " + ", ".join(f"{k}={arm}" for k, arm in f["cells"].items())]
+    lines.append(_effect_line("main A", f["main_a"]))
+    lines.append(_effect_line("main B", f["main_b"]))
+    lines.append(_effect_line("interaction A x B", f["interaction"]))
+    return lines
+
+
+def _render_tier_did(t: dict[str, Any]) -> list[str]:
+    lines = [f"per-tier difference-in-differences (exploratory; tiers {', '.join(t['tiers'])}):"]
+    for row in t["rows"]:
+        parts = []
+        for tier, s in row["per_tier"].items():
+            lo, hi = s["ci95"]
+            parts.append(f"delta {tier}={_fmt(s['delta'])} CI95=[{_fmt(lo)}, {_fmt(hi)}] (n={s['n']})")
+        lines.append(f"  {row['outcome']}  {row['arm_a']} vs {row['arm_b']}: " + "; ".join(parts))
+        for d in row["differences"]:
+            lo, hi = d["ci95"]
+            lines.append(f"    {d['tier_b']} - {d['tier_a']}: did={_fmt(d['did'])} CI95=[{_fmt(lo)}, {_fmt(hi)}] "
+                         f"(n={d['n']}, sign p={_fmt(d['sign_test_p'], 3)})")
+    return lines
+
+
 def render(result: dict[str, Any]) -> str:
     """A compact text rendering of :func:`compare`'s result."""
     lines = [
@@ -529,6 +904,12 @@ def render(result: dict[str, Any]) -> str:
     ]
     for c in result["comparisons"]:
         lines.append(f"  {c['arm_a']} vs {c['arm_b']}: {_stat_line(c['primary'])}")
+    if result.get("hypotheses"):
+        lines.append(render_hypotheses(result))
+    if result.get("factorial"):
+        lines.extend(_render_factorial(result["factorial"]))
+    if result.get("tier_did"):
+        lines.extend(_render_tier_did(result["tier_did"]))
     if result["secondaries"]:
         lines.append("secondary (exploratory):")
         for c in result["comparisons"]:
