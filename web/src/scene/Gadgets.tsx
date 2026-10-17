@@ -11,10 +11,12 @@ import {
   SphereGeometry,
   TorusGeometry,
   type BufferGeometry,
+  type InstancedBufferAttribute,
 } from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { nonIndexed } from './geom'
 import type { ThreeEvent } from '@react-three/fiber'
+import { selectGadget, useSelectedGadgetId } from '../control/GadgetPanel'
 import { GADGET_SHAPES, type GadgetItem, type GadgetShape } from '../protocol'
 import { useStore } from '../state/store'
 import { attachInstanceAttributes, makeInstancedMaterial } from './instancedMaterial'
@@ -24,6 +26,9 @@ import { useTerrainRev } from './useTerrainRev'
 const COLOR_RE = /^#[0-9a-f]{6}$/i
 const FALLBACK_COLOR = '#8b93a7'
 const PEDESTAL_H = 0.22
+/** Rim glow of a pedestal; the selected gadget's rim burns brighter. */
+const PULSE_IDLE = 0.55
+const PULSE_SELECTED = 1.6
 const dummy = new Object3D()
 const color = new Color()
 
@@ -131,18 +136,41 @@ const ShapeGroup = memo(function ShapeGroup({ shape, items }: ShapeGroupProps) {
   }, [shape, items, rev])
   useEffect(() => () => mesh.dispose(), [mesh])
 
-  const onMove = (e: ThreeEvent<PointerEvent>) => {
-    if (e.instanceId === undefined) return
-    e.stopPropagation()
-    useStore.getState().hoverGadget(items[e.instanceId]?.id ?? null)
-  }
-  const onOut = () => useStore.getState().hoverGadget(null)
-  return <primitive object={mesh} onPointerMove={onMove} onPointerOut={onOut} />
+  const { onMove, onOut, onClick } = useMemo(() => gadgetPointerHandlers(items), [items])
+  return <primitive object={mesh} onPointerMove={onMove} onPointerOut={onOut} onClick={onClick} />
 })
+
+/** Hover shows the gadget's label (Effects); click selects it and opens its inspector (control/GadgetPanel). */
+function gadgetPointerHandlers(items: readonly GadgetItem[]) {
+  const idAt = (e: { instanceId?: number }): string | null => (e.instanceId === undefined ? null : (items[e.instanceId]?.id ?? null))
+  return {
+    onMove: (e: ThreeEvent<PointerEvent>) => {
+      const id = idAt(e)
+      if (id === null) return
+      e.stopPropagation()
+      useStore.getState().hoverGadget(id)
+    },
+    onOut: () => useStore.getState().hoverGadget(null),
+    onClick: (e: ThreeEvent<MouseEvent>) => {
+      const id = idAt(e)
+      if (id === null) return
+      e.stopPropagation()
+      selectGadget(id)
+    },
+  }
+}
+
+/** Brightens the selected gadget's pedestal rim and dims the rest (the aPulse attribute of the pedestal mesh). */
+function paintSelection(pulse: InstancedBufferAttribute, items: readonly GadgetItem[], selectedId: string | null): void {
+  const arr = pulse.array as Float32Array
+  for (let i = 0; i < items.length; i++) arr[i] = items[i]!.id === selectedId ? PULSE_SELECTED : PULSE_IDLE
+  pulse.needsUpdate = true
+}
 
 const Pedestals = memo(function Pedestals({ items }: { items: GadgetItem[] }) {
   const rev = useTerrainRev()
-  const mesh = useMemo(() => {
+  const selectedId = useSelectedGadgetId()
+  const { mesh, pulse } = useMemo(() => {
     void rev
     const n = Math.max(1, items.length)
     const geom = pedestalGeom.clone()
@@ -159,13 +187,13 @@ const Pedestals = memo(function Pedestals({ items }: { items: GadgetItem[] }) {
       dummy.updateMatrix()
       m.setMatrixAt(i, dummy.matrix)
       m.setColorAt(i, color.set(safeGadgetColor(it.render.color)))
-      pulse[i] = 0.55
+      pulse[i] = PULSE_IDLE
     }
     m.count = items.length
     m.instanceMatrix.needsUpdate = true
     if (m.instanceColor) m.instanceColor.needsUpdate = true
     attrs.pulse.needsUpdate = true
-    return m
+    return { mesh: m, pulse: attrs.pulse }
   }, [items, rev])
   useEffect(
     () => () => {
@@ -174,8 +202,11 @@ const Pedestals = memo(function Pedestals({ items }: { items: GadgetItem[] }) {
     },
     [mesh],
   )
+  // selection only rewrites the rim glow; the mesh is rebuilt on gadgets_rev and terrain changes alone
+  useEffect(() => paintSelection(pulse, items, selectedId), [pulse, items, selectedId])
+  const { onMove, onOut, onClick } = useMemo(() => gadgetPointerHandlers(items), [items])
   if (items.length === 0) return null
-  return <primitive object={mesh} />
+  return <primitive object={mesh} onPointerMove={onMove} onPointerOut={onOut} onClick={onClick} />
 })
 
 /** One instanced mesh per shape in the closed enum plus one for the pedestals, rebuilt on gadgets_rev. */
