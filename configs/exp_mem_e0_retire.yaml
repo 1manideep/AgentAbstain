@@ -1,0 +1,9 @@
+# exp_mem_e0, arm retire (MEMORY_EVOLUTION 6.13 row 5, Ratchet's retirement plus cap): deletes the oldest notes beyond a cap of 40 (index notes and kernel anchors exempt); it acts only once a vault outgrows the cap.
+extends: exp_mem_e0_base.yaml
+run:
+  name: exp_mem_e0_retire
+tiers:
+  scripted:
+    maintenance_strategy: retire
+experiment:
+  arm: retire

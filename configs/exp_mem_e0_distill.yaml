@@ -1,0 +1,9 @@
+# exp_mem_e0, arm distill (MEMORY_EVOLUTION 6.13 row 5, ALTK-Evolve's distillation): merges near-duplicate notes (same title stem, or cosine >= 0.9) into one summary holding the newest fact per node, then deletes the sources; fewer duplicates, the same facts.
+extends: exp_mem_e0_base.yaml
+run:
+  name: exp_mem_e0_distill
+tiers:
+  scripted:
+    maintenance_strategy: distill
+experiment:
+  arm: distill
