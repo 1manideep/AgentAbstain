@@ -1,0 +1,10 @@
+# exp_mem_e2, arm b: selection arm B, the paid proxy. Each day every agent answers up to two reward-exam questions
+# about canary facts at least two days old; each correct answer pays $0.02 from the research pool (recall_reward).
+extends: exp_mem_e2_base.yaml
+run:
+  name: exp_mem_e2_b
+memory:
+  selection:
+    arm: B
+experiment:
+  arm: b
