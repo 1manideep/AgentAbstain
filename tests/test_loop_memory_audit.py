@@ -202,34 +202,81 @@ def test_the_amnesic_control_keeps_the_direct_path(run_sim) -> None:
 
 
 # --- entity stubs on first mention --------------------------------------------------------------------------
-def test_a_scripted_run_leaves_no_dangling_links_to_agents_nodes_or_chronicles(smoke: SimRun) -> None:
-    """A regression guard on the smoke world (whose scripted notes already leave none dangling without the mention
-    stubs; the wiring itself is tested by the planted op below). An agent's link to its own name is out of scope:
-    nobody keeps a stub of themselves."""
-    db = smoke.db
+PLANTED_TITLE = "Planted mention"
+
+
+def _plant_mention(sim: Any, monkeypatch: pytest.MonkeyPatch, *, need_node: bool) -> dict[str, Any]:
+    """Make the first day-2 decision of an agent that lacks a stub of some other agent and of the chronicle of day 1
+    (and of some node, when ``need_node``) carry a ``remember`` op linking them, in front of its own first op. None of
+    those titles is in the writer's vault when the op is planted, so without the call in the loop's per-tick path each
+    of those links would dangle. Returns the plant's record, filled in when it happens during the run."""
+    original = ScriptedBrain._memory_ops
+    planted: dict[str, Any] = {}
+
+    def plant(self: ScriptedBrain, obs: Any, seed: Any, action: Any, rng: Any) -> list[MemoryOp]:
+        ops = original(self, obs, seed, action, rng)
+        if planted or obs.day < 2:
+            return ops
+        vault = {normalise_title(n.title) for n in sim.memory.list_notes(obs.agent_id)}
+        strangers = [r.name for r in sorted(sim.registry.alive(), key=lambda r: r.agent_id)
+                     if r.agent_id != obs.agent_id and normalise_title(r.name) not in vault]
+        unseen = [nid for nid in sorted(sim.nodes) if normalise_title(f"Node {nid}") not in vault]
+        if not strangers or (need_node and not unseen) or normalise_title("Chronicle of day 1") in vault:
+            return ops
+        node = unseen[0] if unseen else None
+        planted.update(agent_id=obs.agent_id, name=obs.name, tick=obs.tick, stranger=strangers[0], node=node)
+        about = f" about [[Node {node}]]" if node else ""
+        text = f"[[{strangers[0]}]] told [[{obs.name}]] what [[Chronicle of day 1]] said{about}; [[Nobody Here]] answered."
+        return [MemoryOp(op="remember", title=PLANTED_TITLE, text=text, tags=["people"], links_to=[strangers[0]])] + ops[:1]
+
+    monkeypatch.setattr(ScriptedBrain, "_memory_ops", plant)
+    return planted
+
+
+def test_a_scripted_run_leaves_no_dangling_links_to_agents_nodes_or_chronicles(make_sim, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The smoke world (six scripted agents, three days, gossip and the chronicle on) leaves no live note with a link
+    to an agent, a written chronicle day or a node that its vault cannot resolve.
+
+    The world's own scripted notes link only entities their writers already hold, so on its own this check could not
+    fail with the mention stubs disabled. One planted per-tick ``remember`` on day 2 (:func:`_plant_mention`) links an
+    agent and the chronicle of day 1 its writer holds no stub of; those links resolve only through the mention stubs.
+    Out of scope: a link to the vault's own agent (nobody keeps a stub of themselves) and copies of the planted note
+    (gossip copies and inherited notes are deliberately not anchored, see ``Simulation._anchor_mentions``).
+    """
+    sim = make_sim("audit_dangling", deep_merge(NO_PROVIDER_TIERS, {"run": {"days": 3}}))
+    planted = _plant_mention(sim, monkeypatch, need_node=False)
+    assert asyncio.run(sim.run()) == "completed"
+    assert planted, "no agent on day 2 lacked a stub of another agent and of the chronicle of day 1"
+    db = sim.db
     own = {str(r["agent_id"]): normalise_title(str(r["name"])) for r in db.fetchall("SELECT agent_id, name FROM agents")}
     names = set(own.values())
-    written = int(smoke.kv("chronicle_day") or 0)
+    written = int(db.kv_get("chronicle_day") or 0)
     assert written >= 2
     chronicles = {normalise_title(f"Chronicle of day {d}") for d in range(1, written + 1)}
-    nodes = {normalise_title(f"Node {nid}") for nid in smoke.sim.nodes}
+    nodes = {normalise_title(f"Node {nid}") for nid in sim.nodes}
+    note_id = str(db.fetchone("SELECT note_id FROM notes WHERE agent_id=? AND title=?", (planted["agent_id"], PLANTED_TITLE))["note_id"])
     titles: dict[str, set[str]] = defaultdict(set)
     for r in db.fetchall("SELECT agent_id, title FROM notes WHERE archived=0"):
         titles[str(r["agent_id"])].add(normalise_title(str(r["title"])))
     checked: Counter[str] = Counter()
+    from_plant: set[str] = set()
     dangling: list[tuple[str, str, str]] = []
-    for r in db.fetchall("SELECT n.agent_id, n.title, l.to_title FROM note_links l JOIN notes n ON n.note_id=l.from_note_id "
-                         "WHERE n.archived=0 ORDER BY n.note_id, l.to_title"):
+    for r in db.fetchall("SELECT n.note_id, n.agent_id, n.origin_note_id, l.to_title FROM note_links l "
+                         "JOIN notes n ON n.note_id=l.from_note_id WHERE n.archived=0 ORDER BY n.note_id, l.to_title"):
         key = normalise_title(str(r["to_title"]))
-        if key == own.get(str(r["agent_id"])):
+        if key == own.get(str(r["agent_id"])) or r["origin_note_id"] == note_id:
             continue
         kind = "agent" if key in names else "chronicle" if key in chronicles else "node" if key in nodes else None
         if kind is None:
             continue
         checked[kind] += 1
+        if r["note_id"] == note_id:
+            from_plant.add(key)
         if key not in titles[str(r["agent_id"])]:
             dangling.append((kind, str(r["agent_id"]), str(r["to_title"])))
     assert checked["agent"] > 0 and checked["chronicle"] > 0 and checked["node"] > 0, checked
+    assert from_plant == {normalise_title(planted["stranger"]), normalise_title("Chronicle of day 1")} | (
+        {normalise_title(f"Node {planted['node']}")} if planted["node"] else set())
     assert dangling == []
 
 
@@ -266,25 +313,7 @@ def test_a_planted_remember_gets_its_mention_stubs_through_the_tick(make_sim, mo
     tick each has its stub, written that very tick, and the note's links resolve; its own name and a stranger get none.
     """
     sim = make_sim("audit_planted", deep_merge(NO_PROVIDER_TIERS, {"run": {"days": 2}, "world": {"view_radius": 8.0}}))
-    original = ScriptedBrain._memory_ops
-    planted: dict[str, Any] = {}
-
-    def plant(self: ScriptedBrain, obs: Any, seed: Any, action: Any, rng: Any) -> list[MemoryOp]:
-        ops = original(self, obs, seed, action, rng)
-        if planted or obs.day < 2:
-            return ops
-        vault = {normalise_title(n.title) for n in sim.memory.list_notes(obs.agent_id)}
-        strangers = [r.name for r in sorted(sim.registry.alive(), key=lambda r: r.agent_id)
-                     if r.agent_id != obs.agent_id and normalise_title(r.name) not in vault]
-        unseen = [nid for nid in sorted(sim.nodes) if normalise_title(f"Node {nid}") not in vault]
-        if not strangers or not unseen or normalise_title("Chronicle of day 1") in vault:
-            return ops
-        planted.update(agent_id=obs.agent_id, name=obs.name, tick=obs.tick, stranger=strangers[0], node=unseen[0])
-        text = (f"[[{strangers[0]}]] told [[{obs.name}]] what [[Chronicle of day 1]] said about [[Node {unseen[0]}]]; "
-                "[[Nobody Here]] answered.")
-        return [MemoryOp(op="remember", title="Planted mention", text=text, tags=["people"], links_to=[strangers[0]])] + ops[:1]
-
-    monkeypatch.setattr(ScriptedBrain, "_memory_ops", plant)
+    planted = _plant_mention(sim, monkeypatch, need_node=True)
     assert asyncio.run(sim.run()) == "completed"
     assert planted, "no agent on day 2 had a stranger, an unseen node and an unread chronicle"
     aid, tick = planted["agent_id"], planted["tick"]
@@ -294,10 +323,10 @@ def test_a_planted_remember_gets_its_mention_stubs_through_the_tick(make_sim, mo
         assert {p["speaker_id"], p["listener_id"]} != pair  # no talk stub that tick: the stranger's stub is the mention's
 
     notes = {normalise_title(n.title): n for n in sim.memory.list_notes(aid, include_archived=True)}
-    note = notes[normalise_title("Planted mention")]
+    note = notes[normalise_title(PLANTED_TITLE)]
     assert note.created_tick == tick
     assert sim.db.fetchone("SELECT COUNT(*) AS n FROM memory_commands WHERE purpose='tick' AND command='create' AND agent_id=? AND tick=? "
-                           "AND ok=1 AND json_extract(args, '$.title')='Planted mention'", (aid, tick))["n"] == 1
+                           "AND ok=1 AND json_extract(args, '$.title')=?", (aid, tick, PLANTED_TITLE))["n"] == 1
     for title in (planted["stranger"], "Chronicle of day 1", f"Node {planted['node']}"):
         stub = notes.get(normalise_title(title))
         assert stub is not None, title
