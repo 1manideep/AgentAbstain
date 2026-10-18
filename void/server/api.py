@@ -189,15 +189,20 @@ def _json_or_raw(raw: Any) -> Any:
         return str(raw)
 
 
+def build_agent_policy(sim: Any, agent_id: str) -> dict[str, Any]:
+    """The /api/agents/{id}/policy payload; shared by the route and the fixture recorder."""
+    versions = [{"version": int(v.version), "tick": int(v.tick), "source": v.source, "source_agent_id": v.source_agent_id,
+                 "parent_version": v.parent_version, "similarity_to_parent": v.similarity_to_parent, "text": v.text}
+                for v in reversed(sim.policy.history(agent_id))]
+    return {"agent_id": agent_id, "versions": versions}
+
+
 @router.get("/agents/{agent_id}/policy")
 async def agent_policy(agent_id: str, request: Request) -> dict[str, Any]:
     """Every ``policy_versions`` row of the agent, newest first (empty when the policy layer is off)."""
     sim = _sim(request)
     _known_agent(sim, agent_id)
-    versions = [{"version": int(v.version), "tick": int(v.tick), "source": v.source, "source_agent_id": v.source_agent_id,
-                 "parent_version": v.parent_version, "similarity_to_parent": v.similarity_to_parent, "text": v.text}
-                for v in reversed(sim.policy.history(agent_id))]
-    return {"agent_id": agent_id, "versions": versions}
+    return build_agent_policy(sim, agent_id)
 
 
 @router.get("/agents/{agent_id}/memory_commands")
@@ -265,10 +270,9 @@ async def memory_summary(request: Request) -> dict[str, Any]:
     return build_memory_summary(_sim(request))
 
 
-@router.get("/practices")
-async def practices(request: Request, limit: int = Query(default=500, ge=1, le=MAX_LIMIT)) -> dict[str, Any]:
-    """The last ``limit`` ``practice_events`` rows, newest first (empty until practice transmission writes any)."""
-    rows = _sim(request).db.fetchall(
+def build_practices(sim: Any, limit: int = 500) -> dict[str, Any]:
+    """The /api/practices payload; shared by the route and the fixture recorder."""
+    rows = sim.db.fetchall(
         "SELECT event_id, tick, kind, source_agent_id, target_agent_id, excerpt, similarity FROM practice_events "
         "ORDER BY tick DESC, rowid DESC LIMIT ?", (limit,))
     return {"events": [{
@@ -276,6 +280,12 @@ async def practices(request: Request, limit: int = Query(default=500, ge=1, le=M
         "target_agent_id": r["target_agent_id"], "excerpt": str(r["excerpt"]),
         "similarity": None if r["similarity"] is None else float(r["similarity"]),
     } for r in rows]}
+
+
+@router.get("/practices")
+async def practices(request: Request, limit: int = Query(default=500, ge=1, le=MAX_LIMIT)) -> dict[str, Any]:
+    """The last ``limit`` ``practice_events`` rows, newest first (empty until practice transmission writes any)."""
+    return build_practices(_sim(request), limit)
 
 
 operator = [Depends(require_operator)]

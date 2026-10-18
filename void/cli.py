@@ -510,10 +510,18 @@ async def record_feed(cfg: VoidConfig, run_dir: Path, ticks: int, *, seed: int |
                       api_dump: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Run a real simulation for ``ticks`` ticks through the hub and return the messages a socket would get.
 
-    When ``api_dump`` is given it is filled with the /api responses (agents, tree, graveyard, gadgets, tasks)
-    so the frontend's fixture mode can answer detail requests offline.
+    When ``api_dump`` is given it is filled with the /api responses (agents, tree, graveyard, gadgets, tasks, and the
+    memory reads: policy per agent, memory_summary, practices) so the frontend's fixture mode can answer detail
+    requests offline. Vault paths in it are relative to ``run_dir``, so the dump does not depend on where it ran.
     """
-    from void.server.api import build_agent_detail, build_graveyard, build_tree
+    from void.server.api import (
+        build_agent_detail,
+        build_agent_policy,
+        build_graveyard,
+        build_memory_summary,
+        build_practices,
+        build_tree,
+    )
     from void.server.protocol import parse_message
     from void.server.ws import Hub, Subscriber, SyntheticClock
     from void.sim.loop import Simulation
@@ -541,12 +549,20 @@ async def record_feed(cfg: VoidConfig, run_dir: Path, ticks: int, *, seed: int |
         await hub.flush()
         out.extend(sub.drain())
         if api_dump is not None:
+            agents = {a.agent_id: build_agent_detail(sim, a.agent_id) for a in sim.registry.all()}
+            root = Path(run_dir).resolve()
+            for detail in agents.values():  # the vault path sits under a temporary run_dir: keep only its relative part
+                rec = (detail or {}).get("agent") or {}
+                path = rec.get("memory_path")
+                if isinstance(path, str) and Path(path).resolve().is_relative_to(root):
+                    rec["memory_path"] = Path(path).resolve().relative_to(root).as_posix()
             api_dump.clear()
             api_dump.update({
-                "run_id": sim.run_id,
-                "agents": {a.agent_id: build_agent_detail(sim, a.agent_id) for a in sim.registry.all()},
+                "run_id": sim.run_id, "agents": agents,
                 "tree": build_tree(sim), "graveyard": build_graveyard(sim),
                 "gadgets": hub.gadgets_message(), "tasks": {"type": "tasks", "rev": sim.taskboard.rev, "items": sim.taskboard.snapshot()},
+                "policy": {aid: build_agent_policy(sim, aid) for aid in agents},
+                "memory_summary": build_memory_summary(sim), "practices": build_practices(sim),
             })
     finally:
         await hub.stop()

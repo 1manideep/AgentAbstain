@@ -49,6 +49,16 @@ def test_mock_feed_records_a_genuine_stream(tmp_path: Path, capsys: pytest.Captu
     out2 = tmp_path / "mock2.jsonl"
     assert main(["mock-feed", "--config", CONFIG, "--ticks", "30", "--out", str(out2)]) == 0
     assert out2.read_text() == out.read_text()
+    # the /api dump too, byte for byte: vault paths are relative to the (temporary) run directory
+    api, api2 = out.with_name("api.json"), out2.with_name("api.json")
+    assert api2.read_bytes() == api.read_bytes()
+    dump = json.loads(api.read_text())
+    assert {"run_id", "agents", "tree", "graveyard", "gadgets", "tasks", "policy", "memory_summary", "practices"} <= set(dump)
+    assert set(dump["policy"]) == set(dump["agents"]) and {r["agent_id"] for r in dump["memory_summary"]["agents"]} == set(dump["agents"])
+    paths = [Path(d["agent"]["memory_path"]) for d in dump["agents"].values()]
+    assert paths and all(not p.is_absolute() and ".." not in p.parts and p.parts[0] in {"vaults", "graveyard"} for p in paths)
+    assert "void-mock-feed-" not in api.read_text()
+    assert dump["practices"] == {"events": []}
 
 
 def test_run_one_day_writes_metrics(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
