@@ -1,103 +1,14 @@
 import { memo } from 'react'
-import type { Epoch } from '../../protocol'
-import type { EpochSpan } from '../../state/series'
 import { EPOCH_COLORS, INK } from './chartTheme'
 import { ChartTip, useChartTip } from './ChartTip'
-
-export type EpochBlockState = 'past' | 'active' | 'scheduled'
-
-export interface EpochBlock {
-  key: string
-  /** Server epoch id; null for an active or scheduled epoch sent without one. */
-  id: string | null
-  kind: string
-  startDay: number
-  /** The day the epoch expires: the block covers startDay .. endDay - 1. */
-  endDay: number
-  state: EpochBlockState
-  detail: string
-  /** Row of the strip, so overlapping epochs do not hide each other. */
-  lane: number
-}
-
-/** Rows the strip grows to before overlapping epochs share the last one. */
-export const MAX_EPOCH_LANES = 3
-
-const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
-
-function leverDetail(e: { kind: string; scarcity?: number | null; weather_baseline?: number | null; arrival_agent_id?: string | null }): string[] {
-  const parts: string[] = []
-  if (e.scarcity != null) parts.push(`scarcity ${e.scarcity}`)
-  if (e.weather_baseline != null) parts.push(`weather ${e.weather_baseline}`)
-  if (e.arrival_agent_id) parts.push(`arrival ${e.arrival_agent_id}`)
-  return parts
-}
-
-function spanBlock(s: EpochSpan): EpochBlock {
-  const parts = leverDetail(s)
-  if (s.source === 'ended') parts.push('start not seen')
-  if (s.ended_day !== null && s.ends_day !== null && s.ended_day < s.ends_day) parts.push(`ended day ${s.ended_day}`)
-  const endDay = Math.max(s.day, s.ends_day ?? s.ended_day ?? s.day + 1)
-  return {
-    key: s.id,
-    id: s.id,
-    kind: s.kind,
-    startDay: s.day,
-    endDay,
-    // active until the matching ended event; the series also retires a span whose ends_day a snapshot has passed
-    // (its ended event may fall outside the backlog)
-    state: s.ended_day !== null || s.state === 'past' ? 'past' : 'active',
-    detail: parts.join(' · ') || s.kind,
-    lane: 0,
-  }
-}
-
-function epochBlock(e: Epoch, state: EpochBlockState, key: string): EpochBlock {
-  const day = num(e.day) ?? 0
-  const endDay = Math.max(day, num(e.ends_day) ?? day + (num(e.duration_days) ?? 1))
-  return { key, id: e.id ?? null, kind: String(e.kind), startDay: day, endDay, state, detail: leverDetail({ ...e, kind: String(e.kind) }).join(' · ') || String(e.kind), lane: 0 }
-}
-
-const STATE_ORDER: Record<EpochBlockState, number> = { past: 0, active: 1, scheduled: 2 }
-
-/** Greedy interval packing: each block takes the first row whose last block has ended by its start. */
-function assignLanes(blocks: EpochBlock[], maxLanes: number): void {
-  const laneEnds: number[] = []
-  for (const b of blocks) {
-    let lane = laneEnds.findIndex((end) => end <= b.startDay)
-    if (lane < 0) lane = laneEnds.length < maxLanes ? laneEnds.length : maxLanes - 1
-    b.lane = lane
-    laneEnds[lane] = Math.max(laneEnds[lane] ?? 0, b.endDay)
-  }
-}
+import { dayStep, type EpochBlock } from './degradationEpochsModel'
 
 /**
- * One block per epoch id: started epochs (seen as events, or as the snapshot's active epoch when the page loaded
- * mid-epoch) from their first day to ends_day, active until their ended event; then the snapshot's active epoch if
- * the series has no span for it, and the scheduled epochs not yet started. Sorted by first day, packed into lanes.
+ * Compatibility for degradationEpochs.test.tsx, which still imports these from here: the model lives in
+ * degradationEpochsModel.ts. Remove once that test imports from the model.
  */
-export function epochBlocks(spans: readonly EpochSpan[], epochs: { active: Epoch | null; scheduled: readonly Epoch[] }, maxLanes = MAX_EPOCH_LANES): EpochBlock[] {
-  const out = spans.map(spanBlock)
-  const ids = new Set(out.map((b) => b.id))
-  const a = epochs.active
-  if (a && !(a.id ? ids.has(a.id) : out.some((b) => b.kind === a.kind && b.startDay === a.day))) {
-    out.push(epochBlock(a, 'active', a.id ?? `active-${a.kind}-${a.day}`))
-    if (a.id) ids.add(a.id)
-  }
-  for (const s of epochs.scheduled) {
-    if (s.id && ids.has(s.id)) continue
-    out.push(epochBlock(s, 'scheduled', `sched-${s.id ?? `${s.kind}-${s.day}`}`))
-  }
-  out.sort((x, y) => x.startDay - y.startDay || STATE_ORDER[x.state] - STATE_ORDER[y.state] || (x.key < y.key ? -1 : x.key > y.key ? 1 : 0))
-  assignLanes(out, Math.max(1, maxLanes))
-  return out
-}
-
-/** Day-axis label step so the axis carries at most about a dozen labels. */
-export function dayStep(span: number): number {
-  for (const step of [1, 2, 5, 10, 20, 50, 100, 200, 500]) if (span / step <= 12) return step
-  return 1000
-}
+// oxlint-disable-next-line react/only-export-components
+export { dayStep, epochBlocks, MAX_EPOCH_LANES } from './degradationEpochsModel'
 
 interface Props {
   blocks: EpochBlock[]

@@ -1,7 +1,8 @@
 import { memo, useMemo } from 'react'
 import { selectTierColor, useStore } from '../../state/store'
 import { Card } from '../Card'
-import { CalibrationNote, DegradationVsStress, degradationView } from '../charts/DegradationVsStress'
+import { CalibrationNote, DegradationVsStress } from '../charts/DegradationVsStress'
+import { degradationView } from '../charts/degradationEpochsModel'
 
 export const DegradationCard = memo(function DegradationCard() {
   const rev = useStore((s) => s.seriesRev)

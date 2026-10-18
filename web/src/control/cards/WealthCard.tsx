@@ -33,17 +33,9 @@ const WealthTrend = memo(function WealthTrend({ balance, gini, first, last }: { 
       <div className="chart-sub tnum">
         Mean balance of the living, ticks {first}-{last}
       </div>
-      {balance.length ? (
-        <div role="figure" aria-label="mean balance over time">
-          <Sparkline values={balance} color={SERIES[0]} height={40} format={fmtBalance} />
-        </div>
-      ) : null}
+      <Sparkline values={balance} color={SERIES[0]} height={40} format={fmtBalance} ariaLabel="mean balance over time" emptyText="No mean balance yet." />
       <div className="chart-sub">Gini of living balances</div>
-      {gini.length ? (
-        <div role="figure" aria-label="gini over time">
-          <Sparkline values={gini} color={SERIES[1]} height={40} format={fmtGini} />
-        </div>
-      ) : null}
+      <Sparkline values={gini} color={SERIES[1]} height={40} format={fmtGini} ariaLabel="gini over time" emptyText="No gini yet." />
     </div>
   )
 })

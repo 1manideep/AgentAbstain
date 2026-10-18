@@ -250,7 +250,7 @@ export type PolicyStatus = 'idle' | 'ok' | 'unavailable' | 'fixture'
 /** One line under the legend saying what the colouring rests on; null when there is nothing to say. */
 // oxlint-disable-next-line react/only-export-components
 export function policyNote(status: PolicyStatus, policy: ReadonlyMap<string, PolicyInfo>, policyLayer: boolean | undefined): string | null {
-  if (status === 'fixture') return 'Policy sources are served by the server; fixture playback has none.'
+  if (status === 'fixture') return "Policy sources come from the recording's memory summary; this fixture playback has none."
   if (status === 'unavailable') return 'Policy sources unavailable: /api/memory/summary did not answer.'
   if (status === 'idle') return 'Loading policy sources...'
   let any = false
@@ -330,7 +330,8 @@ function writeColour(c: LineageColour): void {
 interface SummaryState {
   runId: string | null
   items: MemorySummaryItem[] | null
-  status: 'idle' | 'ok' | 'unavailable'
+  /** 'fixture': fixture playback whose recording did not answer the summary. */
+  status: 'idle' | 'ok' | 'unavailable' | 'fixture'
 }
 
 interface MarksState {
@@ -338,7 +339,21 @@ interface MarksState {
   marks: Map<string, boolean>
 }
 
-export const Lineage = memo(function Lineage({ fixture = FIXTURE_MODE }: { fixture?: boolean }) {
+export interface LineageProps {
+  /**
+   * No route behind the panel at all: the roster's tree, and the source colouring says fixture playback has none,
+   * without asking. Fixture playback does not need it: the api layer answers the graveyard, the memory summary and the
+   * policy histories from the recording, and a summary the recording lacks shows the same note.
+   */
+  fixture?: boolean
+}
+
+/**
+ * The panel: the tree (GET /api/tree, or the roster's), causes of death (GET /api/graveyard) and, coloured by source,
+ * the memory summary and the policy histories the inherited-then-edited mark needs. Fixture playback asks the api layer
+ * for all of them but the tree: the recorded tree is the end of the run, ahead of the playback, so the roster's is kept.
+ */
+export const Lineage = memo(function Lineage({ fixture = false }: LineageProps) {
   const roster = useStore((s) => s.roster)
   const rosterRev = useStore((s) => s.rosterRev)
   const config = useStore((s) => s.config)
@@ -356,13 +371,16 @@ export const Lineage = memo(function Lineage({ fixture = FIXTURE_MODE }: { fixtu
     if (fixture) return
     let cancelled = false
     const t = setTimeout(() => {
-      apiGet<TreeResponse>('/api/tree')
-        .then((r) => {
-          if (!cancelled && Array.isArray(r.roots)) setRemote(r.roots)
-        })
-        .catch(() => {
-          if (!cancelled) setRemote(null)
-        })
+      if (!FIXTURE_MODE) {
+        apiGet<TreeResponse>('/api/tree')
+          .then((r) => {
+            if (!cancelled && Array.isArray(r.roots)) setRemote(r.roots)
+          })
+          .catch(() => {
+            if (!cancelled) setRemote(null)
+          })
+      }
+      // a recorded death's cause never changes, so the recording's graveyard holds for every dead agent of the playback
       apiGet<GraveyardResponse>('/api/graveyard')
         .then((r) => {
           if (!cancelled) setCauses(causesFrom(r))
@@ -382,7 +400,7 @@ export const Lineage = memo(function Lineage({ fixture = FIXTURE_MODE }: { fixtu
     if (colour !== 'source' || fixture || runId === null) return
     return pollMemorySummary(
       (items) => setSummary({ runId, items, status: 'ok' }),
-      () => setSummary((prev) => (prev.runId === runId && prev.items ? prev : { runId, items: null, status: 'unavailable' })),
+      () => setSummary((prev) => (prev.runId === runId && prev.items ? prev : { runId, items: null, status: FIXTURE_MODE ? 'fixture' : 'unavailable' })),
     )
   }, [colour, fixture, runId])
 

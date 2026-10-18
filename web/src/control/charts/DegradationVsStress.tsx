@@ -1,20 +1,15 @@
 import { memo } from 'react'
 import type { HelloConfig } from '../../protocol'
-import { DEGRADATION_BINS, STRESS_BINS, type DegradationBin, type StressBinAcc } from '../../state/series'
 import { fmtNum, fmtPct, INK, linePath } from './chartTheme'
 import { ChartTip, useChartTip } from './ChartTip'
-
-/** DESIGN §8: with induce/both the degeneration charts check the operator's calibration; they are not findings. */
-export const CALIBRATION_LABEL = 'induced: calibration check, not a finding'
+import { calibrationLabel, pointLabel, type DegradationMetric, type DegradationView } from './degradationEpochsModel'
 
 /**
- * The calibration label for a run's degeneration mode: null in `observe` mode, the label for `induce`, `both`
- * and a config without the field (the server defaults it to `both`). Null before hello, when nothing is known.
+ * Compatibility for degradationEpochs.test.tsx, which still imports these from here: the model lives in
+ * degradationEpochsModel.ts. Remove once that test imports from the model.
  */
-export function calibrationLabel(config: Pick<HelloConfig, 'degeneration_mode'> | null | undefined): string | null {
-  if (!config) return null
-  return config.degeneration_mode === 'observe' ? null : CALIBRATION_LABEL
-}
+// oxlint-disable-next-line react/only-export-components
+export { CALIBRATION_LABEL, calibrationLabel, degradationView, pointLabel } from './degradationEpochsModel'
 
 /** The label as a note at the top of a card body; renders nothing in `observe` mode. */
 export const CalibrationNote = memo(function CalibrationNote({ config }: { config: Pick<HelloConfig, 'degeneration_mode'> | null }) {
@@ -26,95 +21,6 @@ export const CalibrationNote = memo(function CalibrationNote({ config }: { confi
     </div>
   )
 })
-
-export interface TierCurve {
-  tier: string
-  color: string
-  /** mean per stress bin, NaN when empty */
-  coherence: number[]
-  invalid: number[]
-  /** Weight behind each bin: decide calls (per-call bins) or metrics rows (fallback). */
-  n: number[]
-  /** Calls with a coherence score per bin (per-call bins); the rows with a coherence mean in the fallback. */
-  scored: number[]
-}
-
-/** 'calls': per-call stress bins, call-weighted. 'rows': each tier's tick in the bin of its mean stress (older rows). */
-export type DegradationSource = 'calls' | 'rows'
-
-export interface DegradationView {
-  source: DegradationSource
-  bins: number
-  curves: TierCurve[]
-  /** Calls behind the plot ('calls'), or tier-rows ('rows'). */
-  total: number
-}
-
-interface DegradationSeries {
-  degradationBins: ReadonlyMap<string, readonly DegradationBin[]>
-  coherenceByTierByStressBin: ReadonlyMap<string, StressBinAcc>
-}
-
-/**
- * Per tier, mean text coherence and invalid-action rate per stress bin. From the per-call stress bins when any row
- * carried them (coherence = coherence_sum / coherence_n, invalid = invalid_sum / calls, both pooled over rows, so
- * weighted by calls); otherwise from the older mean-stress structure. Tiers with no data are left out.
- */
-export function degradationView(series: DegradationSeries, colorOf: (tier: string) => string): DegradationView {
-  const curves: TierCurve[] = []
-  let total = 0
-  if (series.degradationBins.size > 0) {
-    for (const [tier, acc] of series.degradationBins) {
-      const c: TierCurve = { tier, color: colorOf(tier), coherence: [], invalid: [], n: [], scored: [] }
-      let weight = 0
-      for (let b = 0; b < DEGRADATION_BINS; b++) {
-        const d = acc[b]
-        const calls = d?.calls ?? 0
-        const cohN = d?.coherence_n ?? 0
-        c.coherence.push(cohN > 0 ? d!.coherence_sum / cohN : NaN)
-        c.invalid.push(calls > 0 ? d!.invalid_sum / calls : NaN)
-        c.n.push(calls)
-        c.scored.push(cohN)
-        weight += calls
-      }
-      if (weight > 0) {
-        curves.push(c)
-        total += weight
-      }
-    }
-    curves.sort((a, b) => a.tier.localeCompare(b.tier))
-    return { source: 'calls', bins: DEGRADATION_BINS, curves, total }
-  }
-  for (const [tier, acc] of series.coherenceByTierByStressBin) {
-    const c: TierCurve = { tier, color: colorOf(tier), coherence: [], invalid: [], n: [], scored: [] }
-    let weight = 0
-    for (let b = 0; b < STRESS_BINS; b++) {
-      const cohN = acc.cohN[b] ?? 0
-      const invN = acc.invN[b] ?? 0
-      c.coherence.push(cohN > 0 ? acc.cohSum[b]! / cohN : NaN)
-      c.invalid.push(invN > 0 ? acc.invSum[b]! / invN : NaN)
-      c.n.push(Math.max(cohN, invN))
-      c.scored.push(cohN)
-      weight += Math.max(cohN, invN)
-    }
-    if (weight > 0) {
-      curves.push(c)
-      total += weight
-    }
-  }
-  curves.sort((a, b) => a.tier.localeCompare(b.tier))
-  return { source: 'rows', bins: STRESS_BINS, curves, total }
-}
-
-export type DegradationMetric = 'coherence' | 'invalid'
-
-/** Tooltip label of one point: the tier and the counts behind it (calls, or rows in the fallback). */
-export function pointLabel(curve: TierCurve, bin: number, metric: DegradationMetric, source: DegradationSource): string {
-  const n = curve.n[bin] ?? 0
-  if (source === 'rows') return `${curve.tier} · ${n} ${n === 1 ? 'row' : 'rows'}`
-  const calls = `${n} ${n === 1 ? 'call' : 'calls'}`
-  return metric === 'coherence' ? `${curve.tier} · ${curve.scored[bin] ?? 0} scored of ${calls}` : `${curve.tier} · ${calls}`
-}
 
 /** Runs of consecutive bins with a value; a line never bridges an empty bin. */
 function runs(vals: readonly number[]): number[][] {

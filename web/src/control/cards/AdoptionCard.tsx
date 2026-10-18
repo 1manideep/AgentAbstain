@@ -216,6 +216,7 @@ export interface AdoptionBodyProps {
   status: PracticesStatus
   /** The answer held the full limit of rows, so the oldest days may be missing or partial. */
   truncated?: boolean
+  /** Fixture playback without recorded practice events: the explicit empty state, whatever `days` holds. */
   fixture?: boolean
 }
 
@@ -225,7 +226,7 @@ export const AdoptionBody = memo(function AdoptionBody({ days, status, truncated
     return (
       <>
         <EmptyState text={ADOPTION_EMPTY} />
-        <div className="chart-sub">Fixture playback has no server, so no practice events.</div>
+        <div className="chart-sub">This fixture recording has no practice events.</div>
       </>
     )
   }
@@ -289,7 +290,25 @@ interface PracticesState {
   status: PracticesStatus
 }
 
-export const AdoptionCard = memo(function AdoptionCard({ fixture = FIXTURE_MODE }: { fixture?: boolean }) {
+/**
+ * Whether the card shows the fixture empty state: when told to, or in fixture playback once the recording has
+ * answered 404 (the api layer fails only that way there) before any row arrived.
+ */
+// oxlint-disable-next-line react/only-export-components
+export function practicesUnrecorded(fixture: boolean, fixtureMode: boolean, status: PracticesStatus, events: readonly PracticeEventRow[] | null | undefined): boolean {
+  return fixture || (fixtureMode && status === 'unavailable' && !events)
+}
+
+export interface AdoptionCardProps {
+  /**
+   * No route behind the card at all: the fixture empty state, without asking. Fixture playback does not need it: the
+   * api layer answers GET /api/practices from the recording, and a recording without practice rows (404) shows the
+   * same empty state.
+   */
+  fixture?: boolean
+}
+
+export const AdoptionCard = memo(function AdoptionCard({ fixture = false }: AdoptionCardProps) {
   const runId = useStore((s) => s.runId)
   const ticksPerDay = useStore((s) => s.config?.ticks_per_day ?? 24)
   const [state, setState] = useState<PracticesState>({ runId: null, events: null, status: 'idle' })
@@ -303,11 +322,12 @@ export const AdoptionCard = memo(function AdoptionCard({ fixture = FIXTURE_MODE 
   const mine = state.runId === runId ? state : null
   const days = useMemo(() => adoptionDays(mine?.events ?? [], ticksPerDay), [mine?.events, ticksPerDay])
   const status: PracticesStatus = mine?.status ?? 'idle'
-  const t = days.length && !fixture ? adoptionTotals(days) : null
+  const unrecorded = practicesUnrecorded(fixture, FIXTURE_MODE, status, mine?.events)
+  const t = days.length && !unrecorded ? adoptionTotals(days) : null
   const meta = t ? <span className="muted small tnum">{`${t.adopted}/${t.suggested} adopted`}</span> : undefined
   return (
     <Card id="adoption" title="Adoption" meta={meta}>
-      <AdoptionBody days={days} status={status} truncated={(mine?.events?.length ?? 0) >= PRACTICES_LIMIT} fixture={fixture} />
+      <AdoptionBody days={days} status={status} truncated={(mine?.events?.length ?? 0) >= PRACTICES_LIMIT} fixture={unrecorded} />
     </Card>
   )
 })

@@ -8,10 +8,22 @@ interface SparklineProps {
   color?: string
   /** Formats the last value's direct label. */
   format?: (v: number) => string
+  /** The svg's accessible name. */
+  ariaLabel?: string
+  /** Shown in place of the line when there are no values or the last one is not finite. */
+  emptyText?: string
 }
 
 /** 12–240 point sparkline: 2px line, end marker, last value labelled. */
-export const Sparkline = memo(function Sparkline({ values, width = 220, height = 44, color = SERIES[0], format }: SparklineProps) {
+export const Sparkline = memo(function Sparkline({
+  values,
+  width = 220,
+  height = 44,
+  color = SERIES[0],
+  format,
+  ariaLabel = 'call history',
+  emptyText = 'No calls yet.',
+}: SparklineProps) {
   const { path, last, lastY, lastX, endLabel } = useMemo(() => {
     if (values.length === 0) return { path: '', last: NaN, lastY: 0, lastX: 0, endLabel: '' }
     const min = Math.min(...values)
@@ -27,9 +39,9 @@ export const Sparkline = memo(function Sparkline({ values, width = 220, height =
     const lp = pts[pts.length - 1]!
     return { path: linePath(pts), last: lv, lastY: lp[1], lastX: lp[0], endLabel: format ? format(lv) : lv.toFixed(3) }
   }, [values, width, height, format])
-  if (!Number.isFinite(last)) return <div className="muted small">No calls yet.</div>
+  if (!Number.isFinite(last)) return <div className="muted small">{emptyText}</div>
   return (
-    <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} width="100%" height={height} role="img" aria-label="call history">
+    <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} width="100%" height={height} role="img" aria-label={ariaLabel}>
       <path d={path} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
       <circle cx={lastX} cy={lastY} r="4" fill={color} stroke={INK.surface} strokeWidth="2" />
       <text x={lastX + 8} y={lastY + 4} fill={INK.secondary} fontSize="11" className="tnum">

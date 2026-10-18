@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent } from 'react'
-import { ApiError, apiGet, FIXTURE_MODE } from '../../net/api'
+import { ApiError, apiGet } from '../../net/api'
 import type { DayRow, MemorySummaryItem, MemorySummaryResponse, RosterAgent } from '../../protocol'
 import type { ExamTally, MemorySeries } from '../../state/series'
 import { selectTierColor, useStore } from '../../state/store'
@@ -278,19 +278,19 @@ export function pollMemorySummary(
 
 /**
  * The memory summary of the current run, refreshed every 15 s. The decide cost moves every tick, so the share it
- * gives may trail by one refresh; a transient failure keeps the last good summary of the run.
+ * gives may trail by one refresh; a transient failure keeps the last good summary of the run. Fixture playback asks
+ * the same api layer, which answers with the recording's summary (the end of the run), or 404 (unavailable) when the
+ * recording has none.
  */
 function useMemorySummary(runId: string | null): SummaryState {
   const [state, setState] = useState<SummaryState>({ runId: null, items: null, status: 'idle' })
   useEffect(() => {
-    if (runId === null || FIXTURE_MODE) return
+    if (runId === null) return
     return pollMemorySummary(
       (items) => setState({ runId, items, status: 'ok' }),
       () => setState((prev) => (prev.runId === runId && prev.items ? prev : { runId, items: null, status: 'unavailable' })),
     )
   }, [runId])
-  // a fixture recording has no server behind it
-  if (FIXTURE_MODE) return { runId, items: null, status: 'unavailable' }
   return state.runId === runId ? state : { runId, items: null, status: 'idle' }
 }
 
