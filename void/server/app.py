@@ -3,7 +3,8 @@
 ``create_app`` mounts the HTTP API and the ``/ws`` hub, serves the built frontend (``web/dist``)
 with an SPA fallback, starts ``sim.run()`` as a background task on startup (``app.state.sim_task``,
 via :class:`void.server.driver.SimDriver`) and cancels it on shutdown. The operator token is
-printed once at startup.
+printed once at startup. ``serve`` holds the run directory's lock (``void.cli.RunDirLock``) for the
+server's whole life, so a second server (or ``void run``) refuses the directory instead of archiving it.
 """
 
 from __future__ import annotations
@@ -94,13 +95,21 @@ def create_app(sim: Simulation, *, static_dir: Path | None = None, host: str | N
 def serve(cfg: VoidConfig, run_dir: Path, host: str = "127.0.0.1", port: int = 8000, resume: bool = False,
           static_dir: Path | None = None, *, paused: bool = False, tick_seconds: float | None = None,
           log_level: str = "info") -> None:
-    """Build the Simulation and run uvicorn until interrupted."""
+    """Build the Simulation and run uvicorn until interrupted.
+
+    The server holds ``run_dir``'s lock (:class:`void.cli.RunDirLock`) from before the Simulation touches the
+    directory until uvicorn returns; a directory another process holds raises :class:`void.cli.RunDirBusy` before
+    anything is written. SIGINT and SIGTERM end uvicorn (the lock is released on the way out, or with the process).
+    """
     import uvicorn
 
-    sim = Simulation(cfg, Path(run_dir), resume=resume)
-    if tick_seconds is not None:
-        sim.tick_seconds = float(tick_seconds)
-    if paused:
-        sim.pause()
-    app = create_app(sim, static_dir=static_dir, host=host, port=port)
-    uvicorn.run(app, host=host, port=port, log_level=log_level)
+    from void.cli import RunDirLock
+
+    with RunDirLock(run_dir, "serve"):
+        sim = Simulation(cfg, Path(run_dir), resume=resume)
+        if tick_seconds is not None:
+            sim.tick_seconds = float(tick_seconds)
+        if paused:
+            sim.pause()
+        app = create_app(sim, static_dir=static_dir, host=host, port=port)
+        uvicorn.run(app, host=host, port=port, log_level=log_level)
