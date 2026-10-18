@@ -132,9 +132,8 @@ def test_the_allow_list_names_declared_outcomes_of_scripted_arms() -> None:
 
 def test_every_hypothesis_names_arms_of_its_experiment() -> None:
     """Over every config with an arm (scripted and live, loaded only): a hypothesis's arms are arms of its experiment.
-    exp_mem_e5 is the one known exception: exp_mem_e5_eval.yaml extends exp_mem_e0_base.yaml and so inherits the E0
-    hypotheses, which name E0's arms; it declares no hypotheses of its own (reported; that file is not this test's)."""
-    known_inherited = {"exp_mem_e5"}
+    This also catches a list inherited through ``extends`` from another experiment's base (exp_mem_e5_eval.yaml
+    extends exp_mem_e0_base.yaml and so must clear E0's hypotheses, which name E0's arms)."""
     arms: dict[str, set[str]] = {}
     hyps: dict[str, set[tuple[str, str, str]]] = {}
     for path in _arm_configs("*.yaml"):
@@ -143,9 +142,8 @@ def test_every_hypothesis_names_arms_of_its_experiment() -> None:
         arms.setdefault(exp, set()).add(str(cfg.experiment.arm))
         hyps.setdefault(exp, set()).update((h.name, h.arm_a, h.arm_b) for h in cfg.experiment.hypotheses)
     assert {"exp_mem_dep", "exp_mem_e0", "exp_mem_e1"} <= set(hyps)
+    assert hyps["exp_mem_e5"] == set()
     for exp, declared in sorted(hyps.items()):
-        if exp in known_inherited:
-            continue
         for name, a, b in sorted(declared):
             assert {a, b} <= arms[exp], f"{exp}: hypothesis {name!r} names {a!r} and {b!r}, arms are {sorted(arms[exp])}"
 
