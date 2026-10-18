@@ -32,10 +32,11 @@ TIERS_DAYS = 2
 
 
 def exp_configs() -> dict[str, list[Path]]:
-    """Arm configs grouped by experiment; a ``*_base.yaml`` is a shared parent, not an arm."""
+    """Arm configs grouped by experiment; a ``*_base.yaml`` is a shared parent and an ``*_eval.yaml`` a single
+    evaluation world whose arms are made at run time (``void transplant``), so neither is an arm."""
     groups: dict[str, list[Path]] = {}
     for p in sorted(CONFIGS.glob("exp_*.yaml")):
-        if p.name.endswith("_base.yaml"):
+        if p.name.endswith(("_base.yaml", "_eval.yaml")):
             continue
         groups.setdefault(str(load_config(p).experiment.name), []).append(p)
     return groups
