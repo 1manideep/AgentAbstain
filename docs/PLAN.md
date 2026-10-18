@@ -181,7 +181,7 @@ A simulation can dramatize a philosophical puzzle vividly. It cannot resolve one
 - Generative Agents ("Smallville"), Stanford — https://github.com/joonspk-research/generative_agents
 - AI Town, a16z-infra — https://github.com/a16z-infra/ai-town
 - AI Town architecture notes — https://github.com/a16z-infra/ai-town/blob/main/ARCHITECTURE.md
-- Claude-ported Smallville fork — https://github.com/AlexHarn/claudeville
+- Smallville fork ported to Anthropic's models — https://github.com/AlexHarn/claudeville
 - Voyager: An Open-Ended Embodied Agent with Large Language Models — https://arxiv.org/abs/2305.16291 / https://voyager.minedojo.org/
 - Project Sid: Many-agent simulations toward AI civilization — https://arxiv.org/abs/2411.00114 / https://github.com/altera-al/project-sid
 - MIT Technology Review on Project Sid — https://www.technologyreview.com/2024/11/27/1107377/a-minecraft-town-of-ai-characters-made-friends-invented-jobs-and-spread-religion/
