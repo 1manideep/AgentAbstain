@@ -1,13 +1,20 @@
-"""Gate G0 from runs (``void/research/gates.py``, ``scripts/gates.py``; MEMORY_EVOLUTION 5.2, 6.2, 10.2).
+"""Gates G0 and G1 from runs (``void/research/gates.py``, ``scripts/gates.py``; MEMORY_EVOLUTION 5.2, 6.2, 10.2) and
+the 10.4 diagnosis (``scripts/mem_diagnosis.py``).
 
-Three layers:
+Five layers:
 
-* the four conditions on fixed per-seed outcomes (:class:`gates.Paired` built by hand): PASS, FAIL and MISSING for
+* the four G0 conditions on fixed per-seed outcomes (:class:`gates.Paired` built by hand): PASS, FAIL and MISSING for
   each, the margin's source, the power requirement, and that the interval is the seeded paired bootstrap compare uses;
+  and each condition reading its margin (C2 its power) from a declared hypothesis;
 * the script with the loader monkeypatched: one line per condition plus G0, the exit codes 0 / 1 / 2, ``--json``,
   ``--live`` and the argument checks;
 * the real loader on 1-day scripted runs of every arm at two seeds: a verdict line per condition without a crash,
-  the same numbers as ``compare``, refusal of incomplete and incomparable runs, ``--allow-incomplete``, and live mode.
+  the same numbers as ``compare``, refusal of incomplete and incomparable runs, ``--allow-incomplete``, live mode, and
+  the margin sources naming the config files that declare the hypotheses;
+* G1 on synthetic E1 run directories (the E1 arm configs, loaded and never run, with planted ``maintain`` commands and
+  planted lineage fitness): one passing and one failing (and one missing) case for G1a and for G1b, and ``--g1``
+  through the script, exiting 0 only when every condition passes and naming the ones that do not;
+* the diagnosis table and the sweep on the 1-day scripted runs.
 """
 
 from __future__ import annotations
@@ -16,6 +23,7 @@ import importlib.util
 import json
 import shutil
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +31,10 @@ import pytest
 import yaml
 from test_experiments import CONFIGS, REPO, run_arm
 
+from void.config import load_config
+from void.db import Database
 from void.research import gates
+from void.research.analysis import end_of_run_outcome
 from void.research.compare import compare
 from void.research.stats import bootstrap_ci, power_paired
 
@@ -362,3 +373,327 @@ def test_live_mode_reads_the_live_experiments(runs_root: Path, tmp_path: Path, c
     assert lines[0].startswith("C1[exp_mem_dep_claude] ") and lines[0].split()[1] in ("PASS", "FAIL")
     assert lines[1].startswith("C1[exp_mem_dep_veins_claude] MISSING")
     assert code == (1 if "FAIL" in " ".join(ln.split()[1] for ln in lines[:5]) else 2)
+
+
+# --- declared hypotheses -----------------------------------------------------------------------------------------
+E0_HYPS = [
+    {"name": "ib", "arm_a": "noop", "arm_b": "index_builder", "outcome": "mean_balance", "kind": "superiority",
+     "direction": "greater", "margin": 0.0, "min_power": 0.8},
+    {"name": "hoard", "arm_a": "noop", "arm_b": "hoarder", "outcome": "mean_balance", "kind": "superiority",
+     "direction": "less", "margin": 0.0},
+    {"name": "decoy_bal", "arm_a": "noop", "arm_b": "decoy", "outcome": "mean_balance", "kind": "non_superiority",
+     "direction": "greater", "margin": 0.0},
+    {"name": "decoy_text", "arm_a": "noop", "arm_b": "decoy", "outcome": "policy_chars", "kind": "superiority",
+     "direction": "greater", "margin": 0.0, "primary": False},
+]
+
+
+def _e0h(arm: str, effect: float, chars: list[tuple[float | None, float | None]] | None = None,
+         hyps: list[dict[str, Any]] | None = None) -> gates.Paired:
+    p = _e0(arm, effect, chars)
+    p.hypotheses = list(E0_HYPS if hyps is None else hyps)
+    return p
+
+
+def test_declared_hypothesis_matches_either_orientation() -> None:
+    h = {"name": "x", "arm_a": "noop", "arm_b": "hoarder", "outcome": "mean_balance", "kind": "superiority",
+         "direction": "less"}
+    assert gates.declared_hypothesis([h], "noop", "hoarder", "mean_balance", "superiority", "less") == h
+    rev = {**h, "arm_a": "hoarder", "arm_b": "noop", "direction": "greater"}
+    assert gates.declared_hypothesis([rev], "noop", "hoarder", "mean_balance", "superiority", "less") == rev
+    assert gates.declared_hypothesis([h], "noop", "hoarder", "mean_balance", "superiority", "greater") is None
+    assert gates.declared_hypothesis([h], "noop", "hoarder", "exam_score", "superiority", "less") is None
+    assert gates.declared_hypothesis([h], "noop", "hoarder", None, "superiority", "less") == h  # any outcome
+    eq = {**h, "kind": "equivalence", "margin": 0.25}
+    assert gates.declared_hypothesis([eq], "hoarder", "noop", "mean_balance", "equivalence") == eq
+
+
+def test_e0_conditions_read_the_declared_margins_and_power() -> None:
+    # with margin 0 and min_power 0.8 declared, every verdict is the undeclared one; the source names the hypothesis
+    for fn, arm, effect, chars in ((gates.condition_index_builder, "index_builder", 0.05, None),
+                                   (gates.condition_hoarder, "hoarder", -0.05, None),
+                                   (gates.condition_decoy, "decoy", -0.03, LONGER)):
+        plain, declared = fn(_e0(arm, effect, chars)), fn(_e0h(arm, effect, chars))
+        assert plain["verdict"] == declared["verdict"] == "PASS"
+        assert plain["margin_source"] == gates.PROPOSAL_E0_SOURCE and "[assumption]" in plain["margin_source"]
+        assert declared["margin_source"].startswith("experiment.hypotheses '") and declared["hypothesis"] is not None
+        assert plain["reason"] == declared["reason"]
+    # C2: a declared margin above the effect fails it; a declared min_power above 0.8 is used, one below is not
+    ib = dict(E0_HYPS[0])
+    over = gates.condition_index_builder(_e0h("index_builder", 0.05, hyps=[{**ib, "margin": 0.06}]))
+    assert over["verdict"] == "FAIL" and "is not above the margin 0.0600" in over["reason"]
+    weak = _paired("noop", "index_builder", {"mean_balance": [(1.0, 1.1), (1.0, 1.12), (1.0, 1.3), (1.0, 1.15), (1.0, 1.2)]})
+    base = gates.condition_index_builder(weak)
+    weak.hypotheses = [{**ib, "min_power": 0.99}]
+    strict = gates.condition_index_builder(weak)
+    assert strict["min_power"] == 0.99 and strict["power"] == base["power"]
+    assert base["power"] >= 0.8 and strict["power"] < 0.99 and (base["verdict"], strict["verdict"]) == ("PASS", "FAIL")
+    weak.hypotheses = [{**ib, "min_power": 0.5}]
+    assert gates.condition_index_builder(weak)["min_power"] == gates.MIN_POWER  # never below what 6.2 fixes
+    # C3: the estimate must clear minus the margin
+    hoard = gates.condition_hoarder(_e0h("hoarder", -0.05, hyps=[{**E0_HYPS[1], "margin": 0.08}]))
+    assert hoard["verdict"] == "FAIL" and "is not below minus the margin 0.0800" in hoard["reason"]
+    # C4: a non-superiority margin tolerates a decoy a little above the no-op; a text margin can fail the text metric
+    lenient = [{**E0_HYPS[2], "margin": 0.1}, E0_HYPS[3]]
+    assert gates.condition_decoy(_e0h("decoy", 0.05, LONGER))["verdict"] == "FAIL"
+    assert gates.condition_decoy(_e0h("decoy", 0.05, LONGER, hyps=lenient))["verdict"] == "PASS"
+    tall = gates.condition_decoy(_e0h("decoy", -0.03, LONGER, hyps=[E0_HYPS[2], {**E0_HYPS[3], "margin": 900.0}]))
+    assert tall["verdict"] == "FAIL" and tall["text_metric"]["margin_abs"] == 900.0
+    assert "policy_chars: not significantly above the margin 900.0" in tall["reason"]
+
+
+def test_declaring_config_follows_extends(tmp_path: Path) -> None:
+    hyp = {"name": "dependence", "arm_a": "amnesic", "arm_b": "mem", "outcome": "mean_balance", "kind": "superiority",
+           "direction": "greater", "margin": 0.0}
+    full = {**hyp, "margin_unit": "abs", "primary": True, "min_power": None}  # as a resolved config stores it
+    assert gates.declaring_config("exp_mem_dep_mem", full) == "configs/exp_mem_dep_base.yaml"
+    assert gates.declaring_config("live_claude_dep_veins_mem", full) == "configs/exp_mem_dep_base.yaml"  # inherited
+    assert gates.declaring_config("exp_mem_dep_mem", {**full, "margin": 0.02}) is None  # declared differently now
+    assert gates.declaring_config("exp_mem_e0_noop", full) is None  # E0's list does not hold it
+    assert gates.declaring_config("no_such_config", full) is None and gates.declaring_config(None, full) is None
+    assert gates.hypothesis_source(full, "exp_mem_dep_amnesic") == \
+        "experiment.hypotheses 'dependence' in configs/exp_mem_dep_base.yaml"
+    # a chain outside the repository: the nearest file that sets the list decides, and its path is given whole
+    (tmp_path / "base.yaml").write_text(yaml.safe_dump({"experiment": {"hypotheses": [hyp]}}))
+    (tmp_path / "mid.yaml").write_text(yaml.safe_dump({"extends": "base.yaml", "experiment": {"name": "x"}}))
+    (tmp_path / "arm.yaml").write_text(yaml.safe_dump({"extends": "mid.yaml"}))
+    assert gates.declaring_config("arm", full, tmp_path) == str((tmp_path / "base.yaml").resolve())
+    (tmp_path / "mid.yaml").write_text(yaml.safe_dump({"extends": "base.yaml", "experiment": {"hypotheses": []}}))
+    assert gates.declaring_config("arm", full, tmp_path) is None  # mid's empty list replaces base's
+
+
+def test_real_runs_name_the_config_that_declares_each_margin(runs_root: Path) -> None:
+    result = gates.evaluate_g0(runs_root)
+    c1, c2, c3, c4 = result["conditions"]
+    assert c1["margin_source"] == "experiment.hypotheses 'dependence' in configs/exp_mem_dep_base.yaml"
+    assert c2["margin_source"] == "experiment.hypotheses 'index_builder_over_noop' in configs/exp_mem_e0_base.yaml"
+    assert c2["min_power"] == 0.8
+    assert c3["margin_source"] == "experiment.hypotheses 'hoarder_below_noop' in configs/exp_mem_e0_base.yaml"
+    assert c4["margin_source"] == "experiment.hypotheses 'decoy_not_above_noop' in configs/exp_mem_e0_base.yaml"
+    assert c4["text_metric"]["margin_source"] == \
+        "experiment.hypotheses 'decoy_text_metric_above_noop' in configs/exp_mem_e0_base.yaml"
+    assert all(c["margin"] == 0.0 for c in (c1, c2, c3, c4)) and result["g1"] is None
+    assert result["exit_code"] == result["g0"]["exit_code"]
+    assert "from experiment.hypotheses 'dependence' in configs/exp_mem_dep_base.yaml" in gates.render(result)
+
+
+# --- G1 on synthetic E1 runs ----------------------------------------------------------------------------------------
+E1_TPD = 20                      # one day of 20 ticks: lineage fitness moves in steps of 0.05 agent-days
+E1_SEEDS = tuple(range(1, 11))   # the pilot's 10 seeds
+_E1_CONFIGS: dict[str, Any] = {}
+
+
+def _e1_config(arm: str, seed: int):
+    if arm not in _E1_CONFIGS:
+        _E1_CONFIGS[arm] = load_config(CONFIGS / f"live_mem_e1_{arm}.yaml", {"run": {"days": 1, "ticks_per_day": E1_TPD}})
+    cfg = _E1_CONFIGS[arm].model_copy(deep=True)
+    cfg.run.seed = seed
+    return cfg
+
+
+def _write_e1_run(run_dir: Path, arm: str, seed: int, *, died_tick: int | None, maintain: list[bool]) -> None:
+    """A completed one-day E1 run (no simulation): the arm's resolved config, a run row, one founder born at tick 0
+    who dies at ``died_tick`` (lineage fitness ``died_tick / 20``, or 1.0 alive), ``maintain`` commands with those
+    outcomes, and tick rows to the last tick."""
+    cfg = _e1_config(arm, seed)
+    run_dir.mkdir(parents=True)
+    text = cfg.to_yaml()
+    (run_dir / "config.resolved.yaml").write_text(text)
+    last = cfg.run.days * cfg.run.ticks_per_day
+    db = Database(run_dir / "world.db")
+    try:
+        db.execute("INSERT INTO run(run_id, config_hash, config_yaml, seed, created_at, schema_version, status, ended_tick) "
+                   "VALUES(?,?,?,?,?,?,?,?)", (f"{arm}-s{seed}", cfg.hash(), text, seed, "2026-01-01T00:00:00", 2,
+                                               "completed", last))
+        db.execute("INSERT INTO world_kv(key, value) VALUES('tick', ?)", (json.dumps(last),))
+        db.execute("INSERT INTO agents(agent_id, name, parent_id, model_tier, balance, personality_seed, memory_path, "
+                   "generation, status, x, y, entropy_budget, born_tick, died_tick, created_at) "
+                   "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   ("ag1", "Ada", None, "average", 1_000_000, "p", "vault/ag1", 0,
+                    "alive" if died_tick is None else "bankrupt", 0.0, 0.0, 100.0, 0, died_tick, "2026-01-01T00:00:00"))
+        for i, ok in enumerate(maintain):
+            db.execute("INSERT INTO memory_commands(cmd_id, tick, agent_id, purpose, command, args, ok) "
+                       "VALUES(?,?,?,?,?,?,?)", (f"m{i}", E1_TPD, "ag1", "maintain", "create", "{}", int(ok)))
+    finally:
+        db.close()
+    rows = [{"tick": t, "day": 1, "mean_balance": 1.0} for t in range(1, last + 1)] + [{"kind": "day", "day": 1, "mean_balance": 1.0}]
+    (run_dir / "metrics.jsonl").write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
+
+
+def _e1(root: Path, c_minus_b: list[int], *, c_valid: list[bool] | None = None, seeds: Sequence[int] = E1_SEEDS) -> Path:
+    """An E1 experiment directory: b's founder dies at tick 10, c's at ``10 + c_minus_b[i]`` (so c - b on lineage
+    fitness is ``c_minus_b[i] / 20``), a0 and a at 10 without maintenance; b's maintenance commands are 19 of 20 valid,
+    c's ``c_valid`` (default the same)."""
+    good = [True] * 19 + [False]
+    for i, seed in enumerate(seeds):
+        for arm, died, maintain in (("a0", 10, []), ("a", 10, []), ("b", 10, good),
+                                    ("c", 10 + c_minus_b[i], good if c_valid is None else c_valid)):
+            _write_e1_run(root / arm / f"seed_{seed}", arm, seed, died_tick=died, maintain=maintain)
+    return root
+
+
+C_OVER_B = [2, 3, 1, 2, 4, 2, 3, 1, 2, 3]       # c - b in ticks: mean 2.3, d_z about 2.4
+C_TIES_B = [2, -3, 1, -2, 4, -2, 3, -1, 2, -3]  # mean 0.1, d_z about 0.04
+
+
+def test_g1a_valid_commands_pass_fail_and_missing(tmp_path: Path) -> None:
+    ok = gates.condition_valid_commands(_e1(tmp_path / "ok", C_OVER_B))
+    assert ok["verdict"] == "PASS" and ok["experiment"] == "exp_mem_e1"
+    assert {a: v["applicable"] for a, v in ok["arms"].items()} == {"a": False, "a0": False, "b": True, "c": True}
+    assert ok["arms"]["c"]["mean"] == pytest.approx(0.95) and ok["arms"]["c"]["n"] == 10
+    bad = gates.condition_valid_commands(_e1(tmp_path / "bad", C_OVER_B, c_valid=[True, False] * 10))
+    assert bad["verdict"] == "FAIL" and "arm 'c' 0.500 is below 0.9" in bad["reason"]
+    silent = gates.condition_valid_commands(_e1(tmp_path / "silent", C_OVER_B, c_valid=[]))
+    assert silent["verdict"] == "MISSING" and "arm 'c' runs maintenance but no complete run" in silent["reason"]
+    assert gates.condition_valid_commands(tmp_path / "nothing")["verdict"] == "MISSING"
+    _set_status(tmp_path / "ok" / "c" / "seed_3", "failed")
+    refused = gates.condition_valid_commands(tmp_path / "ok")
+    assert refused["verdict"] == "MISSING" and refused["refused"] and "c seed 3: run.status 'failed'" in refused["reason"]
+    allowed = gates.condition_valid_commands(tmp_path / "ok", allow_incomplete=True)
+    assert allowed["verdict"] == "PASS" and allowed["arms"]["c"]["n"] == 9 and allowed["dropped"]
+
+
+def test_g1b_c_over_b_pass_fail_and_missing(tmp_path: Path) -> None:
+    def g1b(root: Path) -> dict[str, Any]:
+        return gates.condition_c_over_b(gates.paired_outcomes(root, "b", "c", gates.g1_outcome))
+
+    ok = g1b(_e1(tmp_path / "ok", C_OVER_B))
+    diffs = [d / E1_TPD for d in C_OVER_B]
+    assert ok["verdict"] == "PASS" and ok["outcome"] == "lineage_fitness" and ok["n"] == 10
+    assert ok["estimate"] == pytest.approx(sum(diffs) / 10) and ok["d_z"] >= gates.G1_MIN_DZ
+    assert ok["hypothesis"] == "h1_self_edit_over_equal_compute"
+    assert ok["outcome_source"] == "experiment.hypotheses 'h1_self_edit_over_equal_compute' in configs/live_mem_e1_base.yaml"
+    tie = g1b(_e1(tmp_path / "tie", C_TIES_B))
+    assert tie["verdict"] == "FAIL" and tie["d_z"] < gates.G1_MIN_DZ and "is below 0.5 at n=10" in tie["reason"]
+    short = g1b(_e1(tmp_path / "short", C_OVER_B, seeds=E1_SEEDS[:5]))
+    assert short["verdict"] == "MISSING" and "G1 reads d_z on at least 10" in short["reason"]
+    same = g1b(_e1(tmp_path / "same", [2] * 10))  # every difference the same positive number: unbounded d_z
+    assert same["d_z"] is None and same["verdict"] == "PASS"
+
+
+def _g0_passing_then_real(table: dict[tuple[str, str], dict[str, list[tuple[float, float]]]]):
+    """The G0 experiments from ``table`` (all passing), every other directory through the real loader."""
+    fake, real = _fake_loader(table), gates.paired_outcomes
+
+    def loader(exp_dir, arm_a, arm_b, outcomes, *, allow_incomplete=False):
+        if Path(exp_dir).name in ("exp_mem_dep", "exp_mem_e0"):
+            return fake(exp_dir, arm_a, arm_b, outcomes, allow_incomplete=allow_incomplete)
+        return real(exp_dir, arm_a, arm_b, outcomes, allow_incomplete=allow_incomplete)
+    return loader
+
+
+@pytest.mark.parametrize("c_minus_b, c_valid, code, g1, tail", [
+    (C_OVER_B, None, 0, "PASS", "exit 0: every condition passes"),
+    (C_TIES_B, None, 1, "FAIL", "exit 1: FAIL G1b"),
+    (C_OVER_B, [True, False] * 10, 1, "FAIL", "exit 1: FAIL G1a"),
+    (C_OVER_B, [], 2, "MISSING", "exit 2: MISSING G1a"),
+])
+def test_script_g1_exits_by_every_condition(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path,
+                                            c_minus_b: list[int], c_valid: list[bool] | None, code: int, g1: str, tail: str) -> None:
+    e1 = _e1(tmp_path / "exp_mem_e1", c_minus_b, c_valid=c_valid)
+    monkeypatch.setattr(gates, "paired_outcomes", _g0_passing_then_real(ALL_PASS))
+    assert _load_script().main(["/runs", "--g1", str(e1)]) == code
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert [ln.split()[0] for ln in lines] == ["C1", "C2", "C3", "C4", "G1a", "G1b", "G0", "G1", "exit"]
+    assert lines[6].startswith("G0 PASS: C1 PASS, C2 PASS, C3 PASS, C4 PASS")
+    assert lines[7].startswith(f"G1 {g1} (dependence from the scripted runs; 10.4 reads it live): C1 PASS, G1a ")
+    assert lines[8] == tail
+
+
+def test_script_g1_json_and_a_failing_g0(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    e1 = _e1(tmp_path / "exp_mem_e1", C_OVER_B)
+    table = {**ALL_PASS, ("exp_mem_dep", "mem"): {"mean_balance": _pairs(-0.03)}}
+    monkeypatch.setattr(gates, "paired_outcomes", _g0_passing_then_real(table))
+    assert _load_script().main(["/runs", "--g1", str(e1), "--json"]) == 1  # G1a and G1b pass; C1 fails both gates
+    data = json.loads(capsys.readouterr().out)
+    assert data["g0"]["verdict"] == "FAIL" and data["g1"] == {
+        "verdict": "FAIL", "exit_code": 1, "by_condition": {"C1": "FAIL", "G1a": "PASS", "G1b": "PASS"}}
+    assert data["exit_code"] == 1 and data["failing"] == ["C1"] and data["missing"] == []
+    assert data["experiments"]["e1"] == str(e1) and data["min_valid_rate"] == 0.9 and data["g1_min_d_z"] == 0.5
+    assert [c["id"] for c in data["conditions"]] == ["C1", "C2", "C3", "C4", "G1a", "G1b"]
+
+
+# --- the 10.4 diagnosis ----------------------------------------------------------------------------------------------
+def _load_diagnosis():
+    spec = importlib.util.spec_from_file_location("mem_diagnosis_script", REPO / "scripts" / "mem_diagnosis.py")
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_diagnosis_table_is_the_paired_difference_of_the_outcomes(runs_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    diag = _load_diagnosis()
+    exp = runs_root / "exp_mem_dep"
+    assert diag.memory_arms(exp) == ("amnesic", "mem")
+    result = diag.diagnose(exp)
+    assert (result["arm_without"], result["arm_with"]) == ("amnesic", "mem")
+    assert [r["outcome"] for r in result["rows"]] == ["forage_income_usd", "decide_cost_usd",
+                                                      "mean_input_tokens_per_decide", "mean_balance"]
+    for row in result["rows"]:
+        diffs = [end_of_run_outcome(exp / "mem" / f"seed_{s}", row["outcome"])
+                 - end_of_run_outcome(exp / "amnesic" / f"seed_{s}", row["outcome"]) for s in SEEDS]
+        assert row["n"] == len(SEEDS) and row["delta"] == pytest.approx(sum(diffs) / len(diffs))
+        assert row["ci95"] == bootstrap_ci(diffs, n_boot=gates.N_BOOT, seed=gates.BOOT_SEED)
+        assert row["higher_with"] == sum(d > 0 for d in diffs)
+    by = {r["outcome"]: r for r in result["rows"]}
+    tokens = by["mean_input_tokens_per_decide"]
+    assert tokens["with"] > tokens["without"] and tokens["higher_with"] == len(SEEDS)  # memory lengthens the prompt
+    b = result["break_even"]
+    income = by["forage_income_usd"]
+    assert b["required_income_rise"] == pytest.approx(by["decide_cost_usd"]["delta"] / income["without"])
+    assert b["observed_income_rise"] == pytest.approx(income["delta"] / income["without"])
+    text = diag.render(result)
+    assert "| Per agent | amnesic | mem | mem minus amnesic [95% CI] |" in text and "Break-even:" in text
+    assert diag.main([str(exp), "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["sweep"] is None and data["diagnosis"]["rows"][3]["delta"] == pytest.approx(by["mean_balance"]["delta"])
+    # naming the arms by hand, and the refusals
+    assert diag.diagnose(exp, with_arm="mem", without_arm="amnesic")["rows"] == result["rows"]
+    assert diag.main([str(exp), "--with", "mem"]) == 2
+    assert diag.main([str(runs_root / "exp_mem_e0")]) == 2  # every E0 arm has memory on
+    assert diag.main([str(runs_root / "nothing")]) == 2
+    assert "refused:" in capsys.readouterr().err
+
+
+def test_sweep_settings_and_scripted_only_refusal(tmp_path: Path) -> None:
+    diag = _load_diagnosis()
+    ofat, full = diag.sweep_settings("ofat"), diag.sweep_settings("full")
+    base = {"world.node_capacity": 40.0, "world.node_regen_per_tick": 0.4, "world.view_radius": 12.0}
+    assert ofat[0] == base and len(ofat) == 4 and len(full) == 8
+    assert [diag.setting_name(s) for s in ofat] == ["cap40_regen0.4_view12", "cap12_regen0.4_view12",
+                                                     "cap40_regen0.2_view12", "cap40_regen0.4_view8"]
+    assert len({diag.setting_name(s) for s in full}) == 8 and all(s in full for s in ofat)
+    with pytest.raises(ValueError):
+        diag.sweep_settings("nope")
+    # the dependence world's own levels are the base setting's
+    dep = load_config(CONFIGS / "exp_mem_dep_mem.yaml")
+    assert (dep.world.node_capacity, dep.world.node_regen_per_tick, dep.world.view_radius) == (40.0, 0.4, 12.0)
+    with pytest.raises(diag.DiagnosisError, match="not scripted"):
+        diag.write_setting_configs([CONFIGS / "live_claude_dep_mem.yaml"], base, tmp_path)
+
+
+def test_sweep_runs_each_setting_and_tabulates_it(runs_root: Path, tmp_path: Path) -> None:
+    diag = _load_diagnosis()
+    configs = diag.arm_configs(runs_root / "exp_mem_dep")
+    assert sorted(p.name for p in configs) == ["exp_mem_dep_amnesic.yaml", "exp_mem_dep_mem.yaml"]
+    settings = diag.sweep_settings("ofat")[:2]
+    out = tmp_path / "sweep"
+    result = diag.run_sweep(configs, out, seeds="1-2", settings=settings, days=1)
+    assert [r["setting"] for r in result["settings"]] == ["cap40_regen0.4_view12", "cap12_regen0.4_view12"]
+    for row in result["settings"]:
+        assert row["diagnosis"] is not None, row.get("error")
+        assert row["diagnosis"]["rows"][3]["n"] == 2
+        run = out / row["setting"] / "exp_mem_dep" / "mem" / "seed_1"
+        cfg = yaml.safe_load((run / "config.resolved.yaml").read_text())
+        assert cfg["world"]["node_capacity"] == row["values"]["world.node_capacity"] and cfg["run"]["days"] == 1
+    # the base setting is the dependence world itself: the same resolved config as a direct one-day run
+    base_run = out / "cap40_regen0.4_view12" / "exp_mem_dep" / "amnesic" / "seed_2"
+    direct = load_config(CONFIGS / "exp_mem_dep_amnesic.yaml", {"run": {"days": 1, "seed": 2, "tick_seconds": 0.0}})
+    with sqlite3.connect(str(base_run / "world.db")) as db:
+        assert db.execute("SELECT config_hash FROM run").fetchone()[0] == direct.hash()
+    text = diag.render_sweep(result)
+    assert "| cap12_regen0.4_view12 | 12 | 0.4 | 12 | 2 |" in text
+    assert text.splitlines()[-1].startswith("The amnesic arm is ahead on balance in ")
+    again = diag.run_sweep(configs, out, seeds="1-2", settings=settings, days=1)  # runs already there are kept
+    assert again["settings"][0]["diagnosis"]["rows"] == result["settings"][0]["diagnosis"]["rows"]

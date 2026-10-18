@@ -22,3 +22,7 @@ experiment:
   independent_variables: []
   primary_outcome: mean_balance
   secondary_outcomes: [exam_score, probe_recall, notes_by_channel.inherited, notes_by_channel.observed, invalid_action_rate]
+  # No pre-registered hypotheses yet. The empty list is needed: lists replace, not merge, under `extends`, and
+  # without it this file would inherit the four E0 hypotheses of exp_mem_e0_base.yaml, which name E0's arms (noop,
+  # index_builder, hoarder, decoy), so compare would report every one of them as failed for want of those arms.
+  hypotheses: []
