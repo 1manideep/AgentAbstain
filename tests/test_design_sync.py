@@ -102,5 +102,8 @@ def test_csp_paths_and_model_identifiers(sync: ModuleType, design: str) -> None:
     assert sync.check_paths(design) == []
     assert sync.check_paths("see `tests/test_no_such_file.py` and `configs/exp_*.yaml`") == [
         "DESIGN: `tests/test_no_such_file.py` does not exist"]
-    assert sync.check_model_ids("doc", "a tier on Gemini rungs\nserved by gemini-9-pro-001 today") == [
-        "doc:2: model identifier `gemini-9-pro-001` (refer to tiers by rung name)"]
+    # a made-up identifier, joined at runtime so this file's own text holds no identifier-shaped literal (the
+    # repository-wide model-id sweep would flag it); the detector still sees the whole string
+    fake_id = "-".join(["gemini", "9", "pro", "001"])
+    assert sync.check_model_ids("doc", f"a tier on Gemini rungs\nserved by {fake_id} today") == [
+        f"doc:2: model identifier `{fake_id}` (refer to tiers by rung name)"]

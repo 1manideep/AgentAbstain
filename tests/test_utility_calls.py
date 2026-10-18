@@ -15,7 +15,8 @@ class FakeMessages:
     async def create(self, **kw):
         self.calls += 1
         u = SimpleNamespace(input_tokens=300, output_tokens=40, cache_read_input_tokens=0, cache_creation_input_tokens=0)
-        r = SimpleNamespace(content=[SimpleNamespace(type="text", text=self.text)], stop_reason="end_turn", usage=u, model="claude-haiku-4-5")
+        r = SimpleNamespace(content=[SimpleNamespace(type="text", text=self.text)], stop_reason="end_turn", usage=u,
+                            model=kw["model"])  # like the API, echo the model that was asked for
         r._request_id = "req_x"
         return r
 
