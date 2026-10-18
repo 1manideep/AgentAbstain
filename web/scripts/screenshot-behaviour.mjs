@@ -24,10 +24,16 @@ const worldUrl = (process.env.VOID_URL ?? 'http://127.0.0.1:5173/').replace(/\/?
 // Playwright's own Chromium (`npx playwright install chromium`; honours PLAYWRIGHT_BROWSERS_PATH) unless
 // VOID_CHROME names a Chrome/Chromium executable to use instead.
 const chrome = process.env.VOID_CHROME || undefined
+// On a launch failure print Playwright's whole message, not just its first line: the cause (the browser's own
+// stderr, such as a missing shared library, or Playwright's host-dependency report) comes after it.
 const launchFailed = (e) => {
-  const why = String(e?.message ?? e).split('\n')[0]
-  console.error(`could not launch Chromium${chrome ? ` (VOID_CHROME=${chrome})` : ''}: ${why}`)
+  console.error(`could not launch Chromium${chrome ? ` (VOID_CHROME=${chrome})` : ''}:`)
+  console.error(String(e?.message ?? e).trim())
   console.error('hint: run npx playwright install chromium, or set VOID_CHROME to a Chrome/Chromium executable')
+  console.error(
+    'hint: if the browser is installed but will not start (e.g. missing shared libraries), run ' +
+      'npx playwright install-deps chromium (Linux), or npx playwright install --with-deps chromium',
+  )
   process.exit(1)
 }
 
