@@ -28,6 +28,15 @@ Run directories. ``run`` and ``serve`` write ``<out>/<run.name>`` (a sweep: ``<o
 silently: ``--resume`` continues it, ``--fresh`` first renames it to ``<dir>.prev-<n>`` (the first free ``n``), and
 otherwise the command prints one line saying so and exits 2.
 
+A process running a simulation holds an exclusive advisory lock on its run directory for its whole life
+(:class:`RunDirLock`: ``flock`` on ``<dir>/.void.lock``, which records the holder's pid and command; the kernel
+releases it when the process exits, however it exits). Before anything else, ``run`` and ``serve`` (plain,
+``--resume`` or ``--fresh``) try that lock without blocking; while another process holds it they print one line,
+``void <command>: <dir> is in use by a running server (pid N); stop it first``, and exit 2 with nothing renamed or
+written. ``serve`` also tries to bind its host and port before touching the directory, and refuses in one line
+(exit 2) when it cannot. The lock file is not run output: it stays in the directory (an archived ``.prev-<n>``
+carries it) and nothing that reads a run looks at it.
+
 Lazy subcommands. ``report``, ``transplant`` and ``generations`` (modules ``void.research.<name>``) and ``mcp``
 (``void.server.mcp``) are imported only when invoked. A module joins the CLI by defining::
 
@@ -42,11 +51,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
+import fcntl
 import gc
 import importlib
 import inspect
 import json
 import math
+import os
+import socket
 import sqlite3
 import sys
 import time
@@ -55,7 +68,7 @@ from typing import Any
 
 from void.config import VoidConfig, load_config, micro_to_usd
 
-__all__ = ["main", "build_parser", "record_feed"]
+__all__ = ["main", "build_parser", "record_feed", "RunDirLock", "RunDirBusy", "run_dir_holder", "LOCK_FILE"]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = "data/runs"       # the default of run.data_dir; where compare --exp looks
@@ -164,16 +177,185 @@ def _is_existing_run_error(e: BaseException) -> bool:
     return isinstance(e, RuntimeError) and "already exists" in str(e)
 
 
-def _archive_run_dir(run_dir: Path) -> Path | None:
-    """``--fresh``: rename an existing ``run_dir`` to ``<run_dir>.prev-<n>`` (first free n); returns the new path."""
+def _archive_run_dir(run_dir: Path, command: str) -> Path | None:
+    """``--fresh``: rename an existing ``run_dir`` to ``<run_dir>.prev-<n>`` (first free n); returns the new path.
+
+    The rename happens under the directory's lock, so a process that took it after the caller's check is never
+    moved from under itself (:class:`RunDirBusy` is raised instead, with nothing renamed); the lock file goes with
+    the directory.
+    """
     if not run_dir.exists():
         return None
-    n = 1
-    while (dest := run_dir.with_name(f"{run_dir.name}.prev-{n}")).exists():
-        n += 1
-    run_dir.rename(dest)
+    with RunDirLock(run_dir, command):
+        n = 1
+        while (dest := run_dir.with_name(f"{run_dir.name}.prev-{n}")).exists():
+            n += 1
+        run_dir.rename(dest)
     print(f"archived {run_dir} -> {dest}", file=sys.stderr)
     return dest
+
+
+# --- the run directory's lock -------------------------------------------------------------------------------
+LOCK_FILE = ".void.lock"   # inside the run directory; a dot file next to world.db, never read as run output
+LOCK_COMMANDS = {"serve": "a running server", "run": "a running headless run"}
+LOCK_RETRY_SECONDS = 0.25  # how long acquire() rides over another process's momentary probe of the lock
+
+
+class RunDirBusy(RuntimeError):
+    """Another process holds the run directory's lock. ``holder`` is what it recorded (``pid``, ``command``; empty
+    when nothing could be read)."""
+
+    def __init__(self, run_dir: Path, holder: dict[str, Any]) -> None:
+        self.run_dir = Path(run_dir)
+        self.holder = dict(holder)
+        super().__init__(f"{self.run_dir} is in use by {_holder_text(self.holder)}")
+
+
+def _read_holder(fd: int) -> dict[str, Any]:
+    """The ``{"pid", "command"}`` a holder wrote into the lock file (``{}`` when unreadable or not written yet)."""
+    try:
+        data = json.loads(os.pread(fd, 4096, 0).decode("utf-8") or "{}")
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    holder: dict[str, Any] = {}
+    if isinstance(data.get("pid"), int) and not isinstance(data.get("pid"), bool) and data["pid"] > 0:
+        holder["pid"] = data["pid"]
+    if isinstance(data.get("command"), str):
+        holder["command"] = data["command"]
+    return holder
+
+
+def _holder_text(holder: dict[str, Any]) -> str:
+    what = LOCK_COMMANDS.get(str(holder.get("command")), "another process")
+    return f"{what} (pid {holder['pid']})" if holder.get("pid") else what
+
+
+def run_dir_holder(run_dir: str | Path) -> dict[str, Any] | None:
+    """None when no process holds ``run_dir``'s lock, else what the holder recorded (``{}`` when unreadable).
+
+    Only reads: a missing lock file (or directory) means free, and nothing is created. The probe takes a shared
+    lock for an instant, so two probes never see each other as holders.
+    """
+    try:
+        fd = os.open(Path(run_dir) / LOCK_FILE, os.O_RDONLY)
+    except OSError:  # no lock file (or no directory): nobody can hold it
+        return None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return _read_holder(fd)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return None
+    finally:
+        os.close(fd)
+
+
+class RunDirLock:
+    """An exclusive ``flock`` on ``<run_dir>/.void.lock`` for as long as a simulation runs in ``run_dir``.
+
+    :meth:`acquire` creates the directory and the lock file when missing, takes the lock without blocking (riding
+    over a concurrent probe for at most :data:`LOCK_RETRY_SECONDS`) and records ``{"pid", "command"}`` in the file;
+    it raises :class:`RunDirBusy` when another process holds it. :meth:`release` empties the file and closes it,
+    which releases the lock; a process that dies without releasing loses the lock with its descriptors, so a crash
+    or a signal never leaves a directory locked. The descriptor is not inherited by child processes. Locks taken
+    through separate ``RunDirLock`` objects conflict even within one process.
+    """
+
+    def __init__(self, run_dir: str | Path, command: str) -> None:
+        self.run_dir = Path(run_dir)
+        self.command = command
+        self._fd: int | None = None
+
+    @property
+    def held(self) -> bool:
+        return self._fd is not None
+
+    def acquire(self) -> RunDirLock:
+        if self._fd is not None:
+            return self
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.run_dir / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            deadline = time.monotonic() + LOCK_RETRY_SECONDS
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise RunDirBusy(self.run_dir, _read_holder(fd)) from None
+                    time.sleep(0.01)
+        except BaseException:
+            os.close(fd)
+            raise
+        try:
+            os.ftruncate(fd, 0)
+            os.pwrite(fd, json.dumps({"pid": os.getpid(), "command": self.command}).encode("utf-8"), 0)
+        except OSError:  # the record is a courtesy for the refusal message; the lock itself is what counts
+            pass
+        self._fd = fd
+        return self
+
+    def release(self) -> None:
+        fd, self._fd = self._fd, None
+        if fd is None:
+            return
+        try:
+            os.ftruncate(fd, 0)  # while still held: a stale pid is never left behind by a clean exit
+        except OSError:
+            pass
+        os.close(fd)
+
+    def __enter__(self) -> RunDirLock:
+        return self.acquire()
+
+    def __exit__(self, *exc: object) -> None:
+        self.release()
+
+
+def _busy_line(command: str, run_dir: Path, holder: dict[str, Any]) -> str:
+    return f"void {command}: {run_dir} is in use by {_holder_text(holder)}; stop it first"
+
+
+def _port_refusal(host: str, port: int) -> str | None:
+    """Why the server could not listen on ``host:port`` (one line), or None when it can.
+
+    Binds and closes a socket for every address the host resolves to, with the options the server's own bind uses
+    (``SO_REUSEADDR``; ``IPV6_V6ONLY`` for IPv6), so a port left in TIME_WAIT by a stopped server passes and one
+    something listens on does not. Port 0 (any free port) always passes.
+
+    This really binds, so an in-process ``void serve`` that replaces uvicorn's runner but keeps the config's port
+    (8000 by default) depends on that port being free: such a test passes a free ``--port`` or replaces this
+    function too (``void.cli._port_refusal``, looked up when ``cmd_serve`` runs). ``--port 0`` is no way out:
+    ``cmd_serve`` reads it as "not given" and uses the config's port, as it always has.
+    """
+    if int(port) == 0:
+        return None
+    where = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    try:
+        infos = socket.getaddrinfo(host or None, int(port), type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE)
+    except (OSError, UnicodeError) as e:
+        return f"void serve: cannot listen on {where} (cannot resolve the host: {e}); pass another --host"
+    for family, kind, proto, _, addr in dict.fromkeys(infos):
+        try:
+            sock = socket.socket(family, kind, proto)
+        except OSError:  # an address family this machine cannot open (the server skips it too)
+            continue
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if family == socket.AF_INET6 and hasattr(socket, "IPPROTO_IPV6"):
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            sock.bind(addr)
+        except OSError as e:
+            if e.errno == errno.EADDRINUSE:
+                return f"void serve: port {port} on {host} is in use by another process; stop it or pass another --port"
+            return f"void serve: cannot listen on {where} ({e.strerror or e}); pass another --host or --port"
+        finally:
+            sock.close()
+    return None
 
 
 def _day_line(sim: Any, day: int, t0: float) -> str:
@@ -314,6 +496,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         cfg = load_config(config, _run_overrides(seed=seed, days=args.days, tick_seconds=args.tick_seconds))
         out = _out_dir(args, cfg)
         run_dir = _run_dir(out, cfg, sweep=sweep)
+        holder = run_dir_holder(run_dir)  # first: a live run's directory is neither read nor touched
+        if holder is not None:
+            print(_busy_line("run", run_dir, holder), file=sys.stderr)
+            statuses.append("busy")
+            continue
         if not args.resume and not args.fresh and _holds_run(run_dir):
             print(_existing_run_line(run_dir), file=sys.stderr)
             statuses.append("exists")
@@ -334,10 +521,14 @@ def cmd_run(args: argparse.Namespace) -> int:
                 print(f"error: {why}", file=sys.stderr)
                 statuses.append("error")
                 continue
-        if args.fresh:
-            _archive_run_dir(run_dir)
         try:
-            statuses.append(asyncio.run(_run_headless(cfg, run_dir, resume=args.resume, replay=replay)))
+            if args.fresh:
+                _archive_run_dir(run_dir, "run")
+            with RunDirLock(run_dir, "run"):  # held for the whole run, as a server holds it
+                statuses.append(asyncio.run(_run_headless(cfg, run_dir, resume=args.resume, replay=replay)))
+        except RunDirBusy as e:  # taken by another process since the check above
+            print(_busy_line("run", run_dir, e.holder), file=sys.stderr)
+            statuses.append("busy")
         except RuntimeError as e:
             print(_existing_run_line(run_dir) if _is_existing_run_error(e) else f"error: {e}", file=sys.stderr)
             statuses.append("error")
@@ -350,15 +541,25 @@ def cmd_serve(args: argparse.Namespace) -> int:
     cfg = load_config(_resolve(args.config), _run_overrides(seed=args.seed, tick_seconds=args.tick_seconds))
     out = _out_dir(args, cfg)
     run_dir = _run_dir(out, cfg, sweep=False)
+    # the refusals that leave the directory untouched come first, each one line and exit 2: a live server (or run) in
+    # the directory, a run already there, a host:port the server could not listen on
+    holder = run_dir_holder(run_dir)
+    if holder is not None:
+        print(_busy_line("serve", run_dir, holder), file=sys.stderr)
+        return 2
     if not args.resume and not args.fresh and _holds_run(run_dir):
         print(_existing_run_line(run_dir), file=sys.stderr)
+        return 2
+    host = args.host or cfg.server.host
+    port = int(args.port or cfg.server.port)
+    refusal = _port_refusal(host, port)
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
         return 2
     for w in cfg.warnings():
         print(f"warning: {w}", file=sys.stderr)
     if cfg.intelligence.ladder:
         print(f"intelligence: {cfg.intelligence_summary()}", file=sys.stderr)
-    host = args.host or cfg.server.host
-    port = int(args.port or cfg.server.port)
     static = _resolve(args.static)
     if not (static / "index.html").is_file():
         print(f"note: no built frontend at {static} (run `npm run build` in web/); serving the API only", file=sys.stderr)
@@ -366,10 +567,13 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if refusal is not None:
         print(f"refused: {refusal}", file=sys.stderr)
         return 2
-    if args.fresh:
-        _archive_run_dir(run_dir)
     try:
+        if args.fresh:
+            _archive_run_dir(run_dir, "serve")
         serve(cfg, run_dir, host=host, port=port, resume=args.resume, static_dir=static, paused=args.paused)
+    except RunDirBusy as e:  # taken by another process since the check above (serve() holds the lock while it runs)
+        print(_busy_line("serve", run_dir, e.holder), file=sys.stderr)
+        return 2
     except RuntimeError as e:
         if not _is_existing_run_error(e):
             raise
