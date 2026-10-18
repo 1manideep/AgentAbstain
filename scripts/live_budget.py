@@ -1,51 +1,101 @@
 #!/usr/bin/env python
 """The live budget guard and run checks behind scripts/live_claude.sh. Reads run directories only; never calls a model.
 
-  live_budget.py spent  --root DIR [--root DIR ...] [--plain]     real Anthropic spend already recorded (USD)
-  live_budget.py check  --root DIR --budget USD (--config YAML | --cap USD)
+  live_budget.py spent  --root DIR [--root DIR ...] [--ledger FILE] [--plain]
+                                                                  real Anthropic spend already recorded (USD)
+  live_budget.py check  --root DIR [--ledger FILE] --budget USD (--config YAML [--seed N] | --cap USD)
                                                                   exit 0 when spent + the run's cap <= budget, else 3
   live_budget.py cap    --config YAML                              the run's economy.total_cap_usd (USD)
   live_budget.py rundir --config YAML --out DIR [--seed N]        the run directory `void run` would write
   live_budget.py status RUN_DIR                                   the run's status, or `absent`
-  live_budget.py verify RUN_DIR [--strict] [--max-error-rate F] [--expect-purposes a,b]
+  live_budget.py verify RUN_DIR [--strict] [--max-error-rate F] [--expect-purposes a,b] [--no-cap-blocks]
                                                                   exit 0 when the run is usable, else 4
-  live_budget.py report --root DIR                                one line per run
+  live_budget.py report --root DIR [--ledger FILE]                one line per run
+  live_budget.py reserve --ledger FILE --config YAML [--seed N] --out DIR
+                                                                  append a `reserved` line (the run's full cap) and
+                                                                  print its attempt id
+  live_budget.py final  --ledger FILE --attempt ID --run-dir DIR [--verified]
+                                                                  append the attempt's `final` line (its real spend)
+  live_budget.py lost   --ledger FILE --config YAML [--seed N] --root DIR
+                                                                  exit 5 when the ledger records spend for this run
+                                                                  but no directory of it exists under the roots; says
+                                                                  which attempts were never recorded as finished
+  live_budget.py reconcile --ledger FILE --config YAML [--seed N] --root DIR --out DIR [--verified-dir DIR]
+                                                                  close (append `final`) every attempt of this run that
+                                                                  is still only `reserved`, from the directory it wrote,
+                                                                  once its process is provably gone; prints the ids
+  live_budget.py launch --out DIR --attempt ID -- CMD [ARG ...]   exec CMD holding the attempt's lock under
+                                                                  DIR/.live_locks for as long as CMD lives
+  live_budget.py remaining --ledger FILE --out DIR --root DIR --config YAML [--config YAML] [--seeds "1 2"]
+                           [verify flags] [--rerun-lost]         the caps of the runs the script would still start
+  live_budget.py passed --ledger FILE --config YAML [--seed N]    exit 0 when the ledger records a completed,
+                                                                  verified attempt of this run, else 1
+  live_budget.py claims RUN_DIR [RUN_DIR ...] --min N             talks and listed claims per run; exit 6 when a
+                                                                  run listed fewer than N claims
 
 Spend is read from each run's own records (void.economy.budget): the real cost of every call on an Anthropic tier,
 or the wallet's spend total when that is larger, plus any hold still reserved when a process died. Scripted runs
-cost nothing real and are never counted.
+cost nothing real and are never counted. With ``--ledger`` the committed spend ledger is added: per run id the
+larger of the ledger and the directories on disk, so a lost or moved run directory still counts.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
+import io
+import json
+import os
 import sqlite3
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from void.config import load_config, micro_to_usd  # noqa: E402
-from void.economy.budget import DB_FILE, run_spend, spend_under  # noqa: E402
+from void.config import VoidConfig, load_config, micro_to_usd, usd_to_micro  # noqa: E402
+from void.economy.budget import (  # noqa: E402
+    DB_FILE,
+    find_runs,
+    ledger_spend,
+    read_ledger,
+    run_spend,
+    spend_under,
+)
 
 EXIT_REFUSED = 3
 EXIT_UNUSABLE = 4
+EXIT_LOST = 5
+EXIT_FEW_CLAIMS = 6
+EXIT_LOCKED = 7
+LOCK_DIR = ".live_locks"  # under OUT: one lock file per attempt, held by the attempt's `void run` while it lives
+BILLING_ERROR = "billing"  # AnthropicBrain's error class for a response billed above the list prices
 
 
 def _overrides(seed: int | None) -> dict[str, Any]:
     return {"run": {"seed": int(seed)}} if seed is not None else {}
 
 
+def _run_id(cfg: VoidConfig) -> str:
+    return f"{cfg.run.name}-s{cfg.run.seed}"  # as void.sim.loop.Simulation names a run
+
+
+def _spend(args: argparse.Namespace) -> tuple[int, list[Any]]:
+    return spend_under(args.root, ledger=getattr(args, "ledger", None))
+
+
 def cmd_spent(args: argparse.Namespace) -> int:
-    total, rows = spend_under(args.root)
+    total, rows = _spend(args)
     if args.plain:
         print(f"{micro_to_usd(total):.6f}")
         return 0
     for r in rows:
         if r.real_micro:
             print(f"  {r.run_dir}: ${micro_to_usd(r.real_micro):.4f} ({r.calls} calls, status {r.status})")
-    print(f"spent ${micro_to_usd(total):.4f} across {len(rows)} run(s) under {', '.join(args.root)}")
+    where = ", ".join(args.root) + (f" and the ledger {args.ledger}" if args.ledger else "")
+    print(f"spent ${micro_to_usd(total):.4f} across {len(rows)} run(s) under {where}")
     return 0
 
 
@@ -54,7 +104,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         print("check: pass --config or --cap", file=sys.stderr)
         return 2
     cap = float(args.cap) if args.cap is not None else load_config(args.config, _overrides(args.seed)).economy.total_cap_usd
-    total, _ = spend_under(args.root)
+    total, _ = _spend(args)
     spent = micro_to_usd(total)
     if spent + cap > float(args.budget) + 1e-9:
         print(f"refused: ${spent:.4f} already spent + this run's cap ${cap:.2f} > budget ${float(args.budget):.2f}", file=sys.stderr)
@@ -103,8 +153,23 @@ def _events(run_dir: Path, kinds: tuple[str, ...]) -> int:
         conn.close()
 
 
+def _cap_blocks(run_dir: Path) -> int:
+    """Calls a real-dollar cap blocked (the agent slept or idled instead), and total-cap hits."""
+    conn = sqlite3.connect(f"file:{run_dir / DB_FILE}?mode=ro", uri=True)
+    try:
+        return int(conn.execute(
+            "SELECT COUNT(*) FROM events WHERE kind='cap_hit' OR (kind='gate_blocked' AND "
+            "json_extract(payload, '$.reason') IN ('daily_cap', 'total_cap'))").fetchone()[0])
+    finally:
+        conn.close()
+
+
+def _error_class(error: Any) -> str:
+    return str(error).split(":")[0]
+
+
 def verify_run(run_dir: Path, *, strict: bool = False, max_error_rate: float = 0.05,
-               expect_purposes: tuple[str, ...] = ()) -> list[str]:
+               expect_purposes: tuple[str, ...] = (), no_cap_blocks: bool = False) -> list[str]:
     """Problems that make a finished live run unusable (empty when it is fine); prints a per-purpose summary."""
     from void.brain.base import Usage
     from void.economy.catalog import same_model, thinks_by_default
@@ -132,9 +197,22 @@ def verify_run(run_dir: Path, *, strict: bool = False, max_error_rate: float = 0
               f"cache_read {sum(r['cache_read_tokens'] > 0 for r in rs):<4} ${micro_to_usd(sum(r['real_cost'] for r in rs)):.4f}")
     errors = [r for r in rows if r["error"] is not None]
     rate = len(errors) / len(rows)
+    if errors:  # always shown, so a run that passes with a few failures still says which kind they were
+        classes: dict[str, int] = {}
+        for r in errors:
+            classes[_error_class(r["error"])] = classes.get(_error_class(r["error"]), 0) + 1
+        print("  errors by class: " + ", ".join(f"{k} {v}" for k, v in sorted(classes.items())))
+    billed_above_list = [r for r in errors if _error_class(r["error"]) == BILLING_ERROR]
+    if billed_above_list:  # every mode: the meter priced these calls at list prices the provider did not charge
+        problems.append(f"{len(billed_above_list)} call(s) were billed above the list prices the meter uses: "
+                        + str(billed_above_list[0]["error"])[:200])
     for purpose in expect_purposes:
         if not any(p == purpose for p, _ in groups):
             problems.append(f"no {purpose!r} call was made")
+    if no_cap_blocks:
+        blocked = _cap_blocks(run_dir)
+        if blocked:
+            problems.append(f"a real-dollar cap blocked {blocked} call(s): the arms would no longer be treated alike")
     if strict:
         for r in errors[:5]:
             problems.append(f"call {r['call_id']} ({r['purpose']}, {r['tier']}) failed: {str(r['error'])[:160]}")
@@ -168,13 +246,14 @@ def verify_run(run_dir: Path, *, strict: bool = False, max_error_rate: float = 0
             problems.append("brain_error or brain_refusal events were emitted")
     elif rate > max_error_rate:
         problems.append(f"{len(errors)} of {len(rows)} calls failed ({rate:.1%} > {max_error_rate:.0%}): "
-                        + ", ".join(sorted({str(r['error']).split(':')[0] for r in errors})))
+                        + ", ".join(sorted({_error_class(r['error']) for r in errors})))
     return problems
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
     purposes = tuple(p for p in (args.expect_purposes or "").split(",") if p)
-    problems = verify_run(Path(args.run_dir), strict=args.strict, max_error_rate=args.max_error_rate, expect_purposes=purposes)
+    problems = verify_run(Path(args.run_dir), strict=args.strict, max_error_rate=args.max_error_rate,
+                          expect_purposes=purposes, no_cap_blocks=args.no_cap_blocks)
     for p in problems:
         print(f"  PROBLEM: {p}", file=sys.stderr)
     if problems:
@@ -185,10 +264,328 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def cmd_report(args: argparse.Namespace) -> int:
-    total, rows = spend_under(args.root)
+    total, rows = _spend(args)
     for r in rows:
         print(f"{str(r.run_dir):<70} {str(r.status):<13} calls {r.calls:<5} errors {r.errors:<4} ${micro_to_usd(r.real_micro):.4f}")
+    if args.ledger:
+        attempts = read_ledger(args.ledger)
+        on_disk: dict[str, int] = {}
+        for r in rows:
+            if r.run_id is not None:
+                on_disk[r.run_id] = on_disk.get(r.run_id, 0) + r.real_micro
+        for attempt, e in sorted(attempts.items()):
+            if e["run_id"] not in on_disk:
+                micro = int(e.get("real_micro") or 0) if e["state"] == "final" else int(e.get("cap_micro") or 0)
+                print(f"{'(ledger only) ' + str(e['run_id']):<70} {str(e.get('status', e['state'])):<13} "
+                      f"calls {int(e.get('calls') or 0):<5} attempt {attempt} ${micro_to_usd(micro):.4f}")
+        # the total takes, per run id, the larger of the ledger and the disk: show where the ledger is the larger
+        for run_id, micro in sorted(ledger_spend(args.ledger).items()):
+            if run_id in on_disk and micro > on_disk[run_id]:
+                print(f"{'(ledger over disk) ' + run_id:<70} {'':<13} {'':<17} +${micro_to_usd(micro - on_disk[run_id]):.4f}")
+        for attempt, e in sorted(attempts.items()):
+            if e["state"] == "reserved":
+                print(f"{'(open reservation) ' + str(e['run_id']):<70} {'reserved':<13} reserved at {e.get('ts', '?')}, "
+                      f"attempt {attempt}, counted at its cap ${micro_to_usd(int(e.get('cap_micro') or 0)):.4f}")
     print(f"total ${micro_to_usd(total):.4f}")
+    return 0
+
+
+# --- the committed spend ledger -----------------------------------------------------------------------------
+def _now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _append(ledger: Path, entry: dict[str, Any]) -> None:
+    with ledger.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, sort_keys=True) + "\n")
+
+
+def cmd_reserve(args: argparse.Namespace) -> int:
+    from void.cli import _run_dir
+
+    ledger = Path(args.ledger)
+    attempts = read_ledger(ledger)  # also refuses a missing or malformed ledger before anything is written
+    cfg = load_config(args.config, _overrides(args.seed))
+    run_id = _run_id(cfg)
+    attempt = f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{run_id}"
+    n = 1
+    while attempt in attempts:
+        n += 1
+        attempt = f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{run_id}-{n}"
+    run_dir = _run_dir(Path(args.out), cfg, sweep=args.seed is not None)
+    try:
+        rel = str(run_dir.resolve().relative_to(Path(args.out).resolve()))
+    except ValueError:
+        rel = str(run_dir)
+    _append(ledger, {"attempt": attempt, "run_id": run_id, "run": rel, "config": Path(args.config).name, "state": "reserved",
+                     "cap_micro": usd_to_micro(cfg.economy.total_cap_usd), "ts": _now()})
+    print(attempt)
+    return 0
+
+
+def _created_at(run_dir: Path) -> str | None:
+    conn = sqlite3.connect(f"file:{run_dir / DB_FILE}?mode=ro", uri=True)
+    try:
+        row = conn.execute("SELECT created_at FROM run LIMIT 1").fetchone()
+    except sqlite3.Error:
+        row = None
+    finally:
+        conn.close()
+    return str(row[0]) if row and row[0] else None
+
+
+def _final_entry(attempt: str, run_id: str, run_dir: Path, verified: bool) -> dict[str, Any]:
+    """The `final` line of an attempt, read from the directory its run wrote (absent: it never started, $0)."""
+    entry: dict[str, Any] = {"attempt": attempt, "run_id": run_id, "state": "final", "ts": _now(), "verified": bool(verified)}
+    if not (run_dir / DB_FILE).is_file():  # refused or failed before the run wrote anything: nothing was spent
+        entry.update(status="not_started", real_micro=0, calls=0, errors=0)
+        return entry
+    spend = run_spend(run_dir)
+    conn = sqlite3.connect(f"file:{run_dir / DB_FILE}?mode=ro", uri=True)
+    try:
+        ids = [r[0] for r in conn.execute("SELECT request_id FROM llm_calls WHERE provider='anthropic' AND request_id IS NOT NULL "
+                                          "ORDER BY tick, call_id")]
+    finally:
+        conn.close()
+    entry.update(status=spend.status, real_micro=spend.real_micro, calls=spend.calls, errors=spend.errors,
+                 first_request_id=ids[0] if ids else None, last_request_id=ids[-1] if ids else None,
+                 created_at=_created_at(run_dir), run_dir_run_id=spend.run_id)
+    return entry
+
+
+def cmd_final(args: argparse.Namespace) -> int:
+    ledger = Path(args.ledger)
+    attempts = read_ledger(ledger)
+    if args.attempt not in attempts:
+        print(f"final: no attempt {args.attempt!r} in {ledger}", file=sys.stderr)
+        return 2
+    entry = _final_entry(args.attempt, str(attempts[args.attempt]["run_id"]), Path(args.run_dir), args.verified)
+    held = entry.pop("run_dir_run_id", None)
+    if held and held != entry["run_id"]:
+        print(f"final: {args.run_dir} holds run {held}, not {entry['run_id']}", file=sys.stderr)
+        return 2
+    _append(ledger, entry)
+    print(f"ledger: {args.attempt} final, status {entry['status']}, ${micro_to_usd(int(entry['real_micro'])):.4f}")
+    return 0
+
+
+# --- interrupted attempts -------------------------------------------------------------------------------------
+def lock_path(out: str | Path, attempt: str) -> Path:
+    return Path(out) / LOCK_DIR / f"{attempt}.lock"
+
+
+def lock_held(path: Path) -> bool:
+    """True while some process holds the lock (the attempt's `void run`, or a child it passed the lock to)."""
+    fd = os.open(path, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)  # closing the descriptor releases a lock taken here
+    return False
+
+
+def cmd_launch(args: argparse.Namespace) -> int:
+    """Replace this process with the command (same pid), holding the attempt's lock: the lock file then proves the
+    command was launched on this machine, and a free lock that its process is gone."""
+    cmd = list(args.cmd[1:] if args.cmd[:1] == ["--"] else args.cmd)
+    if not cmd:
+        print("launch: no command", file=sys.stderr)
+        return 2
+    path = lock_path(args.out, args.attempt)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(f"launch: {path} is held by another process", file=sys.stderr)
+        return EXIT_LOCKED
+    os.set_inheritable(fd, True)
+    os.execvp(cmd[0], cmd)
+    return 0  # not reached
+
+
+def _ledger_lines(path: str | Path) -> list[dict[str, Any]]:
+    read_ledger(path)  # validates every line first
+    return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def open_attempts(ledger: str | Path, run_id: str) -> list[tuple[str, dict[str, Any], str | None]]:
+    """``(attempt, reserved line, reserve time of the next attempt of this run)`` for every attempt of ``run_id``
+    that has a `reserved` line and no `final` one, in ledger order."""
+    reserved: list[tuple[str, dict[str, Any]]] = []
+    finals: set[str] = set()
+    for e in _ledger_lines(ledger):
+        if str(e["run_id"]) != run_id:
+            continue
+        if e["state"] == "reserved":
+            reserved.append((str(e["attempt"]), e))
+        else:
+            finals.add(str(e["attempt"]))
+    out = []
+    for i, (attempt, e) in enumerate(reserved):
+        if attempt in finals:
+            continue
+        later = [str(n.get("ts")) for _, n in reserved[i + 1:] if n.get("ts")]
+        out.append((attempt, e, min(later) if later else None))
+    return out
+
+
+def cmd_reconcile(args: argparse.Namespace) -> int:
+    """Close the attempts of this run that a killed script left `reserved` (counted at their full cap forever). An
+    attempt is closed from the one directory of its run created after it was reserved (and before the next attempt
+    of the run), never yet recorded by a `final` line, once that directory's run has ended: its status is not
+    `running`, or its attempt's lock exists and is free (the `void run` launched for it is gone). A run that may still
+    be spending is never closed, and an attempt with no such directory stays open (see `lost`)."""
+    ledger = Path(args.ledger)
+    run_id = _run_id(load_config(args.config, _overrides(args.seed)))
+    pending = open_attempts(ledger, run_id)
+    if not pending:
+        return 0
+    claimed = {str(e.get("created_at")) for e in read_ledger(ledger).values()
+               if e["run_id"] == run_id and e["state"] == "final" and e.get("created_at")}
+    dirs = []
+    for d in find_runs(args.root):
+        spend = run_spend(d)
+        created = _created_at(d) if spend.run_id == run_id else None
+        if created is not None:
+            dirs.append((d, created, spend.status))
+    verified_dir = Path(args.verified_dir).resolve() if args.verified_dir else None
+    for attempt, e, next_ts in pending:
+        ts = e.get("ts")
+        if not ts:
+            print(f"reconcile: {attempt} has no reservation time; it stays counted at its cap", file=sys.stderr)
+            continue
+        cands = [(d, c, st) for d, c, st in dirs if c >= str(ts) and (next_ts is None or c < next_ts) and c not in claimed]
+        if len(cands) != 1:
+            if cands:
+                print(f"reconcile: {attempt}: {len(cands)} directories could be its run ({', '.join(str(d) for d, _, _ in cands)}); "
+                      "it stays counted at its cap", file=sys.stderr)
+            continue
+        d, created, status = cands[0]
+        if status in (None, "running"):
+            lock = lock_path(args.out, attempt)
+            if not lock.is_file() or lock_held(lock):
+                why = "its `void run` still holds its lock" if lock.is_file() else f"no lock of it under {args.out} shows its process ended"
+                print(f"reconcile: {attempt}: {d} has status {status!r} and {why}; it stays counted at its cap", file=sys.stderr)
+                continue
+        entry = _final_entry(attempt, run_id, d, verified=verified_dir is not None and d.resolve() == verified_dir)
+        entry.pop("run_dir_run_id", None)
+        entry["note"] = f"closed on a rerun from {d} (the attempt's script was stopped before it recorded the end)"
+        _append(ledger, entry)
+        claimed.add(created)
+        print(f"reconcile: {attempt} closed from {d}: status {entry['status']}, ${micro_to_usd(int(entry['real_micro'])):.4f}",
+              file=sys.stderr)
+        print(attempt)
+    return 0
+
+
+def _paid_attempts(ledger: str, run_id: str) -> list[dict[str, Any]]:
+    out = []
+    for e in read_ledger(ledger).values():
+        if e["run_id"] == run_id and (e["state"] == "reserved" or int(e.get("real_micro") or 0) > 0):
+            out.append(e)
+    return out
+
+
+def cmd_lost(args: argparse.Namespace) -> int:
+    run_id = _run_id(load_config(args.config, _overrides(args.seed)))
+    paid = _paid_attempts(args.ledger, run_id)
+    if not paid:
+        return 0
+    if any(run_spend(d).run_id == run_id for d in find_runs(args.root)):
+        return 0
+    print(f"lost: the ledger records {len(paid)} paid attempt(s) of {run_id} but no directory of it exists under "
+          f"{', '.join(args.root)}:", file=sys.stderr)
+    for e in paid:
+        if e["state"] == "final":
+            print(f"  {e['attempt']}: finished with status {e.get('status')}, ${micro_to_usd(int(e.get('real_micro') or 0)):.4f} "
+                  "spent; restore its directory, or pay for the run again with RERUN_LOST=1 (that spend stays counted)",
+                  file=sys.stderr)
+            continue
+        run_dir = Path(args.root[0]) / str(e.get("run") or run_id)
+        print(f"  {e['attempt']}: reserved at {e.get('ts', '(no time)')} and never recorded as finished, so it counts at its "
+              f"full cap ${micro_to_usd(int(e.get('cap_micro') or 0)):.4f}. If it never started (its script was stopped "
+              "before `void run`, for example while the reservation was being pushed) and the workspace's usage in the "
+              "Anthropic Console shows no call around that time, close it at $0 with: "
+              f"{Path(__file__).name} final --ledger {args.ledger} --attempt {e['attempt']} --run-dir {run_dir} "
+              "(then commit and push the ledger). Never do that on a machine that did not run it or when unsure: a run "
+              "that started elsewhere looks the same here. Otherwise restore its directory, or set RERUN_LOST=1 (its "
+              "cap stays counted).", file=sys.stderr)
+    return EXIT_LOST
+
+
+def cmd_passed(args: argparse.Namespace) -> int:
+    run_id = _run_id(load_config(args.config, _overrides(args.seed)))
+    for e in read_ledger(args.ledger).values():
+        if e["run_id"] == run_id and e["state"] == "final" and e.get("status") == "completed" and e.get("verified") is True:
+            return 0
+    return 1
+
+
+def cmd_remaining(args: argparse.Namespace) -> int:
+    """The caps of the runs scripts/live_claude.sh would still start for these configs and seeds, for the plan
+    printout. Left out, as the script would treat them: a completed run that verifies with the same checks (skipped);
+    a run in flight, whose latest attempt is still `reserved` and whose directory is absent or held by its running
+    `void run` (already counted at its cap in the spend); and, without --rerun-lost, a run whose directory is gone but
+    the ledger records completed and verified (refused as lost). A failed, interrupted, unverified or never-started
+    run is counted again, since it would be redone."""
+    from void.cli import _run_dir
+
+    by_run: dict[str, list[dict[str, Any]]] = {}
+    for e in read_ledger(args.ledger).values():
+        by_run.setdefault(str(e["run_id"]), []).append(e)
+    on_disk = {run_spend(d).run_id for d in find_runs(args.root)}
+    purposes = tuple(p for p in (args.expect_purposes or "").split(",") if p)
+    seeds: list[int | None] = [int(x) for x in args.seeds.split()] if args.seeds is not None else [None]
+    total = 0
+    for config in args.config:
+        for seed in seeds:
+            cfg = load_config(config, _overrides(seed))
+            run_id = _run_id(cfg)
+            run_dir = _run_dir(Path(args.out), cfg, sweep=seed is not None)
+            mine = by_run.get(run_id, [])
+            in_flight = bool(mine) and mine[-1]["state"] == "reserved"
+            status = run_spend(run_dir).status if (run_dir / DB_FILE).is_file() else "absent"
+            if status == "completed":
+                with contextlib.redirect_stdout(io.StringIO()):
+                    problems = verify_run(run_dir, strict=args.strict, max_error_rate=args.max_error_rate,
+                                          expect_purposes=purposes, no_cap_blocks=args.no_cap_blocks)
+                if not problems:
+                    continue
+            elif status == "absent":
+                if in_flight:
+                    continue
+                if not args.rerun_lost and run_id not in on_disk and any(
+                        e["state"] == "final" and e.get("status") == "completed" and e.get("verified") is True for e in mine):
+                    continue
+            elif status == "running" and in_flight:
+                lock = lock_path(args.out, str(mine[-1]["attempt"]))
+                if lock.is_file() and lock_held(lock):
+                    continue
+            total += usd_to_micro(cfg.economy.total_cap_usd)
+    print(f"{micro_to_usd(total):.2f}")
+    return 0
+
+
+def cmd_claims(args: argparse.Namespace) -> int:
+    short = 0
+    for d in args.run_dirs:
+        conn = sqlite3.connect(f"file:{Path(d) / DB_FILE}?mode=ro", uri=True)
+        try:
+            row = conn.execute("SELECT COUNT(*), COALESCE(SUM(action_type='talk'), 0), COALESCE(SUM(claims_made), 0), "
+                               "COALESCE(SUM(claims_false), 0) FROM llm_calls WHERE purpose='decide'").fetchone()
+        finally:
+            conn.close()
+        decisions, talks, made, false = (int(x) for x in row)
+        ok = made >= args.min
+        short += not ok
+        print(f"  {d}: {decisions} decisions, {talks} talks, {made} claims listed ({false} false){'' if ok else '  TOO FEW'}")
+    if short:
+        print(f"claims: {short} run(s) listed fewer than {args.min} claims; false_claim_rate would rest on too few claims",
+              file=sys.stderr)
+        return EXIT_FEW_CLAIMS
     return 0
 
 
@@ -197,10 +594,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("spent")
     p.add_argument("--root", action="append", required=True)
+    p.add_argument("--ledger")
     p.add_argument("--plain", action="store_true")
     p.set_defaults(func=cmd_spent)
     p = sub.add_parser("check")
     p.add_argument("--root", action="append", required=True)
+    p.add_argument("--ledger")
     p.add_argument("--budget", type=float, required=True)
     p.add_argument("--config")
     p.add_argument("--seed", type=int)
@@ -222,10 +621,65 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--strict", action="store_true", help="no failed call, every stop end_turn, no fallback, exact metering, cache reads")
     p.add_argument("--max-error-rate", type=float, default=0.05, dest="max_error_rate")
     p.add_argument("--expect-purposes", dest="expect_purposes", help="comma-separated call purposes that must appear")
+    p.add_argument("--no-cap-blocks", action="store_true", dest="no_cap_blocks",
+                   help="unusable when a daily or total real-dollar cap blocked any call (paired stages)")
     p.set_defaults(func=cmd_verify)
     p = sub.add_parser("report")
     p.add_argument("--root", action="append", required=True)
+    p.add_argument("--ledger")
     p.set_defaults(func=cmd_report)
+    p = sub.add_parser("reserve")
+    p.add_argument("--ledger", required=True)
+    p.add_argument("--config", required=True)
+    p.add_argument("--seed", type=int)
+    p.add_argument("--out", required=True)
+    p.set_defaults(func=cmd_reserve)
+    p = sub.add_parser("final")
+    p.add_argument("--ledger", required=True)
+    p.add_argument("--attempt", required=True)
+    p.add_argument("--run-dir", required=True, dest="run_dir")
+    p.add_argument("--verified", action="store_true")
+    p.set_defaults(func=cmd_final)
+    p = sub.add_parser("lost")
+    p.add_argument("--ledger", required=True)
+    p.add_argument("--config", required=True)
+    p.add_argument("--seed", type=int)
+    p.add_argument("--root", action="append", required=True)
+    p.set_defaults(func=cmd_lost)
+    p = sub.add_parser("reconcile")
+    p.add_argument("--ledger", required=True)
+    p.add_argument("--config", required=True)
+    p.add_argument("--seed", type=int)
+    p.add_argument("--root", action="append", required=True)
+    p.add_argument("--out", required=True, help="the OUT the attempts were launched with (their locks are under it)")
+    p.add_argument("--verified-dir", dest="verified_dir", help="a directory just verified with its stage's checks")
+    p.set_defaults(func=cmd_reconcile)
+    p = sub.add_parser("launch")
+    p.add_argument("--out", required=True)
+    p.add_argument("--attempt", required=True)
+    p.add_argument("cmd", nargs=argparse.REMAINDER)
+    p.set_defaults(func=cmd_launch)
+    p = sub.add_parser("remaining")
+    p.add_argument("--ledger", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--root", action="append", required=True)
+    p.add_argument("--config", action="append", required=True)
+    p.add_argument("--seeds", help="space-separated seeds (paired stages); omit for a single run")
+    p.add_argument("--strict", action="store_true")
+    p.add_argument("--max-error-rate", type=float, default=0.05, dest="max_error_rate")
+    p.add_argument("--expect-purposes", dest="expect_purposes")
+    p.add_argument("--no-cap-blocks", action="store_true", dest="no_cap_blocks")
+    p.add_argument("--rerun-lost", action="store_true", dest="rerun_lost")
+    p.set_defaults(func=cmd_remaining)
+    p = sub.add_parser("passed")
+    p.add_argument("--ledger", required=True)
+    p.add_argument("--config", required=True)
+    p.add_argument("--seed", type=int)
+    p.set_defaults(func=cmd_passed)
+    p = sub.add_parser("claims")
+    p.add_argument("run_dirs", nargs="+")
+    p.add_argument("--min", type=int, required=True)
+    p.set_defaults(func=cmd_claims)
     return ap
 
 

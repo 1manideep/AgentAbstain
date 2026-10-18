@@ -7,11 +7,30 @@ numbers or dicts. Nothing here writes to the run.
 Outcome resolution (:func:`end_of_run_outcome`), in order:
 
 1. ``tick.<path>`` / ``day.<path>`` prefixes force the last tick row or the last day row;
-2. a bare name that is a registered computed outcome (:data:`COMPUTED`) is computed from
+2. a bare name that is a built-in computed outcome (:data:`COMPUTED`) is computed from
    ``world.db`` as a run-level aggregate (``false_claim_rate`` over every decide call, the
-   recovered collapse stress, ``probe_recall``, the benefactor outcomes, ...);
-3. otherwise the dotted path is resolved against the last tick row, then the last day row
-   (``by_tier.alpha.action_regret_mean``, ``notes_by_channel.chronicle``, ``mean_balance``, ...).
+   recovered collapse stress, ``probe_recall``, the benefactor outcomes, the run-total counts
+   ``deaths`` / ``births`` / ``gossip_transfers`` / ``gadgets.<status>``, the spend and exam-baseline
+   endpoints, ...);
+3. then a name registered in :mod:`void.research.outcomes` (its submodules are imported on first use);
+4. otherwise the dotted path is resolved against the last tick row, then the last day row
+   (``by_tier.alpha.action_regret_mean``, ``mean_balance``, ...).
+
+Whatever follows the first dot of a computed name is its argument: a tier for most of them
+(``false_claim_rate.alpha``), a channel for ``notes_by_channel``, a status for ``gadgets``.
+:func:`computed_outcome_names` lists every computed name. The tick rows count deaths, births and gossip
+transfers *per tick*; ``tick.deaths`` still means the last tick's count, a bare ``deaths`` the whole run's.
+
+Spend: ``calls`` / ``real_cost_usd`` / ``world_cost_usd`` in :func:`summarize` are decide calls only, as they
+always were; ``calls_by_purpose`` and ``total_real_cost_usd`` cover every call (maintenance, gossip
+paraphrase, exam, chronicle). ``memory_spend_share`` and ``cost_per_correct_recall`` are the cost endpoints
+of MEMORY_EVOLUTION 7.1; ``forage_income_usd``, ``decide_cost_usd`` and ``mean_input_tokens_per_decide`` are
+the rows of the section 10.4 diagnosis (per agent ever alive, so a paired comparison of arms reproduces them).
+
+Exam baseline: in a world where a question kind almost always has the same truth (every node seen is
+``rich``), raw accuracy measures base rates. ``exam_majority_baseline`` is the accuracy of always answering
+each kind's commonest truth, over the same graded items as ``exam_accuracy``, and
+``exam_accuracy_over_baseline`` is the difference.
 
 ``probe_recall``: the loop plants a two-hop probe for every alive agent every
 ``memory.probe_every_ticks`` ticks and checks it on the next tick, accumulating
@@ -47,19 +66,29 @@ __all__ = [
     "DAILY",
     "SUMMARY_KEYS",
     "WINDFALL_TAG",
+    "calls_by_purpose",
     "collapse_curve",
     "collapse_curves",
+    "computed_outcome_names",
     "connect",
+    "cost_per_correct_recall",
     "costly_actions_post_windfall",
+    "decide_cost_usd",
     "end_of_run_outcome",
+    "event_count",
     "exam_abstain_rate",
     "exam_accuracy",
+    "exam_accuracy_over_baseline",
     "exam_counts",
+    "exam_majority_baseline",
     "exam_score",
     "exogenous_vocab",
     "exogenous_vocab_count",
     "false_claim_rate",
+    "forage_income_usd",
+    "gadget_count",
     "load_metrics",
+    "memory_spend_share",
     "notes_by_channel",
     "persistence",
     "probe_recall",
@@ -95,7 +124,11 @@ SUMMARY_KEYS = (
     "mean_balance", "deaths", "births", "gadgets", "gossip_transfers", "gossip_similarity_by_hop",
     "notes_by_channel", "tracer_reach", "tracer_adopters", "false_claim_rate", "claims_made",
     "degeneration_by_tier", "invalid_action_rate", "probe_recall", "calls", "real_cost_usd", "world_cost_usd",
+    "total_real_cost_usd", "calls_by_purpose", "memory_spend_share", "cost_per_correct_recall", "forage_income_usd",
+    "decide_cost_usd", "mean_input_tokens_per_decide", "exam", "maintenance", "policy_versions",
 )
+COUNTED_EVENTS = {"deaths": "death", "births": "birth", "gossip_transfers": "gossip_transfer"}
+NOT_AGENT_PAID = ("exam", "chronicle")  # research-pool-paid exam calls and the kernel's chronicle writer
 
 
 # --- loading -------------------------------------------------------------------------------------------
@@ -187,6 +220,12 @@ def _last_tick(db: sqlite3.Connection) -> int:
     return int(row["t"])
 
 
+def _has_tables(db: sqlite3.Connection, *names: str) -> bool:
+    """Whether every table exists: a run made before the memory layer has no exam, command or policy tables."""
+    found = {str(r["name"]) for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    return all(n in found for n in names)
+
+
 def _alive_ids(db: sqlite3.Connection) -> list[str]:
     return [str(r["agent_id"]) for r in db.execute("SELECT agent_id FROM agents WHERE status='alive' ORDER BY agent_id")]
 
@@ -223,6 +262,43 @@ def false_claim_rate(run_dir: str | Path, tier: str | None = None, day: int | No
     return (int(row["f"] or 0) / made) if made else None
 
 
+def _per_starting_agent(run_dir: str | Path, micro: int) -> float | None:
+    n = len(run_config(run_dir).agents)
+    return micro_to_usd(micro) / n if n else None
+
+
+def forage_income(run_dir: str | Path) -> float | None:
+    """Gross foraging income in USD per starting agent (every ``forage`` credit in the wallet ledger): what memory
+    earns, before what it costs. With :func:`decision_world_cost` it splits ``mean_balance`` into its two sides."""
+    with connect(run_dir) as db:
+        row = db.execute("SELECT COALESCE(SUM(delta), 0) AS s FROM wallet_ledger WHERE kind='forage'").fetchone()
+    return _per_starting_agent(run_dir, int(row["s"]))
+
+
+def decision_world_cost(run_dir: str | Path) -> float | None:
+    """In-world price of every decide call, in USD per starting agent: what agents paid to think, retrieved notes
+    included (the run total; the metrics' ``world_cost_usd`` is per tick)."""
+    with connect(run_dir) as db:
+        row = db.execute("SELECT COALESCE(SUM(world_cost), 0) AS s FROM llm_calls WHERE purpose='decide'").fetchone()
+    return _per_starting_agent(run_dir, int(row["s"]))
+
+
+def claims_made(run_dir: str | Path, tier: str | None = None) -> float | None:
+    """Claims the agents listed themselves over every decide call: the denominator of ``false_claim_rate``."""
+    extra, params = _call_filter(run_dir, tier, None)
+    with connect(run_dir) as db:
+        row = db.execute("SELECT COALESCE(SUM(claims_made), 0) AS m FROM llm_calls WHERE purpose='decide'" + extra, params).fetchone()
+    return float(row["m"])
+
+
+def talks(run_dir: str | Path, tier: str | None = None) -> float | None:
+    """Decide calls whose action was ``talk`` (the only action that carries claims to a listener)."""
+    extra, params = _call_filter(run_dir, tier, None)
+    with connect(run_dir) as db:
+        row = db.execute("SELECT COUNT(*) AS n FROM llm_calls WHERE purpose='decide' AND action_type='talk'" + extra, params).fetchone()
+    return float(row["n"])
+
+
 def notes_by_channel(run_dir: str | Path, channel: str | None = None, day: int | None = None) -> float | None:
     """Live note count for ``channel`` from the day rows (``day`` selects one, default the last); a channel
     absent from the row counts as 0, so ``notes_by_channel.chronicle`` is 0 rather than None when the
@@ -239,6 +315,119 @@ def notes_by_channel(run_dir: str | Path, channel: str | None = None, day: int |
     if channel not in CHANNELS and channel not in counts:
         return None
     return float(counts.get(channel, 0))
+
+
+# --- run-total counts ------------------------------------------------------------------------------------
+def event_count(run_dir: str | Path, kind: str, tier: str | None = None, day: int | None = None) -> int:
+    """Events of ``kind`` over the whole run (or on one ``day``). With ``tier``, only events whose agent (the one who
+    died or was born; the listener who received a gossip transfer) is of that tier. The founders' births count."""
+    sql = "SELECT COUNT(*) AS n FROM events e"
+    params: list[Any] = []
+    if tier:
+        sql += " JOIN agents a ON a.agent_id = e.agent_id"
+    sql += " WHERE e.kind=?"
+    params.append(kind)
+    if tier:
+        sql += " AND a.model_tier=?"
+        params.append(tier)
+    if day is not None:
+        sql += " AND e.day=?"
+        params.append(int(day))
+    with connect(run_dir) as db:
+        return int(db.execute(sql, params).fetchone()["n"])
+
+
+def gadget_count(run_dir: str | Path, status: str | None = None) -> int:
+    """Gadgets with ``status`` (``proposed``, ``verified``, ``rejected``, ``tampered``) at the end of the run, 0 when
+    none has it; every gadget when ``status`` is None."""
+    sql, params = "SELECT COUNT(*) AS n FROM gadgets", ()
+    if status:
+        sql += " WHERE status=?"
+        params = (status,)
+    with connect(run_dir) as db:
+        return int(db.execute(sql, params).fetchone()["n"])
+
+
+# --- spend (MEMORY_EVOLUTION 7.1 cost endpoints, 10.4 diagnosis) ------------------------------------------
+def calls_by_purpose(run_dir: str | Path, tier: str | None = None) -> dict[str, dict[str, Any]]:
+    """``{purpose: {"calls", "real_cost_usd", "world_cost_usd"}}`` for every purpose present in ``llm_calls``."""
+    sql = ("SELECT purpose, COUNT(*) AS n, COALESCE(SUM(real_cost),0) AS rc, COALESCE(SUM(world_cost),0) AS wc "
+           "FROM llm_calls")
+    params: tuple[Any, ...] = ()
+    if tier:
+        sql += " WHERE tier=?"
+        params = (tier,)
+    with connect(run_dir) as db:
+        rows = db.execute(sql + " GROUP BY purpose ORDER BY purpose", params).fetchall()
+    return {str(r["purpose"]): {"calls": int(r["n"]), "real_cost_usd": round(micro_to_usd(int(r["rc"])), 6),
+                                "world_cost_usd": round(micro_to_usd(int(r["wc"])), 6)} for r in rows}
+
+
+def _real_cost(db: sqlite3.Connection, tier: str | None, *, purpose: str | None = None, agent_paid: bool = False) -> int:
+    """``SUM(real_cost)`` in micro-dollars over the calls of one ``purpose``, or over the agent-paid ones."""
+    sql, params = "SELECT COALESCE(SUM(real_cost),0) AS s FROM llm_calls WHERE 1=1", []
+    if purpose is not None:
+        sql += " AND purpose=?"
+        params.append(purpose)
+    if agent_paid:
+        sql += f" AND purpose NOT IN ({','.join('?' * len(NOT_AGENT_PAID))})"
+        params.extend(NOT_AGENT_PAID)
+    if tier:
+        sql += " AND tier=?"
+        params.append(tier)
+    return int(db.execute(sql, params).fetchone()["s"])
+
+
+def memory_spend_share(run_dir: str | Path, tier: str | None = None) -> float | None:
+    """Maintenance (purpose ``maintain``) real cost divided by the real cost of every call made for the agents
+    (MEMORY_EVOLUTION 7.1, "memory-related call cost divided by total call cost"): decide, maintain and gossip
+    paraphrase calls, not the research-pool-paid exam calls or the chronicle writer. Maintenance calls count on both
+    sides whoever pays them (``memory.maintenance.payer``), so the share stays in [0, 1]. None without such calls."""
+    with connect(run_dir) as db:
+        total = _real_cost(db, tier, agent_paid=True)
+        maintain = _real_cost(db, tier, purpose="maintain")
+    return (maintain / total) if total else None
+
+
+def cost_per_correct_recall(run_dir: str | Path, tier: str | None = None) -> float | None:
+    """Maintenance real cost in USD divided by the correct audit-exam answers (MEMORY_EVOLUTION 7.1, "Cost per
+    correct recall"); None when no answer was correct (or no exam was asked)."""
+    counts = exam_counts(run_dir, tier)
+    if counts is None or counts[1] == 0:
+        return None
+    with connect(run_dir) as db:
+        maintain = _real_cost(db, tier, purpose="maintain")
+    return micro_to_usd(maintain) / counts[1]
+
+
+def _agents_ever(db: sqlite3.Connection, tier: str | None) -> int:
+    """Agents ever alive (every row of ``agents``: the living, the bankrupt and the archived)."""
+    if tier:
+        return int(db.execute("SELECT COUNT(*) AS n FROM agents WHERE model_tier=?", (tier,)).fetchone()["n"])
+    return int(db.execute("SELECT COUNT(*) AS n FROM agents").fetchone()["n"])
+
+
+def forage_income_usd(run_dir: str | Path, tier: str | None = None) -> float | None:
+    """Foraging income per agent ever alive, in USD: the ``forage`` credits of the wallet ledger (10.4 diagnosis,
+    "Foraging income"). None for a run without agents."""
+    sql = ("SELECT COALESCE(SUM(l.delta),0) AS s FROM wallet_ledger l JOIN agents a ON a.agent_id = l.agent_id "
+           "WHERE l.kind='forage' AND l.delta > 0")
+    params: tuple[Any, ...] = ()
+    if tier:
+        sql += " AND a.model_tier=?"
+        params = (tier,)
+    with connect(run_dir) as db:
+        n = _agents_ever(db, tier)
+        income = int(db.execute(sql, params).fetchone()["s"])
+    return micro_to_usd(income) / n if n else None
+
+
+def decide_cost_usd(run_dir: str | Path, tier: str | None = None) -> float | None:
+    """Real cost of decision calls per agent ever alive, in USD (10.4 diagnosis, "Decision-call cost")."""
+    with connect(run_dir) as db:
+        n = _agents_ever(db, tier)
+        cost = _real_cost(db, tier, purpose="decide")
+    return micro_to_usd(cost) / n if n else None
 
 
 # --- collapse fit (exp_tiers) --------------------------------------------------------------------------
@@ -369,11 +558,19 @@ def _probe_recall_offline(run_dir: str | Path, *, min_notes: int = 3) -> float |
 
 
 def _probe_recall_replay(run_dir: str | Path) -> float | None:
+    """Re-run the simulation with probes. Only a scripted run replays: a run that could call a paid provider is
+    refused (ValueError) before anything is built, since its replay would make real calls outside the live budget
+    in a directory deleted afterwards, and would not reproduce the original run anyway."""
     import asyncio
 
+    from void.economy.budget import reachable_providers
     from void.sim.loop import Simulation
 
     cfg = run_config(run_dir).model_copy(deep=True)
+    paid = reachable_providers(cfg)
+    if paid:
+        raise ValueError(f"replay would re-run paid calls ({', '.join(sorted(paid))}) outside the live budget and only "
+                         f"reproduces scripted runs; use the offline probe_recall (without --replay)")
     if cfg.memory.probe_every_ticks <= 0:
         cfg.memory.probe_every_ticks = 6
     with tempfile.TemporaryDirectory(prefix="void-replay-") as tmp:
@@ -394,21 +591,53 @@ def exam_counts(run_dir: str | Path, tier: str | None = None) -> tuple[int, int,
     """``(asked, correct, abstained)`` over every graded audit-exam answer (optionally the agents of one tier);
     None when the run has no exam rows. An item whose paid call returned no usable answer (a refusal, a reply
     cut off at max_tokens, an API error: ``call_id`` set, ``answer`` NULL) measured nothing and is not graded."""
-    sql = ("SELECT COUNT(*) AS n, COALESCE(SUM(a.correct), 0) AS c, COALESCE(SUM(a.abstained), 0) AS ab "
-           "FROM exam_answers a JOIN exam_items i ON i.item_id = a.item_id")
+    sql, params = _graded_audit_sql("COUNT(*) AS n, COALESCE(SUM(a.correct), 0) AS c, COALESCE(SUM(a.abstained), 0) AS ab", tier)
+    with connect(run_dir) as db:
+        if not _has_tables(db, "exam_items", "exam_answers"):
+            return None
+        row = db.execute(sql, params).fetchone()
+    asked = int(row["n"]) if row is not None else 0
+    if asked == 0:
+        return None
+    return asked, int(row["c"]), int(row["ab"])
+
+
+def _graded_audit_sql(select: str, tier: str | None) -> tuple[str, tuple[Any, ...]]:
+    """``SELECT <select>`` over the graded audit answers (``a``) joined to their items (``i``); see :func:`exam_counts`."""
+    sql = f"SELECT {select} FROM exam_answers a JOIN exam_items i ON i.item_id = a.item_id"
     params: tuple[Any, ...] = ()
     if tier:
         sql += " JOIN agents g ON g.agent_id = i.agent_id WHERE i.exam='audit' AND g.model_tier=?"
         params = (tier,)
     else:
         sql += " WHERE i.exam='audit'"
-    sql += " AND NOT (a.call_id IS NOT NULL AND a.answer IS NULL)"
+    return sql + " AND NOT (a.call_id IS NOT NULL AND a.answer IS NULL)", params
+
+
+def exam_majority_baseline(run_dir: str | Path, tier: str | None = None) -> float | None:
+    """Accuracy of a guesser who always gives each question kind's most common truth: per kind, the number of graded
+    audit items whose (normalised) truth is that kind's commonest one, summed over kinds and divided by every graded
+    item (so kinds weigh by their items). The same items as :func:`exam_counts`; None without any."""
+    from void.research.exams import normalise
+
+    sql, params = _graded_audit_sql("i.kind AS kind, i.truth AS truth", tier)
+    by_kind: dict[str, dict[str, int]] = {}
     with connect(run_dir) as db:
-        row = db.execute(sql, params).fetchone()
-    asked = int(row["n"]) if row is not None else 0
-    if asked == 0:
+        rows = db.execute(sql, params).fetchall() if _has_tables(db, "exam_items", "exam_answers") else []
+        for r in rows:
+            truths = by_kind.setdefault(str(r["kind"]), {})
+            t = normalise(str(r["truth"]))
+            truths[t] = truths.get(t, 0) + 1
+    total = sum(sum(t.values()) for t in by_kind.values())
+    if total == 0:
         return None
-    return asked, int(row["c"]), int(row["ab"])
+    return sum(max(t.values()) for t in by_kind.values()) / total
+
+
+def exam_accuracy_over_baseline(run_dir: str | Path, tier: str | None = None) -> float | None:
+    """:func:`exam_accuracy` minus :func:`exam_majority_baseline`: above 0 only when answers beat the base rates."""
+    acc, base = exam_accuracy(run_dir, tier), exam_majority_baseline(run_dir, tier)
+    return None if acc is None or base is None else acc - base
 
 
 def exam_score(run_dir: str | Path, tier: str | None = None) -> float | None:
@@ -623,18 +852,31 @@ def _no_arg(fn: Callable[[str | Path], float | None]) -> Callable[[str | Path, s
 _CALL_COLUMNS = {
     "invalid_action_rate": "invalid_action", "stale_rate": "stale_action", "perseveration_rate": "perseveration",
     "action_regret_mean": "action_regret", "text_coherence_mean": "text_coherence", "p_chosen_mean": "p_chosen",
-    "action_entropy_w8_mean": "action_entropy_w8",
+    "action_entropy_w8_mean": "action_entropy_w8", "mean_input_tokens_per_decide": "input_tokens",
 }
 
 COMPUTED: dict[str, Callable[[str | Path, str | None], float | None]] = {
+    # run totals (the tick rows hold per-tick counts; ``tick.deaths`` is still the last tick's)
+    **{name: (lambda rd, tier, kind=kind: float(event_count(rd, kind, tier))) for name, kind in COUNTED_EVENTS.items()},
+    "gadgets": lambda rd, status: float(gadget_count(rd, status)),
     "recovered_collapse_stress": _with_tier(recovered_collapse_stress),
     "false_claim_rate": _with_tier(false_claim_rate),
+    "claims_made": _with_tier(claims_made),
+    "talks": _with_tier(talks),
+    "forage_income": _no_arg(forage_income),
+    "decision_world_cost": _no_arg(decision_world_cost),
     "notes_by_channel": _with_tier(notes_by_channel),
     **{name: _with_tier(lambda rd, tier=None, col=col: _call_rate(rd, col, tier)) for name, col in _CALL_COLUMNS.items()},
     "probe_recall": _no_arg(probe_recall),
     "exam_score": _with_tier(exam_score),
     "exam_accuracy": _with_tier(exam_accuracy),
     "exam_abstain_rate": _with_tier(exam_abstain_rate),
+    "exam_majority_baseline": _with_tier(exam_majority_baseline),
+    "exam_accuracy_over_baseline": _with_tier(exam_accuracy_over_baseline),
+    "memory_spend_share": _with_tier(memory_spend_share),
+    "cost_per_correct_recall": _with_tier(cost_per_correct_recall),
+    "forage_income_usd": _with_tier(forage_income_usd),
+    "decide_cost_usd": _with_tier(decide_cost_usd),
     "time_to_50pct_tracer_reach": _no_arg(time_to_50pct_tracer_reach),
     "windfall_lineage_penetration": _no_arg(windfall_lineage_penetration),
     "costly_actions_post_windfall": _no_arg(costly_actions_post_windfall),
@@ -642,16 +884,29 @@ COMPUTED: dict[str, Callable[[str | Path, str | None], float | None]] = {
     "exogenous_vocab_count": _no_arg(exogenous_vocab_count),
 }
 
-# per-day versions of the call-level aggregates, for the daily curves compare shows (not tests)
+# per-day versions of the call-level aggregates and the counts (each day's own count), for the daily curves
+# compare shows (not tests); void.research.outcomes.load_all() adds the registered outcomes' daily functions
 DAILY: dict[str, Callable[[str | Path, str | None, int], float | None]] = {
     "false_claim_rate": lambda rd, arg, day: false_claim_rate(rd, arg, day),
     "notes_by_channel": lambda rd, arg, day: notes_by_channel(rd, arg, day),
     **{name: (lambda rd, arg, day, col=col: _call_rate(rd, col, arg, day)) for name, col in _CALL_COLUMNS.items()},
+    **{name: (lambda rd, tier, day, kind=kind: float(event_count(rd, kind, tier, day))) for name, kind in COUNTED_EVENTS.items()},
 }
+
+
+def computed_outcome_names() -> list[str]:
+    """Every bare outcome name resolved by computation rather than from the metrics rows, sorted: the built-in
+    :data:`COMPUTED` table plus the outcomes registered in :mod:`void.research.outcomes`."""
+    from void.research.outcomes import load_all
+
+    return sorted(set(COMPUTED) | set(load_all()))
 
 
 def end_of_run_outcome(run_dir: str | Path, path: str) -> float | None:
     """Resolve an outcome path for one run (see the module docstring for the order)."""
+    from void.research.outcomes import load_all  # lazy: outcome modules import their helpers from this module
+
+    registered = load_all()
     if path.startswith("tick."):
         tick_rows, _ = load_metrics(run_dir)
         return _num(resolve_path(tick_rows[-1], path[5:])) if tick_rows else None
@@ -661,6 +916,8 @@ def end_of_run_outcome(run_dir: str | Path, path: str) -> float | None:
     head, _, rest = path.partition(".")
     if head in COMPUTED:
         return _num(COMPUTED[head](run_dir, rest or None))
+    if head in registered:
+        return _num(registered[head](run_dir, rest or None))
     tick_rows, day_rows = load_metrics(run_dir)
     if tick_rows:
         v = _num(resolve_path(tick_rows[-1], path))
@@ -673,7 +930,11 @@ def end_of_run_outcome(run_dir: str | Path, path: str) -> float | None:
 
 # --- summary -------------------------------------------------------------------------------------------
 def summarize(run_dir: str | Path, *, benefactor: bool = False) -> dict[str, Any]:
-    """One dict per run with the keys in :data:`SUMMARY_KEYS` (plus ``benefactor`` when asked or enabled)."""
+    """One dict per run with the keys in :data:`SUMMARY_KEYS` (plus ``benefactor`` when asked or enabled).
+
+    ``calls``, ``real_cost_usd`` and ``world_cost_usd`` count decide calls only; ``calls_by_purpose`` and
+    ``total_real_cost_usd`` count every call. ``exam`` is the audit exam (graded items only), ``maintenance`` the
+    nightly step's command outcomes and skipped agent-nights, ``policy_versions`` the versions by source."""
     run_dir = Path(run_dir)
     cfg = run_config(run_dir)
     tick_rows, day_rows = load_metrics(run_dir)
@@ -699,7 +960,18 @@ def summarize(run_dir: str | Path, *, benefactor: bool = False) -> dict[str, Any
             degeneration_by_tier[t] = degeneration_by_tier.get(t, 0) + 1
         calls = db.execute("SELECT COUNT(*) AS n, COALESCE(SUM(real_cost),0) AS rc, COALESCE(SUM(world_cost),0) AS wc, "
                            "SUM(claims_made) AS m FROM llm_calls WHERE purpose='decide'").fetchone()
+        total_real = int(db.execute("SELECT COALESCE(SUM(real_cost),0) AS s FROM llm_calls").fetchone()["s"])
+        commands: dict[int, int] = {}
+        if _has_tables(db, "memory_commands"):
+            commands = {int(r["ok"]): int(r["n"]) for r in db.execute(
+                "SELECT ok, COUNT(*) AS n FROM memory_commands WHERE purpose='maintain' GROUP BY ok")}
+        skipped = int(db.execute("SELECT COUNT(*) AS n FROM events WHERE kind='maintenance_skipped'").fetchone()["n"])
+        policy_versions: dict[str, int] = {}
+        if _has_tables(db, "policy_versions"):
+            policy_versions = {str(r["source"]): int(r["n"]) for r in db.execute(
+                "SELECT source, COUNT(*) AS n FROM policy_versions GROUP BY source ORDER BY source")}
         grants = _grants(db)
+    asked, correct, abstained = exam_counts(run_dir) or (0, 0, 0)
     out: dict[str, Any] = {
         "run_id": run["run_id"] if run else None, "seed": int(run["seed"]) if run else cfg.run.seed,
         "experiment": run["experiment"] if run else cfg.experiment.name, "arm": run["arm"] if run else cfg.experiment.arm,
@@ -715,6 +987,18 @@ def summarize(run_dir: str | Path, *, benefactor: bool = False) -> dict[str, Any
         "probe_recall": probe_recall(run_dir) if cfg.memory.probe_every_ticks > 0 else None,
         "calls": int(calls["n"]), "real_cost_usd": round(micro_to_usd(int(calls["rc"])), 6),
         "world_cost_usd": round(micro_to_usd(int(calls["wc"])), 6),
+        # every call, whatever its purpose and whoever paid (the three keys above are decide calls only)
+        "total_real_cost_usd": round(micro_to_usd(total_real), 6), "calls_by_purpose": calls_by_purpose(run_dir),
+        "memory_spend_share": memory_spend_share(run_dir), "cost_per_correct_recall": cost_per_correct_recall(run_dir),
+        # the 10.4 diagnosis rows, per agent ever alive
+        "forage_income_usd": forage_income_usd(run_dir), "decide_cost_usd": decide_cost_usd(run_dir),
+        "mean_input_tokens_per_decide": _call_rate(run_dir, "input_tokens"),
+        "exam": {"asked": asked, "correct": correct, "abstained": abstained, "score": exam_score(run_dir),
+                 "accuracy": exam_accuracy(run_dir), "majority_baseline": exam_majority_baseline(run_dir),
+                 "accuracy_over_baseline": exam_accuracy_over_baseline(run_dir)},
+        # skipped_days: agent-nights whose maintenance was gated out (one maintenance_skipped event each)
+        "maintenance": {"commands_ok": commands.get(1, 0), "commands_refused": commands.get(0, 0), "skipped_days": skipped},
+        "policy_versions": policy_versions,
         "day_rows": len(day_rows),
     }
     if benefactor or cfg.benefactor.enabled:

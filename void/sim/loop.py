@@ -377,7 +377,9 @@ class Simulation:
             "retrieved_hop_hist": {str(k): int(v) for k, v in sorted(hop_hist.items())},  # graph depth -> notes returned
             "retrieved_mean_age": round(float(stats.get("mean_age_ticks") or 0.0), 4),  # ticks since the notes were written
             "retrieved_channel_mix": {str(k): int(v) for k, v in sorted((stats.get("channel_mix") or {}).items())},
-            "retrieved_entry_ids": [str(x) for x in stats.get("entry_ids") or []],  # the cosine entry points of the walk
+            # the walk's entry points, ranked by cosine plus memory.index_boost for an ``index`` note under R1 (§5.3)
+            "retrieved_entry_ids": [str(x) for x in stats.get("entry_ids") or []],
+            "retrieved_index_entries": int(stats.get("index_entries") or 0),  # how many of them are ``index`` notes
         }
 
     @staticmethod

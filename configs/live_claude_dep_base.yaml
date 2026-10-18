@@ -5,17 +5,22 @@
 # `swift` tier) instead of the scripted brain. Not an arm itself: live_claude_dep_mem.yaml and
 # live_claude_dep_amnesic.yaml extend it and differ only in memory.enabled, so scripts/compare.py accepts the pair.
 # Two deliberate departures from exp_mem_dep, the same in both arms:
-# * equalized_price_out_per_mtok 2.0 instead of 20: a scripted decision outputs about 65 tokens, a live one about
-#   850 (visible JSON plus thinking), so at 20 a tick would cost about as much as a forage pays and the agents would
-#   starve or sleep; at 2.0 a live decision costs about what a scripted one did. The price of memory (input 4.0,
-#   cache reads 0.20) is untouched.
+# * equalized_price_out_per_mtok 2.0 instead of 20: a scripted decision outputs about 65 tokens; this price was set
+#   when a live one was assumed to output about 850 (visible JSON plus thinking). The smoke run measured about 178
+#   output tokens per swift decision with no measurable thinking at effort low, so a live decision's in-world price
+#   is now almost all input; the price is kept so the arms stay as designed (re-check it before relying on the
+#   absolute balance). The price of memory (input 4.0, cache reads 0.20) is untouched; live input runs about
+#   0.5 tokens per character against the scripted gate's chars/4.
 # * population.cap 6 and tier_mutation_prob 0: no offspring (they would spend balance, the primary outcome, and add
 #   calls) and a replacement never leaves the tier.
-# The `swift` block repeats live_claude_ladder.yaml's verbatim (a test checks it).
-# Cost `[estimate]` (scratch mock dry run through the real brain code, every agent acting every tick): about $0.23
-# per run with memory and $0.19 amnesic; the per-run cap ($0.54, about twice that plus the $0.01 of holds a tick
-# reserves) is the ceiling. Run through scripts/live_claude.sh (stage `memdep`, 16 pairs by default), which
-# alternates the arms seed by seed so an interrupted stage still leaves complete pairs.
+# The `swift` block repeats live_claude_ladder.yaml's verbatim.
+# Cost `[estimate]` (the smoke run's measured tokens applied to a mock dry run of this world, every agent acting every
+# tick): about $0.12 per run with memory and $0.07 amnesic at the measured output, $0.20 with memory at three times
+# it. Caps: $0.36 a run and $0.06 a day (6 days x 0.06 = the total, so no day starves the last). scripts/live_claude.sh
+# runs 16 pairs by default (stage `memdep`), alternating the arms seed by seed so an interrupted stage still leaves
+# complete pairs, and refuses a run in which a cap blocked any call.
+# Outcomes: mean_balance (primary) is net; forage_income and decision_world_cost split it into what memory earns and
+# what it costs (the decision rule is pre-registered in MEMORY_EVOLUTION.md section 10.4).
 extends: exp_mem_dep_base.yaml
 run:
   name: live_claude_dep
@@ -24,8 +29,8 @@ population:
   cap: 6
   tier_mutation_prob: 0.0
 economy:
-  daily_cap_usd: 0.09
-  total_cap_usd: 0.54
+  daily_cap_usd: 0.06
+  total_cap_usd: 0.36
   equalized_price_out_per_mtok: 2.0
 tiers:
   swift:
@@ -52,6 +57,8 @@ agents:
   - {name: Enzo,  tier: swift, personality: {sociability: 0.8}}
   - {name: Faye,  tier: swift, personality: {curiosity: 0.6, caution: 0.4}}
 server:
-  max_concurrent_calls: 6  # all six agents in one wave of calls per tick
+  max_concurrent_calls: 6  # all six agents in one wave (about 180 requests a minute: check the account's limits first)
 experiment:
   name: exp_mem_dep_claude
+  # lists are replaced, not merged, by `extends`: the first two repeat exp_mem_dep_base.yaml's
+  secondary_outcomes: [notes_by_channel.observed, invalid_action_rate, forage_income, decision_world_cost]

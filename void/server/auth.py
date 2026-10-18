@@ -22,8 +22,10 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 __all__ = ["CSP", "allowed_origins", "origin_ok", "is_same_origin_fetch", "require_operator",
            "OriginGuard", "SecurityHeaders"]
 
-CSP = ("default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; img-src 'self' data:; connect-src 'self' ws: wss:; "
-       "object-src 'none'; base-uri 'none'; form-action 'none'")
+# blob: in img-src and connect-src: GLTFLoader turns textures embedded in a GLB into blob: URLs and loads
+# them through <img> or fetch. blob: in script-src and worker-src: the troika text workers.
+CSP = ("default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; img-src 'self' data: blob:; "
+       "connect-src 'self' ws: wss: blob:; object-src 'none'; base-uri 'none'; form-action 'none'")
 
 _LOOPBACK = {"127.0.0.1", "localhost", "0.0.0.0", "::1", "[::1]"}
 

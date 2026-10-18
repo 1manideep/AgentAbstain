@@ -42,12 +42,24 @@ export const FEED_KINDS = [
   'memory_command',
   'policy_changed',
   'claim_feedback',
+  'exam_asked',
   'exam_answered',
+  'tracer_planted',
+  'replacement',
+  'brain_error',
+  'brain_refusal',
+  'cap_hit',
   'action_failed',
   'gate_blocked',
   'weather',
   'tick',
 ] as const
+
+/** Why lifecycle skipped a replacement (void/agents/lifecycle.py spawn_replacement). */
+const SKIP_REASONS: Record<string, string> = {
+  cap: 'population cap reached',
+  pool_empty: 'spawn pool is empty',
+}
 
 function nameOf(id: string | null | undefined, roster: ReadonlyMap<string, RosterAgent>): string {
   if (!id) return '—'
@@ -112,6 +124,24 @@ export function summarize(e: EventMsg, roster: ReadonlyMap<string, RosterAgent>)
       return `${n(str('listener_id') || e.agent_id)} found out ${n(str('speaker_id'))} lied: “${claimText(p.claim)}”`
     case 'exam_answered':
       return `${who} exam (${str('kind')}): ${p.abstained ? 'abstained' : p.correct ? 'correct' : 'wrong'}`
+    case 'exam_asked':
+      return `${who} was asked (${str('kind')}): ${str('question')}${str('truth') ? ` · truth: ${str('truth')}` : ''}${p.failed ? ' · call failed' : ''}`
+    case 'tracer_planted':
+      return `tracer note planted in ${who}'s memory${str('node') ? ` (points to node ${str('node')})` : ''}`
+    case 'replacement': {
+      const dead = n(str('for') || e.agent_id)
+      if (str('replacement_id')) return `${dead} replaced by ${n(str('replacement_id'))}`
+      const why = str('skipped')
+      return `no replacement for ${dead} (skipped: ${SKIP_REASONS[why] ?? (why || 'no reason given')})`
+    }
+    case 'brain_error':
+      return `${who} brain error: ${str('error') || 'unknown'}`
+    case 'brain_refusal': {
+      const cat = str('error').replace(/^refusal:?\s*/, '')
+      return `${who} call refused${cat ? ` (${cat})` : ''}`
+    }
+    case 'cap_hit':
+      return `${who} stopped by the ${str('cap') ? str('cap') + ' ' : ''}spend cap`
   }
   const parts: string[] = []
   for (const k of Object.keys(p).slice(0, 4)) {

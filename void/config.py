@@ -27,7 +27,8 @@ from void.economy.catalog import (
 )
 
 __all__ = ["VoidConfig", "VeinsConfig", "TierConfig", "IntelligenceConfig", "MemoryConfig", "MemoryPolicyConfig", "MaintenanceConfig",
-           "ExamConfig", "MaintenanceStrategy", "MaintenanceRight", "load_config", "usd_to_micro", "micro_to_usd", "MICRO"]
+           "ExamConfig", "PracticesConfig", "CanaryConfig", "SelectionArmConfig", "ExperimentConfig", "HypothesisConfig",
+           "MaintenanceStrategy", "MaintenanceRight", "load_config", "usd_to_micro", "micro_to_usd", "MICRO"]
 
 MICRO = 1_000_000
 
@@ -201,7 +202,9 @@ class EconomyConfig(StrictModel):
 
 
 # Planted strategies with known effects (MEMORY_EVOLUTION §6.2): the measurement pipeline must recover their order.
-MaintenanceStrategy = Literal["noop", "index_builder", "hoarder", "decoy", "summarize"]
+# ``distill``, ``revert`` and ``retire`` are the published-mechanism baselines of §6.13 row 5 (distillation; revert
+# guards; retirement plus cap); void.brain.maintenance_strategies refuses a name it does not implement yet.
+MaintenanceStrategy = Literal["noop", "index_builder", "hoarder", "decoy", "summarize", "distill", "revert", "retire"]
 
 # What a maintenance call may do (MEMORY_EVOLUTION §5.3 control ladder, expressed as rights):
 #   notes      create new notes under /memories/notes/ (the equal-compute "summarize your day" control, E1 arm b)
@@ -333,6 +336,9 @@ class MemoryPolicyConfig(StrictModel):
     max_edits_per_day: int = 5
     show_in_prompt: bool = True       # rendered fenced in the user turn, never in the system prompt
     inherit: bool = True              # a child starts from its parent's policy (source ``inherited``)
+    # Kernel mutation at birth (§5.7, source ``mutated``): the kernel rewrites a newborn's policy with a small random
+    # change. Built for scripted tiers only (VoidConfig rejects it when a non-scripted tier is rostered).
+    mutate_at_birth: bool = False
 
     @model_validator(mode="after")
     def _check(self) -> MemoryPolicyConfig:
@@ -366,6 +372,9 @@ class MaintenanceConfig(StrictModel):
 
     @model_validator(mode="after")
     def _check(self) -> MaintenanceConfig:
+        if self.mode == "optional":
+            # maintenance as an action the agent chooses is a later arm; refusing it beats silently running forced
+            raise ValueError("memory.maintenance.mode optional is not built (MEMORY_EVOLUTION 5.6 arm, E8); use forced")
         if len(set(self.rights)) != len(self.rights):
             raise ValueError("memory.maintenance.rights has duplicates")
         for name in ("max_commands", "max_files", "max_file_bytes", "max_vault_bytes", "max_tokens", "notes_shown", "note_chars_shown"):
@@ -399,6 +408,64 @@ class ExamConfig(StrictModel):
         return self
 
 
+class PracticesConfig(StrictModel):
+    """Practice transmission between agents (MEMORY_EVOLUTION §5.7): an agent suggests an excerpt of its policy to a
+    neighbour with ``share_practice`` (delivered fenced); the kernel measures adoption, never self-report."""
+
+    enabled: bool = False
+    excerpt_max_chars: int = 300        # the longest excerpt one suggestion may carry
+    adopt_similarity: float = 0.6       # adopted: the receiver's new policy contains the excerpt at this similarity
+    persist_days: int = 2               # an adopted practice that survives this many days counts as persisted
+    scripted_share_weight: float = 0.3  # scripted tiers: share_practice utility = weight * sociability
+
+    @model_validator(mode="after")
+    def _check(self) -> PracticesConfig:
+        if not (1 <= self.excerpt_max_chars <= 2000):
+            raise ValueError("memory.practices.excerpt_max_chars must be within [1, 2000]")
+        if not (0.0 <= self.adopt_similarity <= 1.0):
+            raise ValueError("memory.practices.adopt_similarity must be within [0, 1]")
+        if self.persist_days < 1:
+            raise ValueError("memory.practices.persist_days must be >= 1")
+        if self.scripted_share_weight < 0:
+            raise ValueError("memory.practices.scripted_share_weight must be >= 0")
+        return self
+
+
+class CanaryConfig(StrictModel):
+    """Canary facts (§5.8): facts delivered as ordinary observations and recorded kernel-side (``canary_facts``)."""
+
+    enabled: bool = False
+    per_day: int = 1
+
+    @model_validator(mode="after")
+    def _check(self) -> CanaryConfig:
+        if not (1 <= self.per_day <= 5):
+            raise ValueError("memory.selection.canary.per_day must be within [1, 5]")
+        return self
+
+
+class SelectionArmConfig(StrictModel):
+    """What the world rewards beyond survival (§5.8, Appendix D). A: nothing extra. B: the reward exam about canary
+    facts pays ``recall_reward_usd`` per correct answer. C: the source of an adopted practice that persists earns
+    ``practice_royalty_usd``. Both rewards come from the research pool (ledger kinds ``recall_reward`` and
+    ``practice_royalty``)."""
+
+    arm: Literal["A", "B", "C"] = "A"
+    canary: CanaryConfig = CanaryConfig()
+    reward_delay_days: int = 2            # the reward exam asks about canary facts at least this many days old
+    reward_questions_per_agent: int = 2
+    recall_reward_usd: float = 0.02
+    practice_royalty_usd: float = 0.02
+
+    @model_validator(mode="after")
+    def _check(self) -> SelectionArmConfig:
+        if self.reward_delay_days < 1 or self.reward_questions_per_agent < 1:
+            raise ValueError("memory.selection: reward_delay_days and reward_questions_per_agent must be >= 1")
+        if self.recall_reward_usd < 0 or self.practice_royalty_usd < 0:
+            raise ValueError("memory.selection: recall_reward_usd and practice_royalty_usd must be >= 0")
+        return self
+
+
 class MemoryConfig(StrictModel):
     # The amnesic switch (MEMORY_EVOLUTION §5.2, E1 arm a0): False drops every `remember` and returns no
     # retrieved notes. The self-summary stays (identity, at most self_max_words) so prompts remain comparable.
@@ -408,6 +475,8 @@ class MemoryConfig(StrictModel):
     policy: MemoryPolicyConfig = MemoryPolicyConfig()
     maintenance: MaintenanceConfig = MaintenanceConfig()
     exam: ExamConfig = ExamConfig()
+    practices: PracticesConfig = PracticesConfig()
+    selection: SelectionArmConfig = SelectionArmConfig()
     embedding_dim: int = 256
     entry_k: int = 4
     hops: int = 2
@@ -492,6 +561,43 @@ class TracerConfig(StrictModel):
     node_index: int = 0
 
 
+class HypothesisConfig(StrictModel):
+    """One pre-registered contrast between two arms (MEMORY_EVOLUTION §6.11, §5.2, §6.2).
+
+    The effect is ``delta = arm_b - arm_a`` of ``outcome`` (an end-of-run outcome path), paired by seed.
+    ``superiority`` passes when delta clears ``margin`` in ``direction``; ``non_superiority`` when it is not
+    significantly beyond the margin in that direction; ``equivalence`` (two one-sided tests) when it lies within
+    +/- margin, so a claim of no effect states its margin. ``margin_unit: sd`` reads the margin in standard deviations
+    of the paired differences. Holm correction runs across the hypotheses with ``primary: true``; ``min_power`` also
+    requires at least that power at the observed effect size.
+    """
+
+    name: str
+    arm_a: str
+    arm_b: str
+    outcome: str
+    kind: Literal["superiority", "non_superiority", "equivalence"] = "superiority"
+    direction: Literal["greater", "less"] = "greater"
+    margin: float = 0.0
+    margin_unit: Literal["abs", "sd"] = "abs"
+    primary: bool = True
+    min_power: float | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> HypothesisConfig:
+        if not self.name.strip():
+            raise ValueError("experiment.hypotheses: name must be non-empty")
+        if self.arm_a == self.arm_b:
+            raise ValueError(f"experiment.hypotheses {self.name!r}: arm_a and arm_b must differ")
+        if self.margin < 0:
+            raise ValueError(f"experiment.hypotheses {self.name!r}: margin must be >= 0")
+        if self.kind == "equivalence" and self.margin <= 0:
+            raise ValueError(f"experiment.hypotheses {self.name!r}: an equivalence hypothesis needs margin > 0")
+        if self.min_power is not None and not (0.0 < self.min_power < 1.0):
+            raise ValueError(f"experiment.hypotheses {self.name!r}: min_power must be within (0, 1)")
+        return self
+
+
 class ExperimentConfig(StrictModel):
     name: str | None = None
     arm: str | None = None
@@ -499,6 +605,16 @@ class ExperimentConfig(StrictModel):
     primary_outcome: str | None = None
     secondary_outcomes: list[str] = Field(default_factory=list)
     tracer: TracerConfig = TracerConfig()
+    hypotheses: list[HypothesisConfig] = Field(default_factory=list)
+
+    @field_validator("hypotheses")
+    @classmethod
+    def _unique_hypotheses(cls, v: list[HypothesisConfig]) -> list[HypothesisConfig]:
+        names = [h.name for h in v]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            raise ValueError(f"experiment.hypotheses has duplicate names: {dupes}")
+        return v
 
 
 class ServerConfig(StrictModel):
@@ -587,6 +703,19 @@ class VoidConfig(StrictModel):
             raise ValueError("memory.index_boost must be >= 0")
         if m.max_retrieved < 1:
             raise ValueError("memory.max_retrieved must be >= 1 (switch retrieval off with memory.enabled: false)")
+        if m.policy.mutate_at_birth:
+            # every tier an agent can be born on: the roster and arrivals (a child's tier never crosses a provider)
+            live = {a.tier for a in self.agents if a.tier is not None} | {e.arrival.tier for e in self.epochs if e.arrival is not None}
+            not_scripted = sorted(t for t in live if t in self.tiers and self.tiers[t].provider != "scripted")
+            if not_scripted:
+                raise ValueError(f"kernel mutation at birth is built for scripted tiers only "
+                                 f"(memory.policy.mutate_at_birth with tiers {not_scripted})")
+        sel = m.selection
+        if sel.arm == "B" and not (sel.canary.enabled and self.chronicle.enabled):
+            raise ValueError("memory.selection.arm B needs memory.selection.canary.enabled and chronicle.enabled "
+                             "(the reward exam asks about canary facts delivered as chronicle lines)")
+        if sel.arm == "C" and not m.practices.enabled:
+            raise ValueError("memory.selection.arm C needs memory.practices.enabled (royalties pay for adopted practices)")
         return self
 
     def warnings(self) -> list[str]:
@@ -649,15 +778,21 @@ class VoidConfig(StrictModel):
     def canonical_dict(self) -> dict[str, Any]:
         """The resolved config as stored and hashed.
 
-        World fields added after runs already existed (``world.fallow_ticks``, ``world.veins``) are left out while
-        they hold their defaults, so a config that does not use them hashes exactly as it did before they existed:
-        older runs stay resumable and comparable. Loading the stored YAML restores the defaults.
+        Fields added after runs already existed (``_LATE_DEFAULTS``: ``world.fallow_ticks``, ``world.veins``,
+        ``memory.policy.mutate_at_birth``, ``memory.practices``, ``memory.selection``, ``experiment.hypotheses``) are
+        left out while they hold their defaults, so a config that does not use them hashes exactly as it did before
+        they existed: older runs stay resumable and comparable. Loading the stored YAML restores the defaults, so two
+        stored configs are best compared after loading both (``load_config(path).model_dump(mode="json")``): a block
+        at its default is absent from one file and present in the other.
         """
         data = self.model_dump(mode="json")
-        world = data["world"]
-        for key, default in _LATE_WORLD_DEFAULTS.items():
-            if world.get(key) == default:
-                world.pop(key, None)
+        for path, default in _LATE_DEFAULTS.items():
+            *parents, key = path.split(".")
+            node: Any = data
+            for p in parents:
+                node = node.get(p) if isinstance(node, dict) else None
+            if isinstance(node, dict) and key in node and node[key] == default:
+                del node[key]
         return data
 
     def canonical_json(self) -> str:
@@ -694,8 +829,15 @@ class VoidConfig(StrictModel):
         }
 
 
-# World fields omitted from the canonical form at these values (see VoidConfig.canonical_dict).
-_LATE_WORLD_DEFAULTS: dict[str, Any] = {"fallow_ticks": 0, "veins": VeinsConfig().model_dump(mode="json")}
+# Fields omitted from the canonical form at these values, by dotted path (see VoidConfig.canonical_dict).
+_LATE_DEFAULTS: dict[str, Any] = {
+    "world.fallow_ticks": 0,
+    "world.veins": VeinsConfig().model_dump(mode="json"),
+    "memory.policy.mutate_at_birth": False,
+    "memory.practices": PracticesConfig().model_dump(mode="json"),
+    "memory.selection": SelectionArmConfig().model_dump(mode="json"),
+    "experiment.hypotheses": [],
+}
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

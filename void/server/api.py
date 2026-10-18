@@ -1,13 +1,23 @@
-"""The HTTP API (DESIGN §15). All JSON. GETs are open; every POST needs the operator token.
+"""The HTTP API (DESIGN §15). All JSON. GETs are open except ``/api/exams``; every POST needs the operator token.
 
 POSTs that map to operator commands only enqueue (DESIGN §14.1) and answer
 ``{cmd_id, will_apply_at_tick}``; the tick loop applies them in ``cmd_id`` order. ``pause``,
 ``resume``, ``speed`` and ``step`` act on loop-level flags immediately.
+
+The memory-layer reads (MEMORY_EVOLUTION §5.10) serve the tables the layer writes: ``policy_versions``
+(``/api/agents/{id}/policy``), ``memory_commands`` (``/api/agents/{id}/memory_commands``), ``practice_events``
+(``/api/practices``), a per-agent roll-up (``/api/memory/summary``) and the exam items with their truths
+(``/api/exams``, operator only: truths are operator visibility, like the ``exam_asked`` events). Agent-authored
+text (policy texts, command arguments and messages, practice excerpts, exam answers) is returned as plain
+strings; the client renders it as text, never as HTML. The open routes' shapes are mirrored in ``web/src/protocol.ts``
+(``PolicyResponse``, ``MemoryCommandsResponse``, ``MemorySummaryResponse``, ``PracticesResponse``) and held to them
+by tests/test_server_memory_api.py.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -15,13 +25,17 @@ from pydantic import BaseModel, Field, model_validator
 
 from void.config import micro_to_usd
 from void.events import OPERATOR, Event, Kind
+from void.memory.vault_stats import agent_vault_stats
 from void.server.auth import is_same_origin_fetch, require_operator
 from void.server.driver import RunEnded
 
-__all__ = ["router", "MAX_LIMIT"]
+__all__ = ["router", "MAX_LIMIT", "MEMORY_COMMANDS_LIMIT", "build_memory_summary"]
+
+log = logging.getLogger("void.server.api")
 
 router = APIRouter(prefix="/api")
 MAX_LIMIT = 5000
+MEMORY_COMMANDS_LIMIT = 500
 CALL_HISTORY = 240
 BALANCE_HISTORY = 240
 
@@ -87,9 +101,12 @@ async def session(request: Request) -> dict[str, str]:
 
 @router.get("/state")
 async def state(request: Request) -> dict[str, Any]:
+    """The latest snapshot with the run's current status: the last snapshot is published before the end-of-run
+    check (and a failed tick publishes none), so its own ``status`` still says ``running`` once the run is over."""
     snap = _hub(request).latest_snapshot()
     if snap is None:
         raise HTTPException(status_code=404, detail="no snapshot yet")
+    snap["status"] = _sim(request).status
     return snap
 
 
@@ -150,6 +167,151 @@ async def agent_note(agent_id: str, note_id: str, request: Request) -> dict[str,
                 "origin_generation": prov.origin_generation, "transfer_tick": prov.transfer_tick,
                 "path_agents": list(prov.path_agents)})
     return out
+
+
+# --- memory layer (MEMORY_EVOLUTION §5.10) ---------------------------------------------------------------------
+def _known_agent(sim: Any, agent_id: str) -> None:
+    if sim.registry.get(agent_id) is None:
+        raise HTTPException(status_code=404, detail="unknown agent")
+
+
+def _usd(micro: Any) -> float:
+    return round(micro_to_usd(int(micro or 0)), 6)
+
+
+def _json_or_raw(raw: Any) -> Any:
+    """A JSON column decoded, or the stored text as is when it does not parse (None stays None)."""
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return str(raw)
+
+
+@router.get("/agents/{agent_id}/policy")
+async def agent_policy(agent_id: str, request: Request) -> dict[str, Any]:
+    """Every ``policy_versions`` row of the agent, newest first (empty when the policy layer is off)."""
+    sim = _sim(request)
+    _known_agent(sim, agent_id)
+    versions = [{"version": int(v.version), "tick": int(v.tick), "source": v.source, "source_agent_id": v.source_agent_id,
+                 "parent_version": v.parent_version, "similarity_to_parent": v.similarity_to_parent, "text": v.text}
+                for v in reversed(sim.policy.history(agent_id))]
+    return {"agent_id": agent_id, "versions": versions}
+
+
+@router.get("/agents/{agent_id}/memory_commands")
+async def agent_memory_commands(agent_id: str, request: Request,
+                                limit: int = Query(default=50, ge=1, le=MEMORY_COMMANDS_LIMIT)) -> dict[str, Any]:
+    """The agent's last ``limit`` memory-command audit rows, newest first; ``args`` is the stored JSON text."""
+    sim = _sim(request)
+    _known_agent(sim, agent_id)
+    rows = sim.db.fetchall("SELECT cmd_id, tick, purpose, command, args, ok, message, bytes_delta FROM memory_commands "
+                           "WHERE agent_id=? ORDER BY tick DESC, rowid DESC LIMIT ?", (agent_id, limit))
+    return {"commands": [{
+        "cmd_id": r["cmd_id"], "tick": int(r["tick"]), "purpose": r["purpose"], "command": r["command"],
+        "args": str(r["args"]), "ok": bool(r["ok"]), "message": r["message"], "bytes_delta": int(r["bytes_delta"] or 0),
+    } for r in rows]}
+
+
+def build_memory_summary(sim: Any) -> dict[str, Any]:
+    """The /api/memory/summary payload: one row per agent (living or not), in ``agent_id`` order.
+
+    * ``notes``, ``bytes``: :func:`void.memory.vault_stats.agent_vault_stats` (live notes, entity stubs left out).
+      ``links`` is that module's resolved link count, recovered from ``link_density`` (rounded to four places, so
+      ``density * notes`` rounds back to the exact count for any vault under 10,000 notes).
+    * ``policy_source``, ``policy_version``: the current ``policy_versions`` row (None without a policy).
+    * ``maintenance_*_usd``: the agent's ``llm_calls`` with purpose ``maintain``; ``decide_real_usd``: purpose
+      ``decide``. Exam calls (purpose ``exam``) are paid by the research pool and not counted here.
+    * ``exam_*``: the graded audit-exam answers, as :func:`void.research.analysis.exam_counts` counts them: a paid
+      call that returned no usable answer (``call_id`` set, ``answer`` NULL) measured nothing and is left out.
+    """
+    db = sim.db
+    agents = db.fetchall("SELECT agent_id, name, status FROM agents ORDER BY agent_id")
+    ids = [str(r["agent_id"]) for r in agents]
+    vault = agent_vault_stats(db, ids, sim.run_dir) if ids else {}
+    costs: dict[tuple[str, str], tuple[int, int]] = {
+        (str(r["agent_id"]), str(r["purpose"])): (int(r["r"]), int(r["w"])) for r in db.fetchall(
+            "SELECT agent_id, purpose, COALESCE(SUM(real_cost), 0) AS r, COALESCE(SUM(world_cost), 0) AS w FROM llm_calls "
+            "WHERE purpose IN ('maintain', 'decide') GROUP BY agent_id, purpose")}
+    graded = {str(r["agent_id"]): (int(r["n"]), int(r["c"]), int(r["ab"])) for r in db.fetchall(
+        "SELECT i.agent_id AS agent_id, COUNT(*) AS n, COALESCE(SUM(a.correct), 0) AS c, COALESCE(SUM(a.abstained), 0) AS ab "
+        "FROM exam_answers a JOIN exam_items i ON i.item_id = a.item_id "
+        "WHERE i.exam='audit' AND NOT (a.call_id IS NOT NULL AND a.answer IS NULL) GROUP BY i.agent_id")}
+    out: list[dict[str, Any]] = []
+    for r in agents:
+        aid = str(r["agent_id"])
+        v = vault.get(aid, {})
+        notes = int(v.get("notes") or 0)
+        density = v.get("link_density")
+        policy = sim.policy.current(aid)
+        m_real, m_world = costs.get((aid, "maintain"), (0, 0))
+        asked, correct, abstained = graded.get(aid, (0, 0, 0))
+        out.append({
+            "agent_id": aid, "name": r["name"], "alive": r["status"] == "alive",
+            "notes": notes, "links": int(round(float(density) * notes)) if density is not None else 0,
+            "bytes": int(v.get("bytes") or 0),
+            "policy_source": policy.source if policy is not None else None,
+            "policy_version": int(policy.version) if policy is not None else None,
+            "maintenance_real_usd": _usd(m_real), "maintenance_world_usd": _usd(m_world),
+            "decide_real_usd": _usd(costs.get((aid, "decide"), (0, 0))[0]),
+            "exam_asked": asked, "exam_correct": correct, "exam_abstained": abstained,
+        })
+    return {"agents": out}
+
+
+@router.get("/memory/summary")
+async def memory_summary(request: Request) -> dict[str, Any]:
+    return build_memory_summary(_sim(request))
+
+
+@router.get("/practices")
+async def practices(request: Request, limit: int = Query(default=500, ge=1, le=MAX_LIMIT)) -> dict[str, Any]:
+    """The last ``limit`` ``practice_events`` rows, newest first (empty until practice transmission writes any)."""
+    rows = _sim(request).db.fetchall(
+        "SELECT event_id, tick, kind, source_agent_id, target_agent_id, excerpt, similarity FROM practice_events "
+        "ORDER BY tick DESC, rowid DESC LIMIT ?", (limit,))
+    return {"events": [{
+        "event_id": r["event_id"], "tick": int(r["tick"]), "kind": r["kind"], "source_agent_id": r["source_agent_id"],
+        "target_agent_id": r["target_agent_id"], "excerpt": str(r["excerpt"]),
+        "similarity": None if r["similarity"] is None else float(r["similarity"]),
+    } for r in rows]}
+
+
+operator = [Depends(require_operator)]
+
+
+@router.get("/exams", dependencies=operator)
+async def exams(request: Request, agent_id: str | None = None,
+                limit: int = Query(default=500, ge=1, le=MAX_LIMIT)) -> dict[str, Any]:
+    """Exam items with their truths and answers, newest first (operator only: the truths are operator visibility).
+
+    ``answered`` is False while an item has no answer row; ``failed`` marks a paid call that returned no usable
+    answer (not graded, see :func:`build_memory_summary`). ``options`` and ``retrieved`` are decoded JSON lists.
+    """
+    sim = _sim(request)
+    sql = ("SELECT i.item_id, i.exam, i.agent_id, i.tick_asked, i.tick_about, i.kind, i.question, i.truth, i.options, "
+           "i.source_ref, a.item_id AS answered, a.call_id, a.answer, a.correct, a.abstained, a.retrieved "
+           "FROM exam_items i LEFT JOIN exam_answers a ON a.item_id = i.item_id")
+    params: tuple[Any, ...] = ()
+    if agent_id is not None:
+        _known_agent(sim, agent_id)
+        sql += " WHERE i.agent_id=?"
+        params = (agent_id,)
+    rows = sim.db.fetchall(sql + " ORDER BY i.tick_asked DESC, i.rowid DESC LIMIT ?", (*params, limit))
+    items = []
+    for r in rows:
+        answered = r["answered"] is not None
+        items.append({
+            "item_id": r["item_id"], "exam": r["exam"], "agent_id": r["agent_id"], "tick_asked": int(r["tick_asked"]),
+            "tick_about": int(r["tick_about"]), "kind": r["kind"], "question": str(r["question"]), "truth": str(r["truth"]),
+            "options": _json_or_raw(r["options"]), "source_ref": str(r["source_ref"]),
+            "answered": answered, "call_id": r["call_id"], "answer": r["answer"],
+            "correct": bool(r["correct"]) if answered else None, "abstained": bool(r["abstained"]) if answered else None,
+            "failed": answered and r["call_id"] is not None and r["answer"] is None,
+            "retrieved": _json_or_raw(r["retrieved"]),
+        })
+    return {"items": items}
 
 
 # --- chronicle / metrics / events / snapshots ----------------------------------------------------------------
@@ -320,9 +482,6 @@ class SpeedBody(BaseModel):
     tick_seconds: float = Field(ge=0.0, le=3600.0)
 
 
-operator = [Depends(require_operator)]
-
-
 @router.post("/tasks", dependencies=operator, status_code=202)
 async def post_task(body: PostTaskBody, request: Request) -> dict[str, Any]:
     sim = _sim(request)
@@ -412,7 +571,7 @@ async def control_resume(request: Request) -> dict[str, Any]:
 
 @router.post("/control/step", dependencies=operator)
 async def control_step(request: Request) -> dict[str, Any]:
-    sim = _sim(request)
+    sim, hub = _sim(request), _hub(request)
     _require_running(sim)
     if not sim.is_paused:
         raise HTTPException(status_code=409, detail="step is only valid while paused")
@@ -423,6 +582,16 @@ async def control_step(request: Request) -> dict[str, Any]:
         report = await driver.step()
     except RunEnded as e:
         raise HTTPException(status_code=409, detail=f"run is {e}") from None
+    except Exception as e:
+        if sim.status == "running":
+            raise
+        # the tick raised and marked the run failed (DESIGN §14): tell every socket, as the loop's own end does
+        log.exception("step: tick failed")
+        try:
+            await hub.on_run_end()
+        except Exception:
+            log.exception("hub.on_run_end failed")
+        raise HTTPException(status_code=500, detail=f"tick failed: {type(e).__name__}; run is {sim.status}") from None
     return {"tick": int(report.tick), "day": int(report.day), "status": report.status, "calls": report.calls,
             "deaths": list(report.deaths), "births": list(report.births)}
 

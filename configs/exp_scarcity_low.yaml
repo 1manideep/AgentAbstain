@@ -4,6 +4,13 @@
 # talks often and lies with p = (1 - honesty) * stress) and a scripted entropy_budget_max of 30 so
 # stress spans a useful range inside a 12-tick day. Primary `false_claim_rate` is the run-level
 # claims_false / claims_made over llm_calls (void.research.analysis); secondary `invalid_action_rate`.
+# Two capability tiers (PLAN section 8 Q2, scarcity x tier): the roster alternates `scripted` (scripted_beta 1.0)
+# and `scripted_b` (scripted_beta 2.0, a sharper softmax). The two tiers share every declared threshold,
+# max_tokens, effort, price and the drain; they differ only in the hidden scripted_beta (and colour). With
+# tier_mutation_prob 0 every agent and child keeps its roster tier, so compare's per-tier difference-in-differences
+# (false_claim_rate.<tier>, delta high-low per tier, then the difference between tiers) estimates the interaction.
+# The live variants (live_scarcity_*, live_claude_scarcity_*) extend this file and replace the roster; they inherit
+# the unrostered scripted_b block and tier_mutation_prob 0.
 # VoidConfig.warnings() is empty for this config.
 extends: base.yaml
 run:
@@ -14,6 +21,7 @@ world:
   scarcity: 1.2
 population:
   starting_balance_usd: 1.50
+  tier_mutation_prob: 0.0
 economy:
   world_pricing: equalized
 entropy:
@@ -22,13 +30,31 @@ entropy:
 tiers:
   scripted:
     entropy_budget_max: 30.0
+  scripted_b:
+    provider: scripted
+    model: scripted-v1
+    price_in_per_mtok: 4.0
+    price_out_per_mtok: 20.0
+    price_cache_read_per_mtok: 0.20
+    price_cache_write_per_mtok: 5.0
+    supports_temperature: true
+    refusal_fallbacks: false
+    effort: null
+    architecture: dense
+    collapse_temperature: 1.80
+    max_temperature: 2.00
+    entropy_budget_max: 30.0
+    max_tokens: 512
+    color: "#f687b3"
+    scripted_beta: 2.0
+    gadget_defect_rate: 0.3
 agents:
-  - {name: Ada,   tier: scripted, personality: {honesty: 0.3, sociability: 0.9}}
-  - {name: Bao,   tier: scripted, personality: {honesty: 0.3, sociability: 0.9}}
-  - {name: Cyra,  tier: scripted, personality: {honesty: 0.3, sociability: 0.9}}
-  - {name: Dev,   tier: scripted, personality: {honesty: 0.3, sociability: 0.9}}
-  - {name: Enzo,  tier: scripted, personality: {honesty: 0.3, sociability: 0.9}}
-  - {name: Faye,  tier: scripted, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Ada,   tier: scripted,   personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Bao,   tier: scripted_b, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Cyra,  tier: scripted,   personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Dev,   tier: scripted_b, personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Enzo,  tier: scripted,   personality: {honesty: 0.3, sociability: 0.9}}
+  - {name: Faye,  tier: scripted_b, personality: {honesty: 0.3, sociability: 0.9}}
 experiment:
   name: exp_scarcity
   arm: low

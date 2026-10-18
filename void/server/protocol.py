@@ -1,8 +1,8 @@
 """Pydantic models for every server -> client message (DESIGN §15) and their JSON Schema export.
 
-The models are the wire contract: ``void schema`` writes ``schemas/<name>.schema.json`` for the
-frontend's ``npm run gen:types`` and ``void mock-feed`` validates every line it writes against
-:func:`parse_message`. Extra keys are ignored on validation (and therefore permitted by the exported
+The models are the wire contract: ``void schema`` writes ``schemas/<name>.schema.json`` (committed; there is no
+type generator, ``web/src/protocol.ts`` mirrors them by hand) and ``void mock-feed`` validates every line it writes
+against :func:`parse_message`. Extra keys are ignored on validation (and therefore permitted by the exported
 schemas), so the simulation may add fields without breaking older clients.
 """
 
@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 __all__ = [
     "RunStatus", "AgentStatusStr", "Visibility",
-    "TierPublic", "HelloConfig", "Hello",
+    "TierPublic", "MemoryLayerPublic", "IntelligencePublic", "HelloConfig", "Hello",
     "RosterAgent", "Roster",
     "LastAction", "AgentState", "NodeState", "EpochInfo", "EpochsState", "Snapshot",
     "GadgetRender", "GadgetItem", "GadgetsMsg",
@@ -25,7 +25,8 @@ __all__ = [
     "ServerMessage", "MESSAGE_MODELS", "SCHEMA_NAMES", "parse_message", "export_schemas",
 ]
 
-RunStatus = Literal["running", "completed", "capped_total", "extinct", "inconsistent"]
+# ``failed``: a tick raised; the state was re-synced with the last committed tick and no further tick runs (DESIGN §14).
+RunStatus = Literal["running", "completed", "capped_total", "extinct", "inconsistent", "failed"]
 AgentStatusStr = Literal["alive", "bankrupt", "archived"]
 Visibility = Literal["public", "operator"]
 
@@ -35,6 +36,22 @@ class TierPublic(BaseModel):
     color: str
     model: str
     provider: str
+    collapse_temperature: float | None = Field(default=None, description="T_c, so the T_eff histogram can draw it from the start")
+    max_temperature: float | None = None
+    rank: int | None = Field(default=None, description="Rung on intelligence.ladder (0 = smartest); null off the ladder")
+
+
+class MemoryLayerPublic(BaseModel):
+    """Which parts of the evolving-memory layer are on (MEMORY_EVOLUTION §5), so memory-only views can hide."""
+
+    enabled: bool
+    policy: bool
+    maintenance: bool
+    exam: bool
+
+
+class IntelligencePublic(BaseModel):
+    ladder: list[str] = Field(default_factory=list, description="Tier names from smartest to dumbest; empty without a ladder")
 
 
 class HelloConfig(BaseModel):
@@ -53,7 +70,10 @@ class HelloConfig(BaseModel):
     daily_cap_usd: float
     total_cap_usd: float
     degeneration_mode: Literal["induce", "observe", "both"] = "both"
+    view_radius: float | None = Field(default=None, description="Fog radius (world.view_radius); null without fog")
+    memory_layer: MemoryLayerPublic | None = None
     tiers: dict[str, TierPublic]
+    intelligence: IntelligencePublic | None = None
 
 
 class Hello(BaseModel):
@@ -179,6 +199,12 @@ class GadgetItem(BaseModel):
     y: float
     render: GadgetRender
     uses: int = 0
+    effect_kind: str | None = Field(default=None, description="One of world.effect_caps' kinds (e.g. forage_bonus)")
+    effect_value: float | None = Field(default=None, description="The verified effect size, capped by world.effect_caps")
+    purpose: str | None = None
+    verified_without_tests: bool = False
+    failures: int = 0
+    created_tick: int | None = None
 
 
 class GadgetsMsg(BaseModel):

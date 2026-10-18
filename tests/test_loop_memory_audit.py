@@ -1,7 +1,7 @@
 """The loop's memory audit (DESIGN §10, MEMORY_EVOLUTION §5.4 and §7.4), end to end on scripted brains.
 
 * every decision call records what retrieval did in its JSON extras (graph-depth histogram, mean age, channel mix,
-  entry points) next to the titles and gossip hops it always had;
+  entry points and how many of them are ``index`` notes) next to the titles and gossip hops it always had;
 * the per-tick ``remember`` / ``revise_self`` ops go through the command layer: one ``memory_commands`` row each
   (purpose ``tick``), the vault limits enforced, a refusal logged and nothing written;
 * a ``[[link]]`` in a per-tick ``remember`` to another agent, a node or a written chronicle day gets its entity stub
@@ -32,12 +32,12 @@ from void.events import Kind
 from void.ids import IdFactory
 from void.memory.commands import NOTES_DIR, SELF_PATH, MemoryCommand, MemoryCommands
 from void.memory.notes import Provenance, normalise_title
-from void.memory.store import ENTITY_TAG, MemoryStore, content_hash
+from void.memory.store import ENTITY_TAG, INDEX_TAG, MemoryStore, content_hash
 from void.sim import loop as loop_module
 from void.sim.maintenance import MaintenanceResponse
 
 STATS_KEYS = {"retrieved_titles", "retrieved_hops", "retrieved_hop_hist", "retrieved_mean_age", "retrieved_channel_mix",
-              "retrieved_entry_ids"}
+              "retrieved_entry_ids", "retrieved_index_entries"}
 ALL_RIGHTS = ["notes", "policy", "structure"]
 
 
@@ -70,11 +70,29 @@ def test_every_decision_call_records_its_retrieval_stats(smoke: SimRun) -> None:
         assert sum(hist.values()) == n == len(ex["retrieved_hops"]) == sum(ex["retrieved_channel_mix"].values())
         assert isinstance(ex["retrieved_mean_age"], int | float) and ex["retrieved_mean_age"] >= 0
         assert set(ex["retrieved_entry_ids"]) <= owned[str(r["agent_id"])]  # entry points are the agent's own notes
+        assert ex["retrieved_index_entries"] == 0  # nobody in the smoke world writes an index note
         if n:
             retrieved += 1
             assert ex["retrieved_entry_ids"] and ex["retrieved_mean_age"] >= 0
             deeper += int(any(int(k) > 0 and v > 0 for k, v in hist.items()))
     assert retrieved > 0 and deeper > 0, (retrieved, deeper)
+
+
+def test_index_entries_count_the_index_notes_among_the_entry_points(make_sim) -> None:
+    """Under R1 (the E0 base's ``memory.index_boost``) the index builder's nightly batch writes ``index`` notes from day 2
+    on; each decide call counts how many of its entry points are such notes, as ``retrieve_with_stats`` reports it."""
+    sim = make_sim("audit_index_entries", deep_merge(NO_PROVIDER_TIERS, {"run": {"days": 2, "ticks_per_day": 12}}),
+                   base=REPO / "configs" / "exp_mem_e0_index_builder.yaml")
+    assert sim.cfg.memory.index_boost > 0.0
+    assert asyncio.run(sim.run()) == "completed"
+    index_ids = {str(r["note_id"]) for r in sim.db.fetchall("SELECT note_id, tags FROM notes") if INDEX_TAG in json.loads(r["tags"])}
+    assert index_ids
+    counted = 0
+    for r in sim.db.fetchall("SELECT extras FROM llm_calls WHERE purpose='decide'"):
+        ex = json.loads(r["extras"])
+        assert ex["retrieved_index_entries"] == sum(1 for nid in ex["retrieved_entry_ids"] if nid in index_ids)
+        counted += ex["retrieved_index_entries"]
+    assert counted > 0
 
 
 # --- the per-tick path through the command layer ------------------------------------------------------------

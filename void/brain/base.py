@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from void.brain.decision import Decision
 from void.types import Observation
@@ -45,7 +45,7 @@ class BrainResult:
     request_id: str | None = None
     error: str | None = None
     model: str = ""
-    extras: dict[str, float] = field(default_factory=dict)  # scripted tiers: action_regret, p_chosen
+    extras: dict[str, Any] = field(default_factory=dict)  # scripted: action_regret, p_chosen; anthropic: billing, retries
 
     @property
     def ok(self) -> bool:

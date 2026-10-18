@@ -47,8 +47,8 @@ class ObservationBuilder:
     taskboard: TaskBoard | None = None
     policy: PolicyStore | None = None
     # per-call retrieval stats of the last observation built for each agent (MemoryStore.retrieve_with_stats:
-    # hop_hist by graph depth, mean_age_ticks, channel_mix, entry_ids); the loop logs them in the decision call's
-    # extras. An observation that retrieved nothing (amnesic control, empty query) stores empty stats.
+    # hop_hist by graph depth, mean_age_ticks, channel_mix, entry_ids, index_entries); the loop logs them in the
+    # decision call's extras. An observation that retrieved nothing (amnesic control, empty query) stores empty stats.
     last_stats: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def burn_rate(self, agent_id: str) -> float:

@@ -11,9 +11,11 @@
 # World pricing is equalized at one eighth of the frontier list price: a live decision (about 1.3k fresh input,
 # 1.2k cached system, 0.25k visible output plus thinking) costs about $0.003 in-world against $0.0045 per forage,
 # the same for every rung, so the ladder differs in capability and not in economic stress.
-# Cost `[estimate]` (scratch mock dry run through the real brain code, every agent acting every tick, thinking at
-# the top of its assumed range): about $6.7 ($5.7 decisions, $0.7 maintenance, $0.2 exams, $0.1 chronicle); $9.1
-# with 60% more thinking. The total cap ($15) is the ceiling; the holds reserve at most about $0.5 per tick.
+# Cost `[estimate]` (the smoke run's measured tokens applied to a mock dry run of this world, every agent acting every
+# tick): about $3.4 at the measured output (decisions $2.8, maintenance $0.4, exams $0.15, chronicle $0.02) and $5.6
+# at three times it; the smoke measured 234 / 185 / 178 output tokens per decision on frontier / standard / swift,
+# with no measurable thinking at effort low. The total cap ($10, $2 a day) is the ceiling; the holds reserve at most
+# about $0.5 per tick, and the busiest day at three times the measured output is about $1.2.
 # Run through scripts/live_claude.sh (stage `ladder`). To watch it live instead, run this stage alone:
 #   .venv/bin/void serve --config configs/live_claude_ladder.yaml --out data/live --budget-usd 60
 # and re-open a finished run (no model call is made):
@@ -33,8 +35,8 @@ population:
   starting_balance_usd: 1.00
   tier_mutation_prob: 0.0  # a child keeps its parent's tier, so the spend stays predictable
 economy:
-  daily_cap_usd: 3.00      # spend is per simulated day; the total cap is the one that bounds real money
-  total_cap_usd: 15.00
+  daily_cap_usd: 2.00      # spend is per simulated day; the total cap is the one that bounds real money
+  total_cap_usd: 10.00
   world_pricing: equalized
   equalized_price_in_per_mtok: 0.5
   equalized_price_out_per_mtok: 2.5

@@ -9,6 +9,8 @@ __pycache__/
 # data
 data/
 !data/.gitkeep
+# experiment output (`void run --seeds ... --out runs`, compared with `void compare runs/<experiment>`)
+runs/
 # node
 web/node_modules/
 web/dist/

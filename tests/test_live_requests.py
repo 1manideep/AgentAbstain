@@ -208,3 +208,126 @@ def test_fallback_served_usage_is_priced_per_attempt() -> None:
     assert r.ok and [m for m, _ in r.usage.attempts] == ["claude-opus-5-5", "claude-opus-5"]
     # 1500 in + 800 cache write at the primary's rates, then the same plus 400 out at the fallback's rates
     assert real_cost_micro(r.usage, cfg.tiers["frontier"], cfg.tiers) == (1500 * 4 + 800 * 5) + (1500 * 5 + 800 * 6.25 + 400 * 25)
+
+
+# --- 429 / 529 retries and responses billed off the list prices ------------------------------------------------
+def _sequence_client(cfg: Any, captured: list[dict[str, Any]], replies: list[Any]) -> Any:
+    """A real SDK client (built by make_client: no SDK retries) over a transport that answers each request with the
+    next reply: ``(status, headers, body)`` or an exception to raise. Offline: dummy key, unroutable URL."""
+    import httpx2
+    from anthropic import DefaultAsyncHttpxClient
+
+    queue = list(replies)
+
+    def handler(request: Any) -> Any:
+        captured.append(json.loads(request.content))
+        reply = queue.pop(0) if queue else replies[-1]
+        if isinstance(reply, BaseException):
+            raise reply
+        status, headers, body = reply
+        return httpx2.Response(status, json=body, headers={"request-id": "req_seq", **headers})
+
+    return make_client(cfg, api_key="sk-ant-offline-dummy", base_url="http://mock.invalid",
+                       http_client=DefaultAsyncHttpxClient(transport=httpx2.MockTransport(handler)))
+
+
+def _error_body(kind: str) -> dict[str, Any]:
+    return {"type": "error", "error": {"type": kind, "message": "try again later"}}
+
+
+def _ok(cfg: Any, tier: str, **usage: Any) -> tuple[int, dict[str, str], dict[str, Any]]:
+    body = message_body(cfg.tiers[tier].model, DECISION)
+    body["usage"].update(usage)
+    return 200, {}, body
+
+
+def _decide(cfg: Any, tier: str, client: Any, n: int = 1) -> list[Any]:
+    brain = AnthropicBrain(tier, cfg, client=client)
+    return [asyncio.run(brain.decide(obs(tier=tier), Sampling(1.0, 0.2, False))) for _ in range(n)]
+
+
+def test_a_429_or_529_is_retried_after_retry_after_and_metered_once() -> None:
+    cfg = load_config(LADDER)
+    for status, kind in ((429, "rate_limit_error"), (529, "overloaded_error")):
+        captured: list[dict[str, Any]] = []
+        client = _sequence_client(cfg, captured, [(status, {"retry-after": "0"}, _error_body(kind)), _ok(cfg, "swift")])
+        (r,) = _decide(cfg, "swift", client)
+        assert r.ok and len(captured) == 2 and r.extras["retries"] == 1
+        assert r.usage.input_tokens == 1500 and r.usage.output_tokens == 400  # the one billed answer, once
+
+
+def test_retries_stop_at_max_attempts_and_at_the_call_timeout() -> None:
+    from void.brain.anthropic_brain import MAX_ATTEMPTS
+
+    cfg = load_config(LADDER)
+    captured: list[dict[str, Any]] = []
+    (r,) = _decide(cfg, "swift", _sequence_client(cfg, captured, [(429, {"retry-after": "0"}, _error_body("rate_limit_error"))]))
+    assert len(captured) == MAX_ATTEMPTS and r.error.startswith("rate_limit") and r.usage.total == 0
+    assert r.extras["retries"] == MAX_ATTEMPTS - 1
+    # a retry-after that would end past the call timeout is not waited for: one attempt, then the error
+    short = load_config(LADDER, {"server": {"call_timeout_seconds": 0.5}})
+    captured = []
+    (r,) = _decide(short, "swift", _sequence_client(short, captured, [(529, {"retry-after": "5"}, _error_body("overloaded_error"))]))
+    assert len(captured) == 1 and r.error.startswith("api_529") and r.usage.total == 0
+
+
+def test_time_queued_for_a_slot_does_not_count_against_the_call_timeout() -> None:
+    import anthropic
+
+    # two calls share one slot; each takes 0.3 s against a 0.5 s timeout, so the second waits 0.3 s for the slot and
+    # would have only 0.2 s left if the clock started before the wait: it must get its full timeout instead
+    cfg = load_config(LADDER, {"server": {"call_timeout_seconds": 0.5}})
+
+    class SlowMessages:
+        async def create(self, **_: Any) -> Any:
+            await asyncio.sleep(0.3)
+            return anthropic.types.Message.model_validate(message_body(cfg.tiers["swift"].model, DECISION))
+
+    class SlowClient:
+        messages = SlowMessages()
+
+    async def both() -> list[Any]:
+        slot = asyncio.Semaphore(1)
+        brains = [AnthropicBrain("swift", cfg, client=SlowClient(), semaphore=slot) for _ in range(2)]
+        return await asyncio.gather(*(b.decide(obs(tier="swift"), Sampling(1.0, 0.2, False)) for b in brains))
+
+    first, second = asyncio.run(both())
+    assert first.ok and second.ok, (first.error, second.error)
+
+
+def test_other_failures_are_never_retried() -> None:
+    import httpx2
+
+    cfg = load_config(LADDER)
+    captured: list[dict[str, Any]] = []
+    (r,) = _decide(cfg, "swift", _sequence_client(cfg, captured, [(500, {"retry-after": "0"}, _error_body("api_error")), _ok(cfg, "swift")]))
+    assert len(captured) == 1 and r.error.startswith("api_500")
+    captured = []
+    timeout = httpx2.TimeoutException("timed out", request=httpx2.Request("POST", "http://mock.invalid/v1/messages"))
+    (r,) = _decide(cfg, "swift", _sequence_client(cfg, captured, [timeout, _ok(cfg, "swift")]))
+    assert len(captured) == 1 and r.error.startswith("timeout")  # usage unknown: the wallet charges the hold
+
+
+def test_list_price_billing_is_recorded_in_extras() -> None:
+    cfg = load_config(LADDER)
+    captured: list[dict[str, Any]] = []
+    usage = {"inference_geo": "global", "service_tier": "standard",
+             "cache_creation": {"ephemeral_5m_input_tokens": 800, "ephemeral_1h_input_tokens": 0}}
+    r1, r2 = _decide(cfg, "swift", _sequence_client(cfg, captured, [_ok(cfg, "swift", **usage)]), n=2)
+    assert r1.ok and r2.ok and len(captured) == 2
+    assert r1.extras == {"inference_geo": "global", "service_tier": "standard", "cache_write_1h_tokens": 0}
+
+
+@pytest.mark.parametrize("usage, why", [
+    ({"inference_geo": "us"}, "inference_geo=us"),
+    ({"service_tier": "priority"}, "service_tier=priority"),
+    ({"cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 800}}, "cache_write_1h_tokens=800"),
+])
+def test_a_response_billed_off_the_list_is_metered_then_the_tier_stops_sending(usage: dict[str, Any], why: str) -> None:
+    cfg = load_config(LADDER)
+    captured: list[dict[str, Any]] = []
+    first, second = _decide(cfg, "swift", _sequence_client(cfg, captured, [_ok(cfg, "swift", **usage)]), n=2)
+    assert first.error == f"billing: {why}" and first.decision is None
+    assert first.usage.input_tokens == 1500  # the tokens were billed, so they are metered
+    assert len(captured) == 1  # nothing more is sent on this tier
+    assert second.error.startswith("billing: not sent") and second.usage.total == 0

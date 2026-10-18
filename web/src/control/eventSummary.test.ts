@@ -31,3 +31,35 @@ describe('memory-layer event summaries', () => {
     for (const k of ['maintenance', 'claim_feedback', 'policy_changed', 'memory_command']) expect(FEED_KINDS).toContain(k)
   })
 })
+
+describe('operator and failure event summaries', () => {
+  it('summarizes brain errors and refusals', () => {
+    expect(summarize(ev('brain_error', { agent_id: 'a', error: 'TimeoutError: read timed out' }), roster)).toBe('Ada brain error: TimeoutError: read timed out')
+    expect(summarize(ev('brain_refusal', { agent_id: 'b', error: 'refusal:prompt_safety' }, 'b'), roster)).toBe('Bao call refused (prompt_safety)')
+    expect(summarize(ev('brain_refusal', { agent_id: 'b', error: 'refusal' }, 'b'), roster)).toBe('Bao call refused')
+  })
+
+  it('summarizes the spend cap', () => {
+    expect(summarize(ev('cap_hit', { agent_id: 'a', cap: 'total' }), roster)).toBe('Ada stopped by the total spend cap')
+  })
+
+  it('summarizes replacements, including why one was skipped', () => {
+    expect(summarize(ev('replacement', { for: 'a', replacement_id: 'b' }), roster)).toBe('Ada replaced by Bao')
+    expect(summarize(ev('replacement', { for: 'a', skipped: 'cap' }), roster)).toBe('no replacement for Ada (skipped: population cap reached)')
+    expect(summarize(ev('replacement', { for: 'b', skipped: 'pool_empty' }, 'b'), roster)).toBe('no replacement for Bao (skipped: spawn pool is empty)')
+    expect(summarize(ev('replacement', { for: 'b', skipped: 'something_new' }, 'b'), roster)).toBe('no replacement for Bao (skipped: something_new)')
+  })
+
+  it('summarizes exam questions and the tracer', () => {
+    expect(
+      summarize(ev('exam_asked', { item_id: 'x1', agent_id: 'a', kind: 'node', question: 'Which node was richest on day 2?', truth: 'n3', options: ['n1', 'n3'] }), roster),
+    ).toBe('Ada was asked (node): Which node was richest on day 2? · truth: n3')
+    expect(summarize(ev('exam_asked', { agent_id: 'a', kind: 'agent', question: 'Who lied?', truth: 'Bao', failed: true }), roster)).toBe('Ada was asked (agent): Who lied? · truth: Bao · call failed')
+    expect(summarize(ev('tracer_planted', { agent_id: 'b', node: 'n4' }, 'b'), roster)).toBe("tracer note planted in Bao's memory (points to node n4)")
+  })
+
+  it('offers them as filter chips', () => {
+    for (const k of ['brain_error', 'brain_refusal', 'cap_hit', 'replacement', 'exam_asked', 'tracer_planted']) expect(FEED_KINDS).toContain(k)
+    expect(new Set(FEED_KINDS).size).toBe(FEED_KINDS.length)
+  })
+})
