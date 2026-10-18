@@ -7,6 +7,7 @@ run:
   name: exp_mem_dep
 memory:
   max_retrieved: 4         # as in exp_mem_e0_base.yaml, stated here so the gate's retrieval size is explicit
+  index_boost: 0.0         # R0: the E0 base turns on R1 for its positive control; this check stays on the default scaffold
   policy:
     enabled: false
   maintenance:

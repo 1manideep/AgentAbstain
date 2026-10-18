@@ -30,7 +30,8 @@ which drops every seed pair that touches such a run and lists it; and when the t
 when any condition fails, else ``MISSING`` when any is missing, else ``PASS``; :data:`EXIT_CODES` maps it to 1, 2, 0.
 A decided condition on fewer than :data:`PRIMARY_PAIRS` pairs (6.11 asks for 20 for primary claims) keeps its verdict
 and is flagged ``below_primary_pairs``: a percentile bootstrap on a handful of seeds is a rough interval (with two
-pairs it spans little more than the two differences), and the live stages run 16 and 8 pairs by default.
+pairs it spans little more than the two differences), and the live stages run 16 and 32 pairs by default. In live
+mode the G0 line stays FAIL while E0 fails, and the E1 release rule is per world (MEMORY_EVOLUTION.md 10.4).
 
 Live mode (``live_root``): C1 is evaluated instead on each live paired experiment of ``scripts/live_claude.sh``
 (:data:`LIVE_DEPENDENCE`: the original world and the vein world), by this same code; every one of them must pass.

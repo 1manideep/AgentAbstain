@@ -7,7 +7,8 @@ is closed with 1013 and the client reconnects (it catches up through ``/api/even
 Inputs: the simulation's synchronous ``snapshot_listeners`` (snapshot, metrics, rev-driven gadgets /
 tasks / chronicle refreshes) and a consumer task over ``sim.bus.queue()`` (events, roster after a
 birth or death, ``day`` rows, chronicle refreshes). ``status`` is broadcast by the API on pause /
-resume / speed and by :meth:`Hub.on_run_end`.
+resume / speed and by :meth:`Hub.on_run_end`. ``hello`` and ``status`` carry ``sim.status`` and are validated
+against the wire models on the way out (:func:`checked`: a mismatch is logged and the message is still sent).
 
 ``void mock-feed`` drives the very same :class:`Hub` with a :class:`Subscriber` it drains by hand
 and a :class:`SyntheticClock`, so the fixture is exactly the stream a live socket would see.
@@ -28,9 +29,10 @@ import anyio
 from fastapi import WebSocket, WebSocketDisconnect
 
 from void.events import Event
+from void.server.protocol import parse_message
 
 __all__ = ["Clock", "WallClock", "SyntheticClock", "Subscriber", "Hub", "websocket_endpoint",
-           "OVERFLOW_CLOSE_CODE", "QUEUE_SIZE", "BACKLOG_SNAPSHOTS", "event_message"]
+           "OVERFLOW_CLOSE_CODE", "QUEUE_SIZE", "BACKLOG_SNAPSHOTS", "event_message", "checked"]
 
 log = logging.getLogger("void.server.ws")
 
@@ -82,6 +84,19 @@ class SyntheticClock:
         self._t = round(self._t, 1)
         self._by_tick[tick] = self._t
         return self._t
+
+
+def checked(msg: dict[str, Any]) -> dict[str, Any]:
+    """Validate ``msg`` against the wire models (:func:`void.server.protocol.parse_message`) and return it.
+
+    A message that does not validate is logged and still returned: a client must still hear the run's status
+    when the contract has drifted, and the drift tests (tests/test_protocol_sync.py) catch the cause.
+    """
+    try:
+        parse_message(msg)
+    except Exception as e:  # pydantic's ValidationError, or whatever a malformed field raises inside it
+        log.warning("hub: %s message does not match the wire protocol: %s", msg.get("type", "?"), e)
+    return msg
 
 
 def event_message(ev: Event) -> dict[str, Any]:
@@ -198,9 +213,10 @@ class Hub:
     def hello(self) -> dict[str, Any]:
         sim = self.sim
         row = sim.db.fetchone("SELECT COALESCE(MAX(seq), 0) AS s FROM events")
-        return {"type": "hello", "run_id": sim.run_id, "config": sim.cfg.public_subset(), "tick": sim.clock.tick,
-                "day": sim.clock.day, "last_seq": int(row["s"]) if row else 0, "paused": sim.is_paused,
-                "tick_seconds": float(sim.tick_seconds), "server_ts_ms": self.clock.now_ms(), "status": sim.status}
+        return checked({"type": "hello", "run_id": sim.run_id, "config": sim.cfg.public_subset(), "tick": sim.clock.tick,
+                        "day": sim.clock.day, "last_seq": int(row["s"]) if row else 0, "paused": sim.is_paused,
+                        "tick_seconds": float(sim.tick_seconds), "server_ts_ms": self.clock.now_ms(),
+                        "status": sim.status})
 
     def roster_message(self) -> dict[str, Any]:
         return {"type": "roster", "agents": self.sim.roster()}
@@ -221,8 +237,8 @@ class Hub:
         return {"type": "chronicle", "rev": rev, "day": int(doc.day), "headline": doc.headline, "markdown": doc.markdown}
 
     def status_message(self) -> dict[str, Any]:
-        return {"type": "status", "paused": self.sim.is_paused, "tick_seconds": float(self.sim.tick_seconds),
-                "status": self.sim.status}
+        return checked({"type": "status", "paused": self.sim.is_paused, "tick_seconds": float(self.sim.tick_seconds),
+                        "status": self.sim.status})
 
     def snapshot_ts(self, tick: int, newest_tick: int | None = None) -> float:
         """The ts_ms a snapshot was (or would have been) sent with: remembered when live, else spaced back from now."""
