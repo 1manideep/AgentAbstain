@@ -1,0 +1,22 @@
+# exp_mem_e4s, arm flat_tariff: the scripted mirror of live_mem_e4_flat_tariff.yaml (arm selfedit with output free
+# in-world and fresh input, cache reads and cache writes at one price; why is in that file). See
+# exp_mem_e4s_base.yaml.
+# The price is the mirror's own. The live arm's rule (the total world_cost of arm selfedit's decide calls divided by
+# their total input + cache-read + cache-write tokens) gives about $2.96 per million on this mirror's arm selfedit at
+# full length, seeds 1-3 (a scripted pilot, $0): a scripted prompt is mostly a system prompt read from the cache,
+# which the other arms price at $0.20, so the live arm's $6 would make every call here twice as dear. But
+# VoidConfig.warnings() wants its 1.5k-token call to cost at least 0.3 of a forage, which takes $4 per million, and
+# every experiment config loads without warnings; so the price is $4, the lowest that does, and a decision here costs
+# about a third more in-world than in arm selfedit (1.26 to 1.42 times by seed, arm against arm on the same pilot
+# seeds at full length; nobody died in either arm). The mirror tests the pipeline, not the hypothesis;
+# tests/test_e4_configs.py checks the price against the rule and the warning floor on a one-day run.
+extends: exp_mem_e4s_selfedit.yaml
+run:
+  name: exp_mem_e4s_flat_tariff
+economy:
+  equalized_price_in_per_mtok: 4.0
+  equalized_price_out_per_mtok: 0.0
+  equalized_price_cache_read_per_mtok: 4.0
+  equalized_price_cache_write_per_mtok: 4.0
+experiment:
+  arm: flat_tariff

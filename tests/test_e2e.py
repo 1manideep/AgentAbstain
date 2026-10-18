@@ -19,8 +19,10 @@ from void.config import usd_to_micro
 from void.memory.notes import CHANNELS, parse_note, render_note, split_frontmatter
 
 DAYS = 3
-# Actions the scripted policy may legitimately never pick in three quiet days (task spec).
-OPTIONAL = {"create_offspring", "apply_task", "read_chronicle"}
+# Actions the scripted policy may legitimately never pick in three quiet days (task spec). create_offspring is not
+# among them: since the scripted brain follows DESIGN §7.2 (offspring from 2 x min_reserve + endowment) both runs
+# reproduce, and the births are checked below.
+OPTIONAL = {"apply_task", "read_chronicle"}
 REJECTION_STAGES = {"static", "tests", "spec", "size"}
 
 COVERAGE = deep_merge(NO_PROVIDER_TIERS, {
@@ -139,6 +141,19 @@ def test_every_action_type_is_exercised(smoke: SimRun, crowded: SimRun):
     kinds = set(smoke.event_kinds()) | set(crowded.event_kinds())
     assert {"move", "forage", "talk", "share_note", "transfer", "nudge_weather", "use_gadget", "sleep", "idle"} <= kinds
     assert {"gadget_verified", "gadget_rejected"} & kinds
+
+
+def test_scripted_agents_have_offspring(smoke: SimRun, crowded: SimRun):
+    offspring = {run.cfg.run.name: [b["payload"] for b in run.events("birth") if b["payload"]["kind"] == "offspring"] for run in (smoke, crowded)}
+    assert any(offspring.values()), "no create_offspring birth in either run"
+    for run in (smoke, crowded):
+        kids = offspring[run.cfg.run.name]
+        floor = run.sim.hold_min_for()["scripted"] * run.cfg.population.min_endowment_calls
+        assert all(k["generation"] >= 1 and k["parent_id"] and usd_to_micro(k["endowment_usd"]) >= floor for k in kids)
+        assert run.sim.wallet.ledger_sum(kind="endowment_in") == sum(usd_to_micro(k["endowment_usd"]) for k in kids)
+        parents = [k["parent_id"] for k in kids]
+        names = [k["name"] for k in kids]
+        assert len(set(zip(parents, names, strict=True))) == len(kids)  # a parent never names two children alike
 
 
 def test_operator_task_lifecycle_through_the_command_queue(crowded: SimRun):

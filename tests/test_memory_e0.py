@@ -16,13 +16,21 @@ from pathlib import Path
 import pytest
 from test_experiments import CONFIGS, run_arm
 
-from void.config import usd_to_micro
+from void.config import load_config, usd_to_micro
 from void.research.analysis import end_of_run_outcome, run_config
 from void.research.compare import compare, render
 
 ARMS = ("noop", "index_builder", "hoarder", "decoy")
 SEEDS = (1, 2)
 RUN = {"days": 4, "ticks_per_day": 12}
+# E0 and the memory-dependence check (exp_mem_dep_*, which extends exp_mem_e0_base.yaml) are G0's recorded worlds
+# (MEMORY_EVOLUTION §10.4): means over six founders, recorded under the scripted rules from before DESIGN §7.2. Under
+# §7.2 (offspring from 2 x min_reserve + endowment, $1.20 in this world's base.yaml economics) the founders' $1.50
+# would buy a child each on day 1 and mean_balance would mix in newborns, and the random gadget parameter alone
+# moves C1. The shipped exp_mem_e0_base.yaml therefore pins population.scripted_rules to pre_7_2 (checked below; that
+# the pre-7.2 path is the old code is tests/test_scripted_selection.py's golden check), and this module runs the
+# shipped configs as they are, with no override of its own.
+DEPENDENCE_ARMS = ("mem", "amnesic")
 
 
 @pytest.fixture(scope="module")
@@ -39,6 +47,24 @@ def _db(path: Path):
     conn = sqlite3.connect(str(path / "world.db"))
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def test_e0_and_the_dependence_check_keep_the_rules_they_were_recorded_under() -> None:
+    configs = [CONFIGS / f"exp_mem_e0_{arm}.yaml" for arm in ARMS] + [CONFIGS / f"exp_mem_dep_{arm}.yaml" for arm in DEPENDENCE_ARMS]
+    for path in configs:
+        cfg = load_config(path)
+        assert cfg.population.scripted_rules == "pre_7_2", f"{path.name}: G0's worlds keep the pre-7.2 scripted rules"
+        # as recorded: reproduction stays on (create_offspring is in the prompts and priced); the old rule never fires
+        assert cfg.population.reproduction_enabled is True, path.name
+
+
+def test_no_arm_has_offspring(e0_dir: Path) -> None:
+    for arm in ARMS:
+        for seed in SEEDS:
+            db = _db(e0_dir / arm / f"seed_{seed}")
+            assert db.execute("SELECT COUNT(*) AS n FROM agents WHERE generation > 0").fetchone()["n"] == 0, (arm, seed)
+            births = [json.loads(r["payload"]) for r in db.execute("SELECT payload FROM events WHERE kind='birth'")]
+            assert births and all(b["parent_id"] is None for b in births), (arm, seed)
 
 
 def test_every_arm_pays_for_maintenance_once_per_agent_per_day(e0_dir: Path) -> None:

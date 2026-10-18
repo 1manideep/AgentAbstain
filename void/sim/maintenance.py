@@ -28,8 +28,9 @@ Rules the implementation keeps:
   side is identical across arms. Provider tiers get one :func:`~void.brain.utility_calls.complete_json` call
   constrained by the strict :class:`MaintenanceResponse` schema; a refusal or an unparsable answer means zero
   commands, but the call is still paid.
-* **Every call is logged** in ``llm_calls`` with purpose ``maintain``, the full prompt and the system hash
-  (``run.log_prompts``; the system text is content-addressed in ``prompt_texts``), the reflection as
+* **Every call is logged** in ``llm_calls`` with purpose ``maintain``, the full prompt, the full response text and
+  the system hash (``run.log_prompts``; the system text is content-addressed in ``prompt_texts``; without
+  ``log_prompts`` the response is cut at 4000 characters), the reflection as
   ``thought`` and the batch counts in ``extras``; every command in ``memory_commands`` (through
   :class:`~void.memory.commands.MemoryCommands`) with one ``MEMORY_COMMAND`` event each, a ``POLICY_CHANGED``
   event when a command produced a new policy version, and the day's result in one ``MAINTENANCE`` event.
@@ -345,6 +346,7 @@ class Maintenance:
                     if cur is not None:
                         sim.bus.emit(Event(tick, day, Kind.POLICY_CHANGED, sim.policy.event_payload(cur), aid))
             logged = bool(sim.cfg.run.log_prompts)
+            raw = result.raw_text or ""  # whole when prompts are logged (full response text per call, §7.4)
             extras = {"strategy": strategy, "payer": payer, "commands": len(commands), "commands_ok": n_ok, "commands_refused": n_refused}
             sim.db.execute(
                 "INSERT INTO llm_calls(call_id, tick, agent_id, purpose, tier, model, provider, input_tokens, output_tokens, cache_read_tokens, "
@@ -352,7 +354,7 @@ class Maintenance:
                 "prompt_text, system_hash, observation) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (call_id, tick, aid, "maintain", tier_name, result.model or tier.model, tier.provider, result.usage.input_tokens,
                  result.usage.output_tokens, result.usage.cache_read_tokens, result.usage.cache_write_tokens, meter.real_cost, meter.world_cost,
-                 hold, int(meter.estimated), result.latency_ms, result.stop_reason, result.request_id, result.error, (result.raw_text or "")[:4000],
+                 hold, int(meter.estimated), result.latency_ms, result.stop_reason, result.request_id, result.error, raw if logged else raw[:4000],
                  reflection, json.dumps(extras, sort_keys=True), prompt if logged else None, self._store_prompt_text(system) if logged else None, None),
             )
             sim.bus.emit(Event(tick, day, Kind.MAINTENANCE, {

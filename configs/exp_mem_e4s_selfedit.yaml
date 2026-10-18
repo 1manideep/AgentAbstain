@@ -1,0 +1,15 @@
+# exp_mem_e4s, arm selfedit: the scripted mirror of live_mem_e4_selfedit.yaml (policy file plus the nightly maintenance
+# call at C2, paid by the agent; each rung's planted index_builder strategy writes the batch). See exp_mem_e4s_base.yaml.
+extends: exp_mem_e4s_base.yaml
+run:
+  name: exp_mem_e4s_selfedit
+memory:
+  policy:
+    enabled: true
+    seed: default
+  maintenance:
+    enabled: true
+    rights: [notes, policy, structure]
+    payer: agent
+experiment:
+  arm: selfedit

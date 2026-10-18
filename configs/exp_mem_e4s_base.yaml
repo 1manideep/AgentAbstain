@@ -1,0 +1,27 @@
+# exp_mem_e4s: the scripted mirror of E4 (live_mem_e4_base.yaml), so the whole design runs end to end for $0. The same
+# world, roster, ladder, exam, outcomes, arms and independent variables; what differs is the caps, the flat arm's
+# price (set for this mirror, see exp_mem_e4s_flat_tariff.yaml) and the five rungs, which are scripted tiers defined
+# here (they replace base.yaml's live rungs of the same names), so no provider is ever called. As in exp_ladder the
+# rungs share every declared threshold, price and max_tokens and differ only in the hidden scripted_beta (softmax
+# sharpness, 3.0 down to 0.35) and gadget_defect_rate. Every rung's nightly maintenance is the planted index_builder
+# strategy, the scripted stand-in for a self-edit (it runs only in the arms that enable maintenance).
+# What the mirror cannot show: a scripted call's output length does not depend on its rung (no rung thinks), so the
+# tariff IV of arm flat_tariff is exercised end to end but has little to bite on here. The mirror tests the pipeline
+# (arms, billing, compare), not the hypothesis. Under fog the scripted agents do not need memory (MEMORY_EVOLUTION
+# 10.4: G0 is not passed on scripted brains), so no memory effect is expected either.
+# The caps are base.yaml's: a scripted call is metered like a live one at the tier prices below, but nothing is spent.
+# A full-length run of one arm takes about a minute. Not an arm itself: the three exp_mem_e4s_*.yaml arms extend it.
+extends: live_mem_e4_base.yaml
+run:
+  name: exp_mem_e4s
+economy:
+  daily_cap_usd: 3.00
+  total_cap_usd: 30.00
+tiers:
+  genius:  {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, refusal_fallbacks: false, effort: null, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, scripted_beta: 3.0,  gadget_defect_rate: 0.10, maintenance_strategy: index_builder}
+  sharp:   {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, refusal_fallbacks: false, effort: null, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, scripted_beta: 2.0,  gadget_defect_rate: 0.20, maintenance_strategy: index_builder}
+  average: {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, refusal_fallbacks: false, effort: null, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, scripted_beta: 1.0,  gadget_defect_rate: 0.30, maintenance_strategy: index_builder}
+  slow:    {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, refusal_fallbacks: false, effort: null, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, scripted_beta: 0.6,  gadget_defect_rate: 0.45, maintenance_strategy: index_builder}
+  dim:     {provider: scripted, model: scripted-v1, thinking_budget: null, api_temperature_max: 1.0, refusal_fallbacks: false, effort: null, price_in_per_mtok: 4.0, price_out_per_mtok: 20.0, price_cache_read_per_mtok: 0.20, price_cache_write_per_mtok: 5.0, max_tokens: 512, scripted_beta: 0.35, gadget_defect_rate: 0.60, maintenance_strategy: index_builder}
+experiment:
+  name: exp_mem_e4s

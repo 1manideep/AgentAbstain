@@ -108,7 +108,7 @@ def test_every_experiment_config_loads_without_warnings() -> None:
 def test_arms_differ_only_in_declared_independent_variables() -> None:
     groups = exp_configs()
     assert set(groups) == {"exp_tiers", "exp_scarcity", "exp_memory", "exp_gate", "exp_spread", "exp_press", "exp_benefactor", "exp_ladder",
-                           "exp_mem_e0", "exp_mem_dep", "exp_mem_e2"}
+                           "exp_mem_e0", "exp_mem_dep", "exp_mem_e2", "exp_mem_e4s"}
     for name, paths in groups.items():
         assert len(paths) >= 2, name
         cfgs = [load_config(p) for p in paths]
@@ -120,6 +120,23 @@ def test_arms_differ_only_in_declared_independent_variables() -> None:
                 stray = [d for d in diff if d not in ("run.name", "experiment.arm") and not covered_by(d, ivs)]
                 assert not stray, (paths[i].name, paths[j].name, stray)
                 assert any(covered_by(d, ivs) for d in diff), (paths[i].name, paths[j].name, "no IV differs")
+
+
+def test_exp_gate_follows_design_17_and_exp_spread_founders_afford_one_child() -> None:
+    """exp_gate is DESIGN §17's 12 ticks/day x 30 days without tier mutation, with caps that cover every day; each
+    exp_spread founder can afford exactly one child at once under the scripted offspring rule (DESIGN §7.2)."""
+    from void.brain.scripted import ScriptedBrain
+    from void.rng import RNG
+
+    for arm in ("on", "off"):
+        cfg = load_config(CONFIGS / f"exp_gate_{arm}.yaml")
+        assert (cfg.run.days, cfg.run.ticks_per_day, cfg.population.tier_mutation_prob) == (30, 12, 0.0)
+        assert cfg.economy.total_cap_usd >= cfg.run.days * cfg.economy.daily_cap_usd
+    for arm in ("gossip", "inherit", "both"):
+        cfg = load_config(CONFIGS / f"exp_spread_{arm}.yaml")
+        brain = ScriptedBrain("scripted", cfg, RNG(1), {})
+        threshold, endowment = brain.offspring_threshold_usd("scripted"), brain.endowment_usd("scripted")
+        assert threshold <= cfg.population.starting_balance_usd < threshold + endowment, arm
 
 
 def test_exp_tiers_hidden_beta_is_the_only_tier_difference() -> None:
@@ -249,8 +266,12 @@ def test_ladder_arms_compare_on_gini_and_the_rungs_order_regret(ladder_dir: Path
                 v = agg.get("action_regret_mean")
                 if v is not None:
                     regret.setdefault(tier, []).append(float(v))
+    # The bottom of the ladder is the two lowest rungs pooled (one slow pair and the single dim agent): a near-uniform
+    # sampler draws `sleep` early in the day, so dim alone leaves only a handful of rows. It used to be compared on its
+    # own; since the scripted brain follows DESIGN §7.2 (offspring, sleep, nudge) its few rows tie with `average`.
+    regret["bottom"] = regret.get("slow", []) + regret.get("dim", [])
     means = {t: sum(v) / len(v) for t, v in regret.items()}
-    assert means["genius"] < means["average"] < means["dim"], means
+    assert means["genius"] < means["average"] < means["bottom"], means
 
 
 # --- (e) benefactor: common random numbers + lineage ----------------------------------------------------------------
@@ -271,7 +292,11 @@ def test_benefactor_arms_share_grants_and_lineage_is_computable(benefactor_dir: 
     opaque, legible = benefactor_dir / "opaque" / "seed_1", benefactor_dir / "legible" / "seed_1"
     g_opaque, g_legible = _grant_ticks(opaque), _grant_ticks(legible)
     assert g_opaque, "no grants in two days at mean_interval_ticks 6"
-    assert g_opaque == g_legible
+    # Common random numbers: the grant schedule and amounts are identical across arms. The recipient is drawn from the
+    # living, and scripted agents reproduce (DESIGN §7.2), so once disclosure changes behaviour after the first grant
+    # the arms' populations, and with them later recipients, may differ; the first grant is made to identical worlds.
+    assert [(t, a) for t, _, a in g_opaque] == [(t, a) for t, _, a in g_legible]
+    assert g_opaque[0] == g_legible[0]
     assert all(1 <= t <= 24 for t, _, _ in g_opaque)
     pen = windfall_lineage_penetration(opaque)
     assert pen is not None and 0.0 <= pen <= 1.0

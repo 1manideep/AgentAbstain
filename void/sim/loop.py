@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
 import os
+import re
 import secrets
+import subprocess
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -30,7 +33,8 @@ from void.economy.taskboard import TaskBoard
 from void.economy.wallet import Wallet
 from void.events import OPERATOR, Event, EventBus, Kind
 from void.ids import IdFactory
-from void.memory.commands import MemoryCommands
+from void.memory.commands import NOTES_DIR, SELF_PATH, MemoryCommands
+from void.memory.notes import normalise_title
 from void.memory.policy import PolicyStore
 from void.memory.store import MemoryStore
 from void.research.exams import Exams
@@ -59,6 +63,39 @@ except Exception:  # pragma: no cover - only during partial builds
 __all__ = ["Simulation", "TickReport"]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# [[links]] that name a world entity (DESIGN §10): a resource node and a day's chronicle; agent names are looked up
+_NODE_LINK = re.compile(r"^node\s+(\S+)$", re.IGNORECASE)
+_CHRONICLE_LINK = re.compile(r"^chronicle of day\s+(\d+)$", re.IGNORECASE)
+
+
+@functools.lru_cache(maxsize=1)
+def code_version() -> tuple[str | None, bool | None]:
+    """``(commit, dirty)`` of the git checkout that holds ``void/``, for the run's data card (MEMORY_EVOLUTION §7.4).
+
+    ``commit`` is ``git rev-parse HEAD``; ``dirty`` is whether ``git status --porcelain`` lists anything. Each is None
+    when git is missing, times out (2 s per call) or ``void/`` is not the top of a checkout (an installed package
+    inside some other repository must not borrow that repository's commit). Computed once per process: the code a
+    process runs is the code it imported.
+    """
+    def git(*args: str) -> str | None:
+        try:
+            out = subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, timeout=2, check=False)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return out.stdout if out.returncode == 0 else None
+
+    head = git("rev-parse", "--show-toplevel", "HEAD")
+    lines = head.split() if head is not None else []
+    if len(lines) != 2:
+        return None, None
+    try:
+        if Path(lines[0]).resolve() != REPO_ROOT:
+            return None, None
+    except OSError:
+        return None, None
+    status = git("status", "--porcelain")
+    return lines[1], None if status is None else bool(status.strip())
 
 
 def _report_dict(report: Any) -> dict[str, Any]:
@@ -196,6 +233,9 @@ class Simulation:
         self.db.kv_set("scarcity", cfg.world.scarcity)
         self.db.kv_set("gadgets_rev", 0)
         self.db.kv_set("chronicle_rev", 0)
+        commit, dirty = code_version()  # the data card's code commit (MEMORY_EVOLUTION §7.4); None without git
+        self.db.kv_set("code_commit", commit)
+        self.db.kv_set("code_dirty", dirty)
         for rec in self.lifecycle.spawn_initial(tick=0):
             self._ensure_entities(rec.agent_id, tick=0)
         self._refresh_seeds()
@@ -324,6 +364,23 @@ class Simulation:
         h = hashlib.sha256(text.encode("utf-8")).hexdigest()[:24]
         self.db.execute("INSERT OR IGNORE INTO prompt_texts(hash, text) VALUES(?,?)", (h, text))
         return h
+
+    def _retrieval_extras(self, agent_id: str, obs: Observation) -> dict[str, Any]:
+        """What retrieval put in front of the agent for this call, for the call row's JSON extras (DESIGN §10)."""
+        stats = self.observer.last_stats.get(agent_id) or {}
+        hop_hist = stats.get("hop_hist") or {}
+        return {
+            "retrieved_titles": [m.title for m in obs.memories],
+            # the gossip provenance hop of each retrieved note (0 for the agent's own notes), NOT the graph depth
+            # at which retrieval reached it: that is retrieved_hop_hist
+            "retrieved_hops": [m.hop for m in obs.memories],
+            "retrieved_hop_hist": {str(k): int(v) for k, v in sorted(hop_hist.items())},  # graph depth -> notes returned
+            "retrieved_mean_age": round(float(stats.get("mean_age_ticks") or 0.0), 4),  # ticks since the notes were written
+            "retrieved_channel_mix": {str(k): int(v) for k, v in sorted((stats.get("channel_mix") or {}).items())},
+            # the walk's entry points, ranked by cosine plus memory.index_boost for an ``index`` note under R1 (§5.3)
+            "retrieved_entry_ids": [str(x) for x in stats.get("entry_ids") or []],
+            "retrieved_index_entries": int(stats.get("index_entries") or 0),  # how many of them are ``index`` notes
+        }
 
     @staticmethod
     def _observation_json(obs: Observation) -> str:
@@ -535,6 +592,7 @@ class Simulation:
             if m.overrun:
                 self.lifecycle.pending_bankrupt[aid] = "overrun"
             logged = cfg.run.log_prompts
+            raw_text = r.raw_text or ""  # whole when prompts are logged (full response text per call, MEMORY_EVOLUTION §7.4)
             self.db.execute(
                 "INSERT INTO llm_calls(call_id, tick, agent_id, purpose, tier, model, provider, input_tokens, output_tokens, cache_read_tokens, "
                 "cache_write_tokens, real_cost, world_cost, hold, estimated, latency_ms, stop_reason, effective_temperature, api_temperature, stress, "
@@ -543,7 +601,7 @@ class Simulation:
                 (call_id, tick, aid, "decide", a.model_tier, r.model or tier.model, tier.provider, r.usage.input_tokens, r.usage.output_tokens,
                  r.usage.cache_read_tokens, r.usage.cache_write_tokens, m.real_cost, m.world_cost, holds[aid], int(m.estimated), r.latency_ms,
                  r.stop_reason, sampling[aid].effective_temperature, sampling[aid].api_temperature, sampling[aid].stress,
-                 int(sampling[aid].degenerate), r.request_id, r.error, (r.raw_text or "")[:4000],
+                 int(sampling[aid].degenerate), r.request_id, r.error, raw_text if logged else raw_text[:4000],
                  render_observation(obs[aid]) if logged else None, self.system_hash.get(a.model_tier) if logged else None,
                  self._observation_json(obs[aid]) if logged else None),
             )
@@ -584,7 +642,7 @@ class Simulation:
                 hist = self.action_history.setdefault(aid, deque(maxlen=8))
                 hist.append(decision.action.type)
                 # memory ops
-                self._apply_memory_ops(a, decision.memory_ops, tick)
+                self._apply_memory_ops(a, decision.memory_ops, tick, call_id=call_ids[aid])
                 # kernel
                 outcome = await self.kernel.apply(a, decision.action, hold_min=hold_min_map[a.model_tier])
                 if outcome.effects.get("child_id"):
@@ -603,8 +661,7 @@ class Simulation:
                      shannon(list(hist)), r.extras.get("action_regret"), r.extras.get("p_chosen"),
                      int(outcome.effects.get("claims_made", 0)), int(outcome.effects.get("claims_false", 0)), decision.action.type,
                      sanitize_text(decision.thought, max_len=600),
-                     json.dumps({"retrieved_titles": [m.title for m in obs[aid].memories], "retrieved_hops": [m.hop for m in obs[aid].memories],
-                                 **{k: v for k, v in r.extras.items()}}, sort_keys=True), call_ids[aid]),
+                     json.dumps({**self._retrieval_extras(aid, obs[aid]), **{k: v for k, v in r.extras.items()}}, sort_keys=True), call_ids[aid]),
                 )
                 self.calls_this_tick[aid] = {"t_eff": round(s.effective_temperature, 4), "degenerate": bool(mode),
                                              "coherence": text_coh, "world_cost": self.db.fetchone("SELECT world_cost FROM llm_calls WHERE call_id=?", (call_ids[aid],))["world_cost"]}
@@ -722,14 +779,30 @@ class Simulation:
         return {"probe_hits": self._probe_hits, "probe_total": self._probe_total,
                 "probe_recall": round(self._probe_hits / self._probe_total, 4) if self._probe_total else None}
 
-    def _apply_memory_ops(self, a: AgentRecord, ops: list[MemoryOp], tick: int) -> None:
+    def _apply_memory_ops(self, a: AgentRecord, ops: list[MemoryOp], tick: int, call_id: str | None = None) -> None:
+        """A decision's ``remember`` / ``revise_self`` ops (at most two).
+
+        With memory on they take the command layer's per-tick path (MEMORY_EVOLUTION §5.4): one ``memory_commands``
+        row each (purpose ``tick``, linked to the decision's ``call_id``), the vault limits enforced, a refusal
+        reported as a ``MEMORY_COMMAND`` event with ``ok`` false and nothing written; every ``[[link]]`` of a new note
+        that names a world entity gets its stub (:meth:`_anchor_mentions`). The amnesic control (``memory.enabled``
+        false) keeps the direct ``revise_self`` it always had and writes no notes (§5.2).
+        """
         aid = a.agent_id
+        audited = bool(self.cfg.memory.enabled)
         for op in ops[:2]:
             text = sanitize_text(op.text, max_len=self.cfg.memory.note_max_chars)
             if not text.strip():
                 continue
             if op.op == "revise_self":
-                version, summary = self.memory.revise_self(aid, tick, text)
+                if audited:
+                    done, refusal = self.commands.tick_revise_self(aid, tick, text, call_id=call_id)
+                    if done is None:
+                        self._memory_refused(aid, tick, "str_replace", SELF_PATH, refusal or "")
+                        continue
+                    version = done[0]
+                else:
+                    version, _ = self.memory.revise_self(aid, tick, text)
                 self.bus.emit(Event(tick, self.clock.day, Kind.REVISE_SELF, {"agent_id": aid, "version": version}, aid))
                 continue
             if not self.cfg.memory.enabled:  # amnesic control: notes are never written (MEMORY_EVOLUTION §5.2)
@@ -748,8 +821,59 @@ class Simulation:
             if channel == "chronicle":
                 from void.memory.notes import Provenance
                 prov = Provenance(channel="chronicle", origin_note_id=f"chronicle:day_{self.db.kv_get('chronicle_day')}")
-            note = self.memory.remember(aid, tick, text, channel=channel, provenance=prov, **kwargs)
+            note, refusal = self.commands.tick_remember(aid, tick, text, channel=channel, provenance=prov, call_id=call_id, **kwargs)
+            if note is None:
+                self._memory_refused(aid, tick, "create", NOTES_DIR, refusal or "")
+                continue
             self.bus.emit(Event(tick, self.clock.day, Kind.REMEMBER, {"agent_id": aid, "note_id": note.note_id, "title": note.title, "channel": channel}, aid))
+            self._anchor_mentions(aid, note.links, tick)
+
+    def _memory_refused(self, agent_id: str, tick: int, command: str, path: str, message: str) -> None:
+        """A per-tick op the vault limits refused: the payload mirrors the nightly step's ``MEMORY_COMMAND`` events."""
+        self.bus.emit(Event(tick, self.clock.day, Kind.MEMORY_COMMAND, {
+            "agent_id": agent_id, "command": command, "ok": False, "message": message[:120], "path": path, "purpose": "tick"}, agent_id))
+
+    def _anchor_mentions(self, agent_id: str, links: Iterable[str], tick: int) -> None:
+        """Entity stubs on first mention (DESIGN §10): each link that names another known agent (any registry name, the
+        dead included, never the vault's own agent), an existing node (``Node <id>``) or the chronicle of a day already
+        written (``Chronicle of day N``) gets a stub in ``agent_id``'s vault unless a note there already carries that
+        title, so the link resolves.
+
+        Only a per-tick ``remember`` calls this (:meth:`_apply_memory_ops`). Gossip copies and a newborn's inherited
+        notes are deliberately not anchored: each stub draws a note id from the run's counter, which moves the ids
+        and RNG placement of everything created after it (gadgets among them), and so the balances of worlds that
+        do not use the new features. Anchoring those channels is a separate change that re-runs E0 on purpose.
+
+        Stub bodies follow the talk and node stubs. Under fog a node the agent has not seen gets a stub without its
+        position, so a vault never holds a position its owner was not shown (MEMORY_EVOLUTION §5.2).
+        """
+        fn = getattr(self.memory, "ensure_entity", None)
+        if fn is None:
+            return
+        names: dict[str, Any] | None = None
+        for link in links:
+            title = " ".join(str(link).split())
+            m = _NODE_LINK.match(title)
+            if m is not None:
+                nid = m.group(1).lower()
+                n = self.nodes.get(nid)
+                if n is None:
+                    continue
+                seen = self.cfg.world.view_radius is None or nid in self.kernel.state.seen_nodes.get(agent_id, set())
+                fn(agent_id, f"Node {nid}", tick, f"A resource node at ({n.x:.0f}, {n.y:.0f})." if seen else "A resource node.")
+                continue
+            m = _CHRONICLE_LINK.match(title)
+            if m is not None:
+                d = int(m.group(1))
+                if self.chronicle is not None and d >= 1 and self.chronicle.read(d) is not None:
+                    fn(agent_id, f"Chronicle of day {d}", tick, f"The chronicle of day {d}, the world's daily column.")
+                continue
+            if names is None:
+                names = {normalise_title(str(r["name"])): r
+                         for r in self.db.fetchall("SELECT agent_id, name, model_tier FROM agents ORDER BY agent_id")}
+            rec = names.get(normalise_title(title))
+            if rec is not None and str(rec["agent_id"]) != agent_id:  # an agent needs no stub of itself
+                fn(agent_id, str(rec["name"]), tick, f"An inhabitant of the void on tier {rec['model_tier']}.")
 
     @staticmethod
     def _parse_action(raw: str | None) -> Action | None:

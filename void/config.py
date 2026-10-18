@@ -169,6 +169,12 @@ class PopulationConfig(StrictModel):
     # "Who you are" section of the user turn. Hidden by default: the deception experiments want behaviour to
     # emerge from the world, not from being told "honesty low". The scripted brain always acts on its traits.
     persona: Literal["hidden", "shown"] = "hidden"
+    # Which argument rules a scripted brain uses. "design_7_2": the DESIGN §7.2 table (offspring once the balance
+    # reaches 2 x min_reserve + endowment under per-parent names, greed-scaled transfers, nudges toward yield-positive
+    # weather, random gadget parameters, sleep when calls burn more than a forage earns). "pre_7_2": the rules the
+    # scripted brain had before (offspring above 1.6 x the starting balance, a fixed transfer, nudge and sleep rule,
+    # gadget x = 1.0), kept so worlds recorded under them (G0's E0 arms and dependence check) reproduce exactly.
+    scripted_rules: Literal["design_7_2", "pre_7_2"] = "design_7_2"
 
 
 class EconomyConfig(StrictModel):
@@ -779,7 +785,8 @@ class VoidConfig(StrictModel):
         """The resolved config as stored and hashed.
 
         Fields added after runs already existed (``_LATE_DEFAULTS``: ``world.fallow_ticks``, ``world.veins``,
-        ``memory.policy.mutate_at_birth``, ``memory.practices``, ``memory.selection``, ``experiment.hypotheses``) are
+        ``memory.policy.mutate_at_birth``, ``memory.practices``, ``memory.selection``, ``experiment.hypotheses``,
+        ``population.scripted_rules``) are
         left out while they hold their defaults, so a config that does not use them hashes exactly as it did before
         they existed: older runs stay resumable and comparable. Loading the stored YAML restores the defaults, so two
         stored configs are best compared after loading both (``load_config(path).model_dump(mode="json")``): a block
@@ -837,6 +844,7 @@ _LATE_DEFAULTS: dict[str, Any] = {
     "memory.practices": PracticesConfig().model_dump(mode="json"),
     "memory.selection": SelectionArmConfig().model_dump(mode="json"),
     "experiment.hypotheses": [],
+    "population.scripted_rules": "design_7_2",
 }
 
 
