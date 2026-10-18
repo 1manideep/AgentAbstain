@@ -20,11 +20,19 @@ The published-mechanism baselines of §6.13 row 5 (scripted, so they cost what a
 
 * ``distill`` (ALTK-Evolve's distillation): groups of near-duplicate notes (the same normalized title stem, see
   :func:`title_stem`, or cosine >= :data:`DISTILL_COSINE` on the store's hashing embedding of title and body) are
-  merged into one summary note holding the newest fact per node (:func:`format_node_fact`) and, when some
-  members name no node, the newest of those; then the sources are deleted. Index notes, kernel anchors and vein
-  notes are never merged (a vein note is a dated event whose repetitions are the evidence that a node is
-  vein-prone). A summary is created before its sources are deleted and never without at least one delete; a group
-  too large for the rest of the batch loses only its oldest members (the summary still holds every member's facts).
+  merged into the group's newest member: the other members are deleted, then that member's body is replaced
+  (``str_replace`` of the whole body) by a summary holding, for every node the merged members name, the vault's
+  newest fact about it (:func:`format_node_fact`) and, when some members name no node, the newest of those. The
+  summary keeps the member's title, path and created tick. The scripted brain's ``node_memory`` dates a note's
+  facts by its created tick, so the merge is planned to leave what it reads from the vault unchanged (status,
+  position and date per node): every summary agrees with the vault's newest reading; a member is merged only if
+  the summary's tick is not later than the newest reading of each node it names (else it stays, rather than
+  re-date that node); and notes that hold a node's newest reading while another note of the same tick disagrees
+  are left alone (the reader settles such a tie by note id, which a strategy does not see). Index notes, kernel
+  anchors and vein notes are never merged (a vein note is a dated event whose repetitions are the evidence that a
+  node is vein-prone); a group whose newest member cannot be rewritten verbatim is left alone. The deletes come
+  before the edit, so a vault at its file cap needs no free slot; a group too large for the rest of the batch loses
+  only its oldest members. Only the structure right is needed.
 * ``revert`` (EvolveMem's revert-on-regression): when the day's income (the F1 feedback, ``outcomes``) fell below
   the day before's (``previous_outcomes``), the policy is restored to its previous version's text
   (``previous_policy_text``) with one policy edit; otherwise nothing. Without both fields, or without an earlier
@@ -60,10 +68,9 @@ from void.memory.commands import (
     POLICY_PATH,
     SELF_PATH,
     MemoryCommand,
-    title_from_name,
 )
 from void.memory.embed import HashingEmbedder
-from void.memory.notes import content_body, normalise_title
+from void.memory.notes import content_body
 
 if TYPE_CHECKING:
     from void.sim.maintenance import MaintenanceResponse
@@ -77,6 +84,9 @@ _NODE_POS_RE = re.compile(r"node\s+([A-Za-z0-9_-]+)\]?\]?\s+at\s+\((-?\d+(?:\.\d
 _BUCKET_RE = re.compile(r"\b(rich|thin|empty)\b", re.IGNORECASE)
 _SECTION_RE = re.compile(r"^(?:/memories/)?(notes|index)/$")
 _FACT_DAY_RE = re.compile(r"^\s*on\s+day\s+(\d+)", re.IGNORECASE)   # "... at (12, -5) on day 3; ..."
+# What the command layer's cleaning rewrites in an ``old_str`` (control characters, angle brackets, carriage returns):
+# a body holding any of these would not be found verbatim, so distill does not rewrite it.
+_REWRITTEN_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f<>\r]")
 _STEM_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 MAX_BATCH = 30               # the schema's own cap on ``commands`` (MaintenanceResponse)
@@ -91,7 +101,7 @@ RETIRE_CAP = 40              # notes a retiring vault keeps (index notes and ker
 _KERNEL_TAGS = frozenset({"entity", "probe"})
 _NOT_INDEXED_TAGS = frozenset({"entity", "probe", "index"})
 _NEVER_TOUCHED_TAGS = frozenset({"entity", "probe", "index", "self"})  # never merged, never retired
-_STEM_DROP = frozenset({"on", "day", "distilled", "rich", "thin", "empty"})  # dates and status words, not topics
+_STEM_DROP = frozenset({"on", "day", "rich", "thin", "empty"})  # dates and status words, not topics
 
 # Abstract memory jargon only: no node ids, no inhabitant names, nothing an agent could act on.
 DECOY_VOCABULARY: tuple[str, ...] = (
@@ -240,8 +250,8 @@ def title_stem(title: str) -> str:
     """A title without its dates, counters and status words: ``Node n3 seen rich on day 3-2`` -> ``node n3 seen``.
 
     Lowercased word tokens, dropping pure numbers (days, ticks, the vault's ``-2`` suffix of a repeated title) and
-    :data:`_STEM_DROP`. Notes about the same thing on different days share a stem; a distilled summary's own title
-    (``node n3 seen distilled day 4``) has the stem of its sources, so it is merged again with later ones.
+    :data:`_STEM_DROP`. Notes about the same thing on different days share a stem; a distilled summary keeps the
+    title of the member it was written into, so it is merged again with later notes of its stem.
     """
     return " ".join(t for t in _STEM_TOKEN_RE.findall(title.lower()) if not t.isdigit() and t not in _STEM_DROP)
 
@@ -257,22 +267,49 @@ def format_node_fact(node_id: str, x: float, y: float, bucket: str, day: int | N
     return f"Saw [[Node {node_id}]] at ({_num(x)}, {_num(y)}){when}; it was {bucket}."
 
 
-def _node_facts(notes: list[dict[str, Any]]) -> dict[str, tuple[float, float, str, int | None]]:
-    """``node_id -> (x, y, bucket, day)``, the newest mention per node (note age, then path, then text order).
+Fact = tuple[float, float, str, int | None]  # (x, y, bucket, day) of one node mention
 
-    The same reading as :func:`nodes_from_notes` (bucket ``thin`` when none follows the position), plus the
-    sighting day when the mention says ``on day N`` right after the position.
-    """
-    found: dict[str, tuple[float, float, str, int | None]] = {}
+
+def _first_mentions(n: dict[str, Any]) -> dict[str, Fact]:
+    """``node_id -> (x, y, bucket, day)`` for every node one note mentions with a position, read as the scripted
+    brain's ``node_memory`` reads a note: title and body, bucket ``thin`` when none follows the position, the first
+    mention of a node counting; ``day`` when the mention says ``on day N`` right after the position."""
+    text = f"{n.get('title', '')} {n.get('body', '')}"
+    out: dict[str, Fact] = {}
+    for hit in _NODE_POS_RE.finditer(text):
+        if hit.group(1) in out:
+            continue
+        tail = text[hit.end(): hit.end() + 80]
+        b = _BUCKET_RE.search(tail)
+        d = _FACT_DAY_RE.match(tail)
+        out[hit.group(1)] = (float(hit.group(2)), float(hit.group(3)), b.group(1).lower() if b else "thin",
+                             int(d.group(1)) if d else None)
+    return out
+
+
+def _node_facts(notes: list[dict[str, Any]]) -> dict[str, Fact]:
+    """``node_id -> (x, y, bucket, day)``: the newest mention per node, notes ordered by created tick (the reader's
+    recency), then by path (the reader breaks that tie by note id, which a note dict does not carry; see
+    :func:`_newest_ticks` for how distill stays clear of it)."""
+    found: dict[str, Fact] = {}
     for n in _by_age(notes):
-        text = f"{n.get('title', '')} {n.get('body', '')}"
-        for hit in _NODE_POS_RE.finditer(text):
-            tail = text[hit.end(): hit.end() + 80]
-            b = _BUCKET_RE.search(tail)
-            d = _FACT_DAY_RE.match(tail)
-            found[hit.group(1)] = (float(hit.group(2)), float(hit.group(3)), b.group(1).lower() if b else "thin",
-                                   int(d.group(1)) if d else None)
+        found.update(_first_mentions(n))
     return found
+
+
+def _newest_ticks(notes: list[dict[str, Any]]) -> dict[str, tuple[int, bool]]:
+    """``node_id -> (tick, split)``: the created tick of the newest note mentioning the node, and whether the notes of
+    that tick disagree about it (position or bucket). On a split the reader's answer turns on note-id order."""
+    found: dict[str, tuple[int, set[tuple[float, float, str]]]] = {}
+    for n in notes:
+        t = int(n.get("tick", 0))
+        for nid, (x, y, bucket, _) in _first_mentions(n).items():
+            cur = found.get(nid)
+            if cur is None or t > cur[0]:
+                found[nid] = (t, {(x, y, bucket)})
+            elif t == cur[0]:
+                cur[1].add((x, y, bucket))
+    return {nid: (t, len(seen) > 1) for nid, (t, seen) in found.items()}
 
 
 def _sparse_unit(text: str, embedder: HashingEmbedder) -> dict[int, float]:
@@ -328,12 +365,15 @@ def near_duplicate_groups(notes: list[dict[str, Any]], *, cosine: float = DISTIL
     return sorted(out, key=lambda g: (-len(g), int(g[0].get("tick", 0)), str(g[0].get("path", ""))))
 
 
-def _distilled_body(ctx: StrategyContext, stem: str, group: list[dict[str, Any]]) -> str:
-    """The summary of one group: the newest fact per node and, when members name no node, the newest of those."""
-    facts = _node_facts(group)
-    lines = [f"# Distilled: {stem or 'notes'} (day {ctx.day})", f"Merged {len(group)} notes; the newest fact per node."]
+def _distilled_body(ctx: StrategyContext, stem: str, members: list[dict[str, Any]], vault_facts: dict[str, Fact]) -> str:
+    """The summary of merged ``members`` (oldest first): for every node they name, the vault's newest fact about it
+    (``vault_facts``, not the members' own, which may be older than a note outside the group), and, when members
+    name no node, the newest of those."""
+    named = _node_facts(members)
+    facts = {nid: vault_facts.get(nid, named[nid]) for nid in named}
+    lines = [f"# Distilled: {stem or 'notes'} (day {ctx.day})", f"Merged {len(members)} notes; the newest fact per node."]
     lines += [f"- {format_node_fact(nid, *facts[nid])}" for nid in sorted(facts)]
-    factless = [n for n in group if not _NODE_POS_RE.search(f"{n.get('title', '')} {n.get('body', '')}")]
+    factless = [n for n in members if not _NODE_POS_RE.search(f"{n.get('title', '')} {n.get('body', '')}")]
     if factless:
         latest = " ".join(content_body(str(factless[-1].get("body", ""))).split())[:MAX_LATEST_CHARS]
         if latest:
@@ -444,33 +484,60 @@ def _summarize(ctx: StrategyContext, rng: random.Random) -> Plan:
     return f"summarize: one summary note for day {ctx.day} with {len(titles)} new titles", [cmd]
 
 
+def _rewritable(body: str) -> bool:
+    """Whether ``body`` can be the ``old_str`` of a whole-body ``str_replace``: present, within the command schema's
+    cap, and nothing in it the command layer's cleaning would rewrite (else the edit would not find it)."""
+    return bool(body.strip()) and len(body) <= MAX_FILE_TEXT and _REWRITTEN_RE.search(body) is None
+
+
 def _distill(ctx: StrategyContext, rng: random.Random) -> Plan:
-    if "notes" not in ctx.rights or "structure" not in ctx.rights:
-        return "distill: merging needs the notes and structure rights, nothing merged", []
+    if "structure" not in ctx.rights:
+        return "distill: merging needs the structure right, nothing merged", []
     pool = [n for n in ctx.notes if _touchable(n) and "vein" not in set(n.get("tags", ())) and str(n.get("body", "")).strip()]
     groups = near_duplicate_groups(pool)
-    taken = {normalise_title(str(n.get("title", ""))) for n in ctx.notes}
+    # every note the scripted brain can recall (all but the entity anchors retrieval never returns): the newest
+    # reading per node, and the tick it dates from
+    readable = [n for n in ctx.notes if "entity" not in set(n.get("tags", ()))]
+    vault_facts = _node_facts(readable)
+    newest = _newest_ticks(readable)
+
+    def pinned(n: dict[str, Any]) -> bool:
+        """A note holding a split newest reading: the reader's pick among such notes is by note id, so none is
+        merged, rewritten or outdated by a summary on its tick."""
+        t = int(n.get("tick", 0))
+        return any(newest[nid] == (t, True) for nid in _first_mentions(n))
+
+    def safe(n: dict[str, Any], at: int) -> bool:
+        """Whether a summary dated ``at`` may restate ``n``'s nodes: never later than a node's newest reading (that
+        would re-date it) and never on the tick of a split one."""
+        return all(newest[nid][0] > at or (newest[nid][0] == at and not newest[nid][1]) for nid in _first_mentions(n))
+
     budget = _budget(ctx)
     cmds: list[MemoryCommand] = []
     merged = deleted = 0
     for group in groups:
         room = budget - len(cmds)
-        if room < 2:  # a summary needs at least one delete to be worth writing
+        if room < 2:  # a merge is at least one delete and the edit
             break
-        stem = title_stem(str(group[-1].get("title", "")))  # the newest member names the summary
-        base = slugify(f"{stem or 'notes'} distilled day {ctx.day}", max_len=MAX_FILE_NAME - 4)
-        name, k = _file_name(base), 2
-        while normalise_title(title_from_name(name)) in taken:
-            name, k = _file_name(f"{base}-{k}"), k + 1
-        taken.add(normalise_title(title_from_name(name)))
-        cmds.append(MemoryCommand(command="create", path=f"{NOTES_DIR}/{name}", file_text=_distilled_body(ctx, stem, group)))
-        # the summary holds every member's facts; a group larger than the batch loses its oldest members first
-        for n in group[: room - 1]:
-            cmds.append(MemoryCommand(command="delete", path=str(n["path"])))
-            deleted += 1
+        members = [n for n in group if not pinned(n)]
+        if len(members) < 2:
+            continue
+        keeper = members[-1]  # the newest member: its created tick dates the summary for the reader
+        old = str(keeper.get("body", ""))
+        at = int(keeper.get("tick", 0))
+        # a group larger than the batch loses only its oldest members
+        sources = [n for n in members[:-1] if safe(n, at)][: room - 1]
+        if not sources or not _rewritable(old):
+            continue
+        body = _distilled_body(ctx, title_stem(str(keeper.get("title", ""))), sources + [keeper], vault_facts)
+        # the deletes come first: the edit needs no free file slot, and the sources' bytes are freed before it
+        cmds += [MemoryCommand(command="delete", path=str(n["path"])) for n in sources]
+        if body != old:
+            cmds.append(MemoryCommand(command="str_replace", path=str(keeper["path"]), old_str=old, new_str=body))
+        deleted += len(sources)
         merged += 1
-    return (f"distill: {len(groups)} groups of near-duplicates among {len(pool)} notes, {merged} merged into summaries, "
-            f"{deleted} sources deleted"), cmds
+    return (f"distill: {len(groups)} groups of near-duplicates among {len(pool)} notes, {merged} merged into their "
+            f"newest note, {deleted} sources deleted"), cmds
 
 
 def _revert(ctx: StrategyContext, rng: random.Random) -> Plan:
