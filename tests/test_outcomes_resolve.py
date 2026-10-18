@@ -52,6 +52,7 @@ ALLOWED_NONE: dict[str, dict[str, str]] = {
                              "reward_exam_accuracy": _REWARD_DELAY, "goodhart_gap": _REWARD_DELAY} for arm in ("a", "b")},
     **{f"exp_mem_e4s_{arm}": {"exam_score": _EXAM_DELAY} for arm in ("default", "flat_tariff", "selfedit")},
     "exp_mem_e5_eval": {"exam_score": _EXAM_DELAY},
+    "exp_mem_e3a": {"exam_score": _EXAM_DELAY},  # extends exp_mem_e5_eval.yaml, same exam delay
     "exp_press_both": {"chronicle_fidelity": _CHRONICLE},
     "exp_press_chronicle": {"chronicle_fidelity": _CHRONICLE, "gossip_fidelity": _NO_GOSSIP},
     "exp_press_gossip": {"chronicle_fidelity": _CHRONICLE},
