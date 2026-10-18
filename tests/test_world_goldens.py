@@ -19,7 +19,7 @@ Re-recorded once, deliberately, when the scripted brain started to follow DESIGN
 random gadget parameters, sleep when calls burn more than a forage earns): both worlds now have births. Run under
 ``population.scripted_rules: pre_7_2`` they still reproduce the digests from before (tests/test_scripted_selection.py).
 Re-recorded again when the kernel began classifying failed actions as invalid or stale against the agent's
-observation (see the note above BASE_GOLDEN).
+observation, and (events only) when the gadget gate began emitting propose_gadget (see the notes above BASE_GOLDEN).
 """
 
 from __future__ import annotations
@@ -93,12 +93,17 @@ NO_CHILD_PROVIDERS = {"population": {"tier_mutation_prob": 0.0}, "run": {"days":
 # e5a71250..., ledger 53cef135...). Both changes together give the digests below; with the loop's observation
 # dropped they give exactly the gate fix's digests (base metrics 5c8d756f..., events aa797966..., calls 81d9400c...,
 # ledger 6db006cb...; amnesic fog metrics 0e6d836f..., events 9743fdca..., calls fa00efcc..., ledger e62ce380...).
+# Only the events digests moved, deliberately, when the gadget gate began emitting propose_gadget as a proposal is
+# submitted (its fee paid), just before that proposal's gadget_verified or gadget_rejected (the web's tinker gesture
+# listens for it; tests/test_event_registry.py). Nothing reads that kind, so metrics, calls, ledger and config hashes
+# held; dropping the propose_gadget events from the new streams (base 3, amnesic fog 2) gives the previous events
+# digests exactly (base 3e4740f3..., amnesic fog 228ef43a...).
 
 BASE_GOLDEN = {
     "status": "completed",
     "config_hash": "f589277f12656996537c99ed2f9968389a7d067d6bb94a5b6683ba201fbc1b51",
     "metrics": "98d477e19bc8fba8f9d180bbe0bca2cf8507caad26bfb90fbc23a353493050c6",
-    "events": "3e4740f3c9ae3e3f750d6c6228f8bba4377dafd78550608aa98d57240745d5d7",
+    "events": "c2ba5a0c46905b29e6f7afabe7a195b6cfc6f3f80f14052db37cc1e21aa83f6c",
     "calls": "4431790d1ecb1bf45f7ca19032da31e5071321d6287ea183db40842a709ce3e9",
     "ledger": "288977274693b0dcee0fb51bae52856eff9011e8fb85544e9484e0407e0afe5f",
 }
@@ -107,7 +112,7 @@ AMNESIC_FOG_GOLDEN = {
     "status": "completed",
     "config_hash": "fb105920e6b0993e29971b43cf9f1c984343500dcb33fa8178b837499498c47d",
     "metrics": "25baec7b8ce4818f02cf4b2b4008c71e000180b0345f86bc18f06a410939f987",
-    "events": "228ef43a5a0d783416b9a789fa461518377ee574279224286ffc6f93a05b58c0",
+    "events": "a746459da9a4a5dfac9fea1fb817530b86a1e4fba2fd8dec22085ab6ea79b39f",
     "calls": "16c29ddb0dd073b512302661f9d52e8782b05a532e8677a45fc47290c4554620",
     "ledger": "8d7ef511a51235e84b4832ae29afbec1cc78735ec1fa696d47de96a1e6a0a7fb",
 }

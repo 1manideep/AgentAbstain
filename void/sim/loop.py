@@ -27,7 +27,7 @@ from void.brain.factory import build_brains
 from void.brain.prompt import estimate_tokens, render_observation, system_prompt
 from void.config import VoidConfig, micro_to_usd, usd_to_micro
 from void.db import SCHEMA_VERSION, Database
-from void.economy.benefactor import Benefactor
+from void.economy.benefactor import LEGIBLE_STRING, OPAQUE_STRING, Benefactor
 from void.economy.scheduler import Clock, Scheduler
 from void.economy.taskboard import TaskBoard
 from void.economy.wallet import Wallet
@@ -42,7 +42,7 @@ from void.rng import RNG
 from void.sandbox.gate import GadgetGate
 from void.sandbox.registry import GadgetRegistry
 from void.sandbox.runner import DisabledSandbox, SandboxRunner, SubprocessSandbox
-from void.sim.control import Command, ControlQueue
+from void.sim.control import Command, CommandReplay, ControlQueue
 from void.sim.maintenance import Maintenance
 from void.sim.metrics import MetricsRecorder, shannon
 from void.sim.observation import ObservationBuilder
@@ -126,7 +126,11 @@ class TickReport:
 
 
 class Simulation:
-    def __init__(self, cfg: VoidConfig, run_dir: Path, *, client: Any = None, gemini_client: Any = None, resume: bool = False) -> None:
+    def __init__(self, cfg: VoidConfig, run_dir: Path, *, client: Any = None, gemini_client: Any = None, resume: bool = False,
+                 replay_commands: Path | CommandReplay | None = None) -> None:
+        # read before anything is created, so a bad source leaves no run behind
+        self.replay: CommandReplay | None = (replay_commands if isinstance(replay_commands, CommandReplay) or replay_commands is None
+                                             else CommandReplay.load(replay_commands))
         self.cfg = cfg
         self.run_dir = Path(run_dir)
         self.run_dir.mkdir(parents=True, exist_ok=True)
@@ -207,6 +211,9 @@ class Simulation:
             raise RuntimeError(f"run {self.run_id} already exists at {self.run_dir}; use resume=True or a new name/seed")
         else:
             self._load_run(str(existing["status"]))
+        if self.replay is not None:
+            self.db.kv_set("replay_commands", self.replay.summary())
+            self.replay.drop_through(self.clock.tick)  # on resume, what the ticks already run applied
 
     # --- construction -----------------------------------------------------------------------------------------
     def _create_run(self) -> None:
@@ -216,7 +223,7 @@ class Simulation:
             "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (self.run_id, cfg.hash(), cfg.to_yaml(), cfg.run.seed, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), SCHEMA_VERSION,
              "running", hashlib.sha256(self.operator_token.encode()).hexdigest(), cfg.experiment.name, cfg.experiment.arm,
-             "opaque" if cfg.benefactor.disclosure == "opaque" else "legible"),
+             self.windfall_template(cfg)),
         )
         (self.run_dir / "config.resolved.yaml").write_text(cfg.to_yaml())
         node_ids = [f"n{i + 1}" for i in range(cfg.world.resource_nodes)]
@@ -241,6 +248,12 @@ class Simulation:
         self._refresh_seeds()
         self._persist_ids()
         self.prev_stock = {k: v.stock for k, v in self.nodes.items()}
+
+    @staticmethod
+    def windfall_template(cfg: VoidConfig) -> str:
+        """The exact text a windfall delivers under ``cfg``'s disclosure (DESIGN §9.5), stored as ``run.windfall_string``:
+        the benefactor's own template, ``{amount:.2f}`` included, chosen the way :meth:`Benefactor.grant` chooses it."""
+        return LEGIBLE_STRING if cfg.benefactor.disclosure == "legible" else OPAQUE_STRING
 
     def _load_run(self, status: str) -> None:
         row = self.db.fetchone("SELECT config_hash, seed FROM run WHERE run_id=?", (self.run_id,))
@@ -329,7 +342,7 @@ class Simulation:
         report: dict[str, Any] = {"available": False, "isolated": False}
         if isinstance(self.sandbox, SubprocessSandbox):
             report = await self.sandbox.self_test(REPO_ROOT / "README.md")
-            self.bus.emit(Event(self.clock.tick, self.clock.day, "sandbox_self_test", report, visibility=OPERATOR))
+            self.bus.emit(Event(self.clock.tick, self.clock.day, Kind.SANDBOX_SELF_TEST, report, visibility=OPERATOR))
         return report
 
     # --- small helpers --------------------------------------------------------------------------------------------
@@ -460,9 +473,16 @@ class Simulation:
         return {"ok": False, "reason": f"unknown command {cmd.kind}"}
 
     def _drain_commands(self) -> None:
+        """Apply the queued operator commands at this tick boundary and log each result (DESIGN §0, §14.1).
+
+        Under ``replay_commands`` the source run's commands applied at this tick are enqueued first, with their
+        recorded ``received_tick`` and in their recorded order, so they take exactly the path a live command takes."""
+        if self.replay is not None:
+            for rc in self.replay.due(self.clock.tick):
+                self.control.enqueue(rc.kind, rc.payload, rc.received_tick)
         results = self.control.drain(self.clock.tick, self._apply_command)
         for r in results:
-            self.bus.emit(Event(self.clock.tick, self.clock.day, "operator_command", r, visibility=OPERATOR))
+            self.bus.emit(Event(self.clock.tick, self.clock.day, Kind.OPERATOR_COMMAND, r, visibility=OPERATOR))
 
     # --- the tick -----------------------------------------------------------------------------------------------------
     async def tick(self) -> TickReport:
@@ -724,7 +744,7 @@ class Simulation:
                 self.db.execute("INSERT OR IGNORE INTO tracer_arrivals(agent_id, tick, channel, hop) VALUES(?,?,?,?)", (target.agent_id, tick, "tracer", 0))
                 self._tracer_planted = True
                 self.db.kv_set("tracer_planted", True)
-                self.bus.emit(Event(tick, day, "tracer_planted", {"agent_id": target.agent_id, "node": node}, target.agent_id, visibility=OPERATOR))
+                self.bus.emit(Event(tick, day, Kind.TRACER_PLANTED, {"agent_id": target.agent_id, "node": node}, target.agent_id, visibility=OPERATOR))
 
     def _tracer_metrics(self, tick: int) -> dict[str, Any]:
         if not self.cfg.experiment.tracer.enabled:
@@ -927,7 +947,7 @@ class Simulation:
     def _end_run(self, reason: str, tick: int, day: int) -> None:
         self.status = reason
         self.db.execute("UPDATE run SET status=?, ended_tick=?, ended_reason=? WHERE run_id=?", (reason, tick, reason, self.run_id))
-        self.bus.emit(Event(tick, day, "run_ended", {"reason": reason, "tick": tick, "day": day}))
+        self.bus.emit(Event(tick, day, Kind.RUN_ENDED, {"reason": reason, "tick": tick, "day": day}))
 
     async def finish(self) -> None:
         """Write the last day's chronicle and daily metrics, then close files.
