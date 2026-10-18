@@ -1,23 +1,67 @@
 #!/usr/bin/env node
 /**
- * Generates web/public/fixtures/mock.jsonl (server → client messages, DESIGN §15)
- * and web/public/fixtures/api.json (the /api responses the control room fetches).
+ * Generates a synthetic mock.jsonl (server → client messages, DESIGN §15) and
+ * api.json (the /api responses the control room fetches) for offline frontend work.
+ *
+ *   node scripts/gen-fixture.mjs [--out DIR] [--force]
+ *
+ * The output goes to a fresh OS temp dir unless `--out DIR` (or FIXTURE_OUT)
+ * names one. web/public/fixtures holds the committed fixture, a genuine
+ * `void mock-feed` recording of configs/demo_memory.yaml (docs/RUNBOOK.md), so
+ * writing into it, or anywhere under it, needs `--force`.
  *
  * 300 ticks, 8 agents on two tiers walking smooth-but-irregular paths in a 60×60
  * world, stress ramping and relaxing, one agent asleep mid-day, one death at
  * tick 180 with a replacement birth two ticks later, resource nodes with
  * oscillating stock, interleaved events, a metrics row per tick, a day row every
  * 24 ticks, and ts_ms advancing by irregular deltas (200 ms – 3 s) with one 20 s
- * pause gap. Fully deterministic: seeded PRNG, no wall clock.
+ * pause gap. Fully deterministic: seeded PRNG, no wall clock. The tiers' model
+ * names are placeholders, not real model identifiers.
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
-// `--out <dir>` or FIXTURE_OUT overrides the destination (the default is what the fixture feed serves).
-const outArg = process.argv.indexOf('--out')
-const outDir = resolve(outArg >= 0 && process.argv[outArg + 1] ? process.argv[outArg + 1] : (process.env.FIXTURE_OUT ?? resolve(here, '..', 'public', 'fixtures')))
+const COMMITTED = resolve(here, '..', 'public', 'fixtures')
+
+/** `p` with symlinks resolved through its nearest existing ancestor (the directory may not exist yet). */
+function realPath(p) {
+  const tail = []
+  let cur = resolve(p)
+  for (;;) {
+    try {
+      return resolve(realpathSync(cur), ...tail)
+    } catch {
+      const parent = dirname(cur)
+      if (parent === cur) return resolve(p)
+      tail.unshift(basename(cur))
+      cur = parent
+    }
+  }
+}
+
+function isWithin(child, parent) {
+  const rel = relative(parent, child)
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+const argv = process.argv.slice(2)
+const outArg = argv.indexOf('--out')
+if (outArg >= 0 && (!argv[outArg + 1] || argv[outArg + 1].startsWith('--'))) {
+  console.error('usage: gen-fixture.mjs [--out DIR] [--force]  (--out needs a directory)')
+  process.exit(2)
+}
+const requested = outArg >= 0 ? argv[outArg + 1] : process.env.FIXTURE_OUT || null
+if (requested && isWithin(realPath(requested), realPath(COMMITTED)) && !argv.includes('--force')) {
+  console.error(
+    `refused: ${resolve(requested)} is in web/public/fixtures, which holds the committed fixture, a genuine \`void mock-feed\` recording; ` +
+      'pass --force to overwrite it with the synthetic fixture, or pick another --out',
+  )
+  process.exit(2)
+}
+const outDir = requested ? resolve(requested) : mkdtempSync(join(tmpdir(), 'void-gen-fixture-'))
 mkdirSync(outDir, { recursive: true })
 
 // ------------------------------------------------------------ prng
@@ -47,8 +91,8 @@ const HALF = WORLD / 2
 const RUN_ID = 'fixture-run-0001'
 const TS0 = 1_750_000_000_000
 const TIERS = {
-  frontier: { color: '#4fd1c5', model: 'claude-opus-5-5', provider: 'anthropic', t_c: 1.8, cost: 0.011 },
-  budget: { color: '#f6ad55', model: 'claude-haiku-4-5', provider: 'anthropic', t_c: 1.78, cost: 0.004 },
+  frontier: { color: '#4fd1c5', model: 'frontier-model', provider: 'anthropic', t_c: 1.8, cost: 0.011 },
+  budget: { color: '#f6ad55', model: 'budget-model', provider: 'anthropic', t_c: 1.78, cost: 0.004 },
 }
 const CONFIG = {
   name: 'fixture',
@@ -855,7 +899,7 @@ const agentDetails = Object.fromEntries(
           importance: 0.8,
           archived: false,
         },
-        ...a.notes.slice(-12).map(({ origin_note_id, origin_agent_id, origin_generation, ...n }) => n),
+        ...a.notes.slice(-12).map(({ origin_note_id: _noteId, origin_agent_id: _agentId, origin_generation: _generation, ...n }) => n),
       ],
       calls: a.calls.map((c) => ({ ...c, coherence: c.text_coherence, cost_usd: c.real_cost_usd, world_cost_usd: c.real_cost_usd, stale_action: 0, degenerate: c.degenerate_induced === 1 })),
       balance_series: a.balanceSeries.filter((_, i) => i % 3 === 0),
@@ -884,4 +928,4 @@ for (const l of lines) {
   const t = JSON.parse(l).type
   counts[t] = (counts[t] ?? 0) + 1
 }
-console.log(`wrote ${lines.length} messages to ${resolve(outDir, 'mock.jsonl')}`, counts)
+console.log(`wrote ${lines.length} messages to ${resolve(outDir, 'mock.jsonl')} and the /api fixture to ${resolve(outDir, 'api.json')}`, counts)
