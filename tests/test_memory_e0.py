@@ -23,12 +23,13 @@ from void.research.compare import compare, render
 ARMS = ("noop", "index_builder", "hoarder", "decoy")
 SEEDS = (1, 2)
 RUN = {"days": 4, "ticks_per_day": 12}
-# E0 and the memory-dependence check (exp_mem_dep_*, which extends exp_mem_e0_base.yaml) are fixed-population
-# controls: their recorded results (MEMORY_EVOLUTION §10.4) are means over six founders. Since the scripted brain
-# follows DESIGN §7.2 (offspring from 2 x min_reserve + endowment, $1.20 in this world's base.yaml economics), the
-# founders' $1.50 would buy a child each on day 1 and mean_balance would mix in newborns. The shipped
-# exp_mem_e0_base.yaml must therefore turn reproduction off (checked below), and this module runs the shipped configs
-# as they are, with no override of its own.
+# E0 and the memory-dependence check (exp_mem_dep_*, which extends exp_mem_e0_base.yaml) are G0's recorded worlds
+# (MEMORY_EVOLUTION §10.4): means over six founders, recorded under the scripted rules from before DESIGN §7.2. Under
+# §7.2 (offspring from 2 x min_reserve + endowment, $1.20 in this world's base.yaml economics) the founders' $1.50
+# would buy a child each on day 1 and mean_balance would mix in newborns, and the random gadget parameter alone
+# moves C1. The shipped exp_mem_e0_base.yaml therefore pins population.scripted_rules to pre_7_2 (checked below; that
+# the pre-7.2 path is the old code is tests/test_scripted_selection.py's golden check), and this module runs the
+# shipped configs as they are, with no override of its own.
 DEPENDENCE_ARMS = ("mem", "amnesic")
 
 
@@ -48,11 +49,13 @@ def _db(path: Path):
     return conn
 
 
-def test_e0_and_the_dependence_check_are_fixed_population_controls() -> None:
+def test_e0_and_the_dependence_check_keep_the_rules_they_were_recorded_under() -> None:
     configs = [CONFIGS / f"exp_mem_e0_{arm}.yaml" for arm in ARMS] + [CONFIGS / f"exp_mem_dep_{arm}.yaml" for arm in DEPENDENCE_ARMS]
     for path in configs:
         cfg = load_config(path)
-        assert cfg.population.reproduction_enabled is False, f"{path.name}: E0 and exp_mem_dep must not reproduce"
+        assert cfg.population.scripted_rules == "pre_7_2", f"{path.name}: G0's worlds keep the pre-7.2 scripted rules"
+        # as recorded: reproduction stays on (create_offspring is in the prompts and priced); the old rule never fires
+        assert cfg.population.reproduction_enabled is True, path.name
 
 
 def test_no_arm_has_offspring(e0_dir: Path) -> None:

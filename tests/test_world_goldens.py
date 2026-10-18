@@ -16,7 +16,8 @@ not use it; re-record a digest only for a deliberate change to the old behaviour
 
 Re-recorded once, deliberately, when the scripted brain started to follow DESIGN §7.2 (offspring from
 2 x min_reserve + endowment under per-parent names, greed-scaled transfers, nudges toward yield-positive weather,
-random gadget parameters, sleep when calls burn more than a forage earns): both worlds now have births.
+random gadget parameters, sleep when calls burn more than a forage earns): both worlds now have births. Run under
+``population.scripted_rules: pre_7_2`` they still reproduce the digests from before (tests/test_scripted_selection.py).
 """
 
 from __future__ import annotations

@@ -4,6 +4,10 @@ Each §7.2 row is checked against a constructed Observation: ``create_offspring`
 endowment, the per-parent names), ``transfer``, ``nudge_weather``, ``use_gadget`` and ``sleep``. Then three births
 from one parent go through the real kernel under three different names, and two identical runs of a world with
 reproduction are byte-identical and have offspring in them.
+
+``population.scripted_rules: pre_7_2`` keeps the rules from before §7.2 for the worlds recorded under them (G0's E0
+arms and dependence check): its rows are checked the same way, and the two golden worlds run under it reproduce the
+digests recorded before this change.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ from typing import Any
 
 import pytest
 from conftest import NO_PROVIDER_TIERS, REPO, SMOKE, deep_merge
+from test_world_goldens import NO_CHILD_PROVIDERS, fingerprint
 
 from void.agents.models import PersonalitySeed
 from void.brain.base import Sampling
@@ -255,3 +260,76 @@ def test_decision_round_trips_through_the_schema() -> None:
     for _, action in utils(b, o).values():
         d = Decision(thought="t", memory_ops=[], action=action)
         assert Decision.model_validate_json(d.model_dump_json()) == d
+
+
+# --- pre_7_2: the rules G0's worlds were recorded under ------------------------------------------------------------------
+PRE = {"population": {"scripted_rules": "pre_7_2"}}
+
+
+def test_pre_7_2_rules_are_the_old_generators() -> None:
+    seed = PersonalitySeed(greed=0.2, sociability=0.9, industriousness=0.7)
+    b = brain(PRE, seed=seed)
+    start = b.cfg.population.starting_balance_usd
+    # create_offspring: only above 1.6 x the starting balance, a quarter of the purse, the parent's first five letters
+    avail = ["idle", "create_offspring"]
+    assert "create_offspring" not in utils(b, obs(balance_usd=round(1.6 * start, 2), available_actions=avail))
+    rich = round(1.6 * start + 0.01, 2)
+    action = utils(b, obs(balance_usd=rich, available_actions=avail))["create_offspring"][1]
+    floor = b.cfg.economy.min_call_reserve_usd * b.cfg.population.min_endowment_calls
+    assert (action.name, action.amount_usd) == ("Ada-1", round(max(floor, 0.25 * rich), 2))
+    long = obs(name="Bartholomew", generation=2, balance_usd=rich, available_actions=avail)
+    assert utils(b, long)["create_offspring"][1].name == "Barth-3"
+    # a fixed transfer to the most stressed neighbour
+    nbs = [NeighbourView("ag_2", "Bao", "scripted", 1.0, "strained", False), NeighbourView("ag_3", "Cyra", "scripted", 3.0, "frantic", False)]
+    action = utils(b, obs(balance_usd=1.3 * start, neighbours=nbs, available_actions=["idle", "transfer"]))["transfer"][1]
+    assert (action.target, action.amount_usd) == ("ag_3", round(0.05 + 0.10 * 0.9, 2))
+    # a fixed nudge up once the weather is below -0.15
+    avail = ["idle", "nudge_weather"]
+    u, action = utils(b, obs(weather=-0.2, weather_label="overcast", available_actions=avail))["nudge_weather"]
+    assert (u, action.delta) == (pytest.approx(0.3 + 0.7), 0.1)
+    assert "nudge_weather" not in utils(b, obs(weather=-0.1, available_actions=avail))
+    # use_gadget: x = 1.0, and the rng is not drawn (the decision's later draws stay where they were)
+    o = obs(gadgets=[GadgetView("gd_1", "g", "ag_9", "p", 0.4)], available_actions=["idle", "use_gadget"])
+    rng = random.Random(5)
+    before = rng.getstate()
+    assert b._utilities(o, seed, rng)["use_gadget"][1].params == {"x": 1.0}
+    assert rng.getstate() == before
+    design = brain(seed=seed)
+    design._utilities(o, seed, rng)
+    assert rng.getstate() != before
+    # sleep ignores the burn rate
+    avail = ["idle", "sleep"]
+    expected = design.expected_forage_usd(obs())
+    assert utils(b, obs(burn_rate_usd_per_tick=expected * 10, available_actions=avail))["sleep"][0] == \
+        utils(b, obs(burn_rate_usd_per_tick=0.0, available_actions=avail))["sleep"][0]
+
+
+# tests/test_world_goldens.py's two worlds as recorded on the code before the scripted brain followed §7.2. Under
+# pre_7_2 the events, calls and ledger must match byte for byte, and metrics.jsonl too once the config hash its
+# identity carries is the old one (the switch is itself a config field, so the hash differs).
+BEFORE_7_2 = {
+    "base": {"config_hash": "f589277f12656996537c99ed2f9968389a7d067d6bb94a5b6683ba201fbc1b51",
+             "metrics": "c2be52a599c4ff3e282ce931ca3145ebef011ed16c5df42991f951192ad5e427",
+             "events": "3f9ddd5211be312b1f17d4af60967f3e0b2a5ed5da5ca61f8511597603993807",
+             "calls": "8e3f88341f07b77eff388dbccc83737e01792e6398cdfb6d6eb13b772ae8c5dc",
+             "ledger": "69cc1acf2f945851cd6d75ee5c73bf715048ae2366f340d9658728b9b5cd7b37"},
+    "amnesic_fog": {"config_hash": "fb105920e6b0993e29971b43cf9f1c984343500dcb33fa8178b837499498c47d",
+                    "metrics": "e26476ceec9018344294c550a42a3c40e45b3b825106081920b882aed01cc72f",
+                    "events": "75e82ce6cb6f8ee827b7293a303f35a15829efc68c589294df1420c6f3686294",
+                    "calls": "f266313eec9dc6d017a7b03951e90880d8ad5943d9958f0f1d69ce93233d7da1",
+                    "ledger": "61b2acd093d556e97364681d40ca452c4b623a9508cab9b1959579be5ff77905"},
+}
+
+
+@pytest.mark.parametrize("world", sorted(BEFORE_7_2))
+def test_pre_7_2_rules_reproduce_the_worlds_recorded_before_7_2(world: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    if world == "base":
+        config, over = REPO / "configs" / "base.yaml", {"run": {"name": "golden_base"}}
+    else:
+        config, over = SMOKE, {"run": {"name": "golden_amnesic_fog"}, "world": {"view_radius": 12.0}, "memory": {"enabled": False}}
+    got = fingerprint(config, deep_merge(deep_merge(NO_CHILD_PROVIDERS, over), PRE), tmp_path / world, monkeypatch)
+    old = BEFORE_7_2[world]
+    assert got["status"] == "completed" and got["config_hash"] != old["config_hash"]
+    assert {k: got[k] for k in ("events", "calls", "ledger")} == {k: old[k] for k in ("events", "calls", "ledger")}
+    metrics = (tmp_path / world / "run" / "metrics.jsonl").read_bytes()
+    assert hashlib.sha256(metrics.replace(got["config_hash"].encode(), old["config_hash"].encode())).hexdigest() == old["metrics"]
