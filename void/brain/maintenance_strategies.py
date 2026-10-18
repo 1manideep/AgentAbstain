@@ -30,9 +30,10 @@ The published-mechanism baselines of §6.13 row 5 (scripted, so they cost what a
   re-date that node); and notes that hold a node's newest reading while another note of the same tick disagrees
   are left alone (the reader settles such a tie by note id, which a strategy does not see). Index notes, kernel
   anchors and vein notes are never merged (a vein note is a dated event whose repetitions are the evidence that a
-  node is vein-prone); a group whose newest member cannot be rewritten verbatim is left alone. The deletes come
-  before the edit, so a vault at its file cap needs no free slot; a group too large for the rest of the batch loses
-  only its oldest members. Only the structure right is needed.
+  node is vein-prone); a group whose newest member cannot be rewritten verbatim, or whose summary would not fit in one
+  file (a cut summary would drop node facts), is left alone. The deletes come before the edit, so a vault at its file
+  cap needs no free slot; a group too large for the rest of the batch loses only its oldest members. Only the
+  structure right is needed.
 * ``revert`` (EvolveMem's revert-on-regression): when the day's income (the F1 feedback, ``outcomes``) fell below
   the day before's (``previous_outcomes``), the policy is restored to its previous version's text
   (``previous_policy_text``) with one policy edit; otherwise nothing. Without both fields, or without an earlier
@@ -368,7 +369,7 @@ def near_duplicate_groups(notes: list[dict[str, Any]], *, cosine: float = DISTIL
 def _distilled_body(ctx: StrategyContext, stem: str, members: list[dict[str, Any]], vault_facts: dict[str, Fact]) -> str:
     """The summary of merged ``members`` (oldest first): for every node they name, the vault's newest fact about it
     (``vault_facts``, not the members' own, which may be older than a note outside the group), and, when members
-    name no node, the newest of those."""
+    name no node, the newest of those. Never cut: the caller leaves a group alone when its summary does not fit."""
     named = _node_facts(members)
     facts = {nid: vault_facts.get(nid, named[nid]) for nid in named}
     lines = [f"# Distilled: {stem or 'notes'} (day {ctx.day})", f"Merged {len(members)} notes; the newest fact per node."]
@@ -378,7 +379,7 @@ def _distilled_body(ctx: StrategyContext, stem: str, members: list[dict[str, Any
         latest = " ".join(content_body(str(factless[-1].get("body", ""))).split())[:MAX_LATEST_CHARS]
         if latest:
             lines.append(f"- Latest: {latest}")
-    return _cut_bytes("\n".join(lines), min(int(ctx.max_file_bytes), MAX_FILE_TEXT))
+    return "\n".join(lines)
 
 
 # --- the strategies ----------------------------------------------------------------------------------------
@@ -513,6 +514,7 @@ def _distill(ctx: StrategyContext, rng: random.Random) -> Plan:
         return all(newest[nid][0] > at or (newest[nid][0] == at and not newest[nid][1]) for nid in _first_mentions(n))
 
     budget = _budget(ctx)
+    limit = min(int(ctx.max_file_bytes), MAX_FILE_TEXT)
     cmds: list[MemoryCommand] = []
     merged = deleted = 0
     for group in groups:
@@ -530,6 +532,8 @@ def _distill(ctx: StrategyContext, rng: random.Random) -> Plan:
         if not sources or not _rewritable(old):
             continue
         body = _distilled_body(ctx, title_stem(str(keeper.get("title", ""))), sources + [keeper], vault_facts)
+        if len(body.encode("utf-8")) > limit:
+            continue  # cut to fit, it would lose the facts of the last nodes it lists
         # the deletes come first: the edit needs no free file slot, and the sources' bytes are freed before it
         cmds += [MemoryCommand(command="delete", path=str(n["path"])) for n in sources]
         if body != old:

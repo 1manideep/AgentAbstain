@@ -1,8 +1,8 @@
 """MEMORY_EVOLUTION 6.13 row 5: the scripted maintenance baselines distill, revert and retire, as E0 arms.
 
 Unit tests pin each strategy's batch on a hand-built :class:`StrategyContext` and apply the batches to a real
-vault and policy store; two three-day scripted runs check that distillation leaves a lower near-duplicate rate
-than the no-op and never changes what the scripted brain's ``node_memory`` reads from a vault; and a seven-arm
+vault and policy store; three-day scripted runs check that distillation leaves a lower near-duplicate rate than the
+no-op and, at three seeds, never changes what the scripted brain's ``node_memory`` reads from a vault; and a seven-arm
 ``exp_mem_e0`` directory at two seeds and two days goes through ``compare``.
 """
 
@@ -179,6 +179,28 @@ def test_distill_leaves_a_group_alone_when_its_newest_member_cannot_be_rewritten
     assert sig == [("delete", _path("bbbbbb")), ("delete", _path("dddddd")), ("str_replace", _path("hhhhhh"))]
 
 
+def test_distill_leaves_a_group_alone_when_its_summary_would_not_fit_in_a_file() -> None:
+    """A summary cut to the file limit loses the facts of the last nodes it lists (cut to half its size, n2's and n3's,
+    which the reader would then forget), so a group whose summary does not fit is not merged at all, even one byte
+    short."""
+    notes = [
+        _note("patrol-on-day-1-aaaaaa", "Patrol on day 1",
+              "Saw [[Node n1]] at (1, 1) on day 1; it was rich. Saw [[Node n2]] at (2, 2) on day 1; it was rich.", 3, PLACES),
+        _note("patrol-on-day-2-bbbbbb", "Patrol on day 2", "Saw [[Node n1]] at (1, 1) on day 2; it was thin. Saw [[Node n2]] "
+              "at (2, 2) on day 2; it was empty. Saw [[Node n3]] at (3, 3) on day 2; it was rich.", 15, PLACES),
+    ]
+    assert near_duplicate_groups(notes) == [notes]
+    merged = plan("distill", _ctx(notes=notes), random.Random(3)).commands
+    assert [(c.command, c.path) for c in merged] == [("delete", notes[0]["path"]), ("str_replace", notes[1]["path"])]
+    assert _reading(_apply_dicts(notes, merged)) == _reading(notes)
+    size = len((merged[1].new_str or "").encode("utf-8"))
+    assert _sig(_ctx(notes=notes, max_file_bytes=size), "distill") == [(c.command, c.path) for c in merged]
+    for limit in (size // 2, size - 1):
+        batch = plan("distill", _ctx(notes=notes, max_file_bytes=limit), random.Random(3)).commands
+        assert _reading(_apply_dicts(notes, batch)) == _reading(notes), limit
+        assert batch == [], limit
+
+
 def _sighting(name: str, title: str, node: str, bucket: str, day: int, tick: int, verb: str = "Saw") -> dict[str, Any]:
     return _note(name, title, f"{verb} [[Node {node}]] at (12, -5) on day {day}; it was {bucket}.", tick, PLACES)
 
@@ -341,13 +363,14 @@ def test_distill_batches_apply_cleanly_and_keep_the_newest_facts(vault: SimpleNa
         if "entity" not in n["tags"]:
             vault.store.remember(AGENT, n["tick"], n["body"], title=n["title"], tags=n["tags"], auto_link=False)
     before, reading = _note_dicts(vault), _vault_reading(vault)
+    assert (reading["n3"].bucket, reading["n3"].as_of) == ("thin", 16)  # the tick-16 vein note names no bucket
     _apply_all(vault, _ctx(notes=before, listing=vault.commands.listing(AGENT)), "distill", 25)
+    assert _vault_reading(vault) == reading  # the reader's status, position and date per node are unchanged
     after = _note_dicts(vault)
     assert len(after) == len(before) - 3 and not any("agent" in n["tags"] for n in after if "index" not in n["tags"])
     kept = {n["title"]: n for n in after}
     assert kept["Node n3 seen empty on day 2"]["body"] == N3_SUMMARY and kept["Node n3 seen empty on day 2"]["tick"] == 14
     assert kept["Bao said something on day 2"]["tick"] == 15  # a summary keeps its member's created tick, title and path
-    assert _vault_reading(vault) == reading  # the reader's status, position and date per node are unchanged
     assert near_duplicate_groups([n for n in after if not {"index", "vein"} & set(n["tags"])]) == []
     # the next night: a fresh sighting joins the summary's stem, and the two are merged again, into the fresh one
     vault.store.remember(AGENT, 30, "Saw [[Node n3]] at (12, -5) on day 3; it was rich.", title="Node n3 seen on day 3", tags=PLACES)
@@ -356,6 +379,27 @@ def test_distill_batches_apply_cleanly_and_keep_the_newest_facts(vault: SimpleNa
     titles = [n["title"] for n in _note_dicts(vault)]
     assert "Node n3 seen on day 3" in titles and "Node n3 seen empty on day 2" not in titles
     assert _vault_reading(vault) == reading and (reading["n3"].bucket, reading["n3"].as_of) == ("rich", 30)
+
+
+def test_distill_keeps_the_readers_status_on_the_reviewed_vault(vault: SimpleNamespace) -> None:
+    """The review's case on a real store: a sighting group and a forage group about one node, their newest buckets
+    differing (n3 empty at tick 20, rich in the forage notes). Checked only through what ``node_memory`` reads from the
+    whole vault after the batch is applied, whatever commands the batch holds: the same bucket and as_of per node."""
+    notes = [
+        _sighting("node-n3-seen-on-day-1-aaaaaa", "Node n3 seen on day 1", "n3", "rich", 1, 1),
+        _sighting("foraging-at-node-n3-on-day-1-bbbbbb", "Foraging at node n3 on day 1", "n3", "rich", 1, 2, "Foraged at"),
+        _sighting("foraging-at-node-n3-on-day-1-2-cccccc", "Foraging at node n3 on day 1-2", "n3", "rich", 1, 10, "Foraged at"),
+        _sighting("node-n3-seen-empty-on-day-2-dddddd", "Node n3 seen empty on day 2", "n3", "empty", 2, 20),
+    ]
+    for n in notes:
+        vault.store.remember(AGENT, n["tick"], n["body"], title=n["title"], tags=n["tags"], auto_link=False)
+    reading = _vault_reading(vault)
+    assert (reading["n3"].bucket, reading["n3"].as_of) == ("empty", 20)
+    _apply_all(vault, _ctx(notes=_note_dicts(vault), listing=vault.commands.listing(AGENT)), "distill", 25)
+    after = _vault_reading(vault)
+    assert {k: (v.bucket, v.as_of) for k, v in after.items()} == {k: (v.bucket, v.as_of) for k, v in reading.items()}
+    assert after == reading
+    assert len(_note_dicts(vault)) == 2  # each group was merged
 
 
 def test_a_distill_batch_needs_no_room_in_a_full_vault(tmp_path: Path) -> None:
@@ -410,6 +454,11 @@ def test_the_new_arm_configs_differ_from_the_noop_only_in_the_strategy() -> None
     for arm in NEW_ARMS:
         assert strip(arm) == noop, arm
     assert load_config(CONFIGS / "exp_mem_e0_distill.yaml").memory.maintenance.scripted_billing == "flat"
+    # R1's index boost is set once, in the E0 base, and every arm inherits it (no arm config names it)
+    boost = load_config(CONFIGS / "exp_mem_e0_base.yaml").memory.index_boost
+    assert boost > 0.0 and {load_config(CONFIGS / f"exp_mem_e0_{arm}.yaml").memory.index_boost for arm in E0_ARMS} == {boost}
+    for arm in NEW_ARMS:
+        assert "index_boost" not in (CONFIGS / f"exp_mem_e0_{arm}.yaml").read_text(), arm
 
 
 def _run(config: Path, out: Path, **run: Any) -> Path:
@@ -421,28 +470,36 @@ def _run(config: Path, out: Path, **run: Any) -> Path:
     return out
 
 
-NIGHTS: list[tuple[str, int, dict[str, Any], dict[str, Any]]] = []  # (agent, day, reading before, reading after)
+WATCHED_SEEDS = (42, 1, 2)  # the near-duplicate comparison's seed and two more
+# per seed: (agent, day, reading before, reading after, notes naming a node before, after) for every agent-night
+NIGHTS: dict[int, list[tuple[str, int, dict[str, Any], dict[str, Any], int, int]]] = {}
 
 
 @pytest.fixture(scope="module")
 def three_days(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    """The 3-day noop run at seed 42 and 3-day distill runs at :data:`WATCHED_SEEDS` (``distill`` is seed 42's); every
+    distill night records what ``node_memory`` reads from the agent's whole vault right before and after its batch."""
     out = tmp_path_factory.mktemp("e0_distill")
     runs = {"noop": _run(CONFIGS / "exp_mem_e0_noop.yaml", out / "noop", days=3, seed=42)}
     original = Maintenance._maintain
 
     async def watched(self: Maintenance, rec: Any, day: int, tick: int, report: Any) -> None:
-        def reading() -> dict[str, Any]:
+        def reading() -> tuple[dict[str, Any], int]:
             notes = self.sim.memory.list_notes(rec.agent_id)
-            return node_memory([RetrievedNote(n.note_id, n.title, n.body, 0.5, 0, None, int(n.created_tick)) for n in notes],
-                               int(self.sim.cfg.run.ticks_per_day))
+            mems = [RetrievedNote(n.note_id, n.title, n.body, 0.5, 0, None, int(n.created_tick)) for n in notes]
+            naming = sum(1 for m in mems if node_memory([m], int(self.sim.cfg.run.ticks_per_day)))
+            return node_memory(mems, int(self.sim.cfg.run.ticks_per_day)), naming
 
-        before = reading()
+        before, naming_before = reading()
         await original(self, rec, day, tick, report)
-        NIGHTS.append((rec.agent_id, day, before, reading()))
+        after, naming_after = reading()
+        NIGHTS.setdefault(int(self.sim.cfg.run.seed), []).append((rec.agent_id, day, before, after, naming_before, naming_after))
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(Maintenance, "_maintain", watched)
-        runs["distill"] = _run(CONFIGS / "exp_mem_e0_distill.yaml", out / "distill", days=3, seed=42)
+        for seed in WATCHED_SEEDS:
+            runs[f"distill_{seed}"] = _run(CONFIGS / "exp_mem_e0_distill.yaml", out / f"distill_{seed}", days=3, seed=seed)
+    runs["distill"] = runs["distill_42"]
     return runs
 
 
@@ -468,11 +525,22 @@ def test_distill_leaves_fewer_near_duplicates_than_the_noop(three_days: dict[str
         assert out == {768}, arm
 
 
-def test_distill_never_changes_what_the_scripted_brain_reads_in_a_run(three_days: dict[str, Path]) -> None:
-    """Over every agent's vault, before and after every night's batch: the same status, position and date per node."""
-    assert NIGHTS and sum(len(before) for _, _, before, _ in NIGHTS) > 0
-    for agent, day, before, after in NIGHTS:
-        assert after == before, (agent, day)
+@pytest.mark.parametrize("seed", WATCHED_SEEDS)
+def test_distill_never_changes_what_the_scripted_brain_reads_in_a_run(three_days: dict[str, Path], seed: int) -> None:
+    """Over every agent's vault, before and after every night's batch: the same newest status (bucket and as_of) per
+    node, and the same position and source too; no node is lost or gained. The batches did merge notes naming nodes."""
+    nights = NIGHTS[seed]
+    assert {day for _, day, *_ in nights} == {2, 3} and sum(len(before) for _, _, before, *_ in nights) > 0  # two nights
+    for agent, day, before, after, *_ in nights:
+        status_before = {nid: (nm.bucket, nm.as_of) for nid, nm in before.items()}
+        status_after = {nid: (nm.bucket, nm.as_of) for nid, nm in after.items()}
+        assert status_after == status_before, (seed, agent, day)
+        assert after == before, (seed, agent, day)
+    assert sum(nb - na for *_, nb, na in nights) > 0, seed  # not vacuous: some batch deleted notes that name a node
+    db = _db(three_days[f"distill_{seed}"])
+    rows = db.execute("SELECT ok FROM memory_commands WHERE purpose='maintain'").fetchall()
+    db.close()
+    assert rows and all(r["ok"] for r in rows), seed
 
 
 @pytest.fixture(scope="module")
