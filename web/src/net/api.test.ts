@@ -195,3 +195,113 @@ describe('form limits', () => {
     expect(bounds('SpeedBody', 'tick_seconds')).toMatchObject({ ge: LIMITS.tickSeconds.min, le: LIMITS.tickSeconds.max })
   })
 })
+
+describe('fixture mode', () => {
+  // FIXTURE_MODE is read when api.ts loads, so each case imports a fresh copy (and the store it reads the run id from)
+  // `api` undefined: there is no api.json (404)
+  async function fixtureModule(api: unknown, runId: string | null = null) {
+    vi.resetModules()
+    vi.stubEnv('VITE_FEED', 'fixture')
+    mockFetch((c) => {
+      if (c.url !== '/fixtures/api.json') return json(404, { detail: 'no server in fixture mode' })
+      return api === undefined ? new Response('', { status: 404 }) : json(200, api)
+    })
+    const mod = await import('./api')
+    const { useStore } = await import('../state/store')
+    useStore.setState({ runId })
+    expect(mod.FIXTURE_MODE).toBe(true)
+    return mod
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+    vi.resetModules()
+  })
+
+  const version = (v: number, tick: number) => ({
+    version: v,
+    tick,
+    source: v === 1 ? 'seed' : 'edit',
+    source_agent_id: null,
+    parent_version: v === 1 ? null : v - 1,
+    similarity_to_parent: null,
+    text: `policy v${v}`,
+  })
+  const event = (i: number) => ({ event_id: `pe${i}`, tick: 100 - i, kind: 'suggested', source_agent_id: 'a1', target_agent_id: 'b 2', excerpt: 'share', similarity: null })
+  const sample = {
+    run_id: 'run-x',
+    agents: {},
+    policy: { a1: { agent_id: 'a1', versions: [version(2, 30), version(1, 0)] }, 'b 2': { agent_id: 'b 2', versions: [] } },
+    memory_summary: { agents: [{ agent_id: 'a1', name: 'Ada', alive: true, notes: 3, links: 1, bytes: 120, policy_source: 'edit', policy_version: 2 }] },
+    practices: { events: [event(0), event(1), event(2)] },
+  }
+
+  it('answers the policy, memory summary and practices routes from api.json', async () => {
+    const { apiGet } = await fixtureModule(sample, 'run-x')
+    expect(await apiGet('/api/agents/a1/policy')).toEqual(sample.policy.a1)
+    expect(await apiGet(`/api/agents/${encodeURIComponent('b 2')}/policy`)).toEqual(sample.policy['b 2'])
+    expect(await apiGet('/api/memory/summary')).toEqual(sample.memory_summary)
+    expect(await apiGet('/api/practices?limit=5000')).toEqual(sample.practices)
+    expect(await apiGet('/api/practices')).toEqual(sample.practices)
+    // a smaller limit keeps the newest rows, as the route does
+    expect(await apiGet('/api/practices?limit=2')).toEqual({ events: [event(0), event(1)] })
+    // nothing reached a server: api.json was fetched once
+    expect(calls.map((c) => c.url)).toEqual(['/fixtures/api.json'])
+  })
+
+  it('answers 404 for an agent without a policy, and when api.json belongs to another run or is missing', async () => {
+    const own = await fixtureModule(sample, 'run-x')
+    const unknown = (await own.apiGet('/api/agents/zz/policy').catch((e: unknown) => e)) as ApiError
+    expect(unknown).toBeInstanceOf(own.ApiError)
+    expect(unknown.status).toBe(404)
+
+    const other = await fixtureModule(sample, 'run-y')
+    for (const path of ['/api/agents/a1/policy', '/api/memory/summary', '/api/practices']) {
+      const e = (await other.apiGet(path).catch((x: unknown) => x)) as ApiError
+      expect(e, path).toBeInstanceOf(other.ApiError)
+      expect(e.status, path).toBe(404)
+    }
+
+    const none = await fixtureModule(undefined, 'run-x')
+    for (const path of ['/api/agents/a1/policy', '/api/memory/summary', '/api/practices']) {
+      const e = (await none.apiGet(path).catch((x: unknown) => x)) as ApiError
+      expect(e, path).toBeInstanceOf(none.ApiError)
+      expect(e.status, path).toBe(404)
+    }
+  })
+
+  it('serves the committed recording: a policy for every agent, the summary and the practices', async () => {
+    const committed = JSON.parse(readFileSync(new URL('../../public/fixtures/api.json', import.meta.url), 'utf8')) as {
+      run_id: string
+      agents: Record<string, unknown>
+      policy: Record<string, { agent_id: string; versions: unknown[] }>
+      memory_summary: { agents: Array<{ agent_id: string }> }
+      practices: { events: unknown[] }
+    }
+    const { apiGet } = await fixtureModule(committed, committed.run_id)
+    const ids = Object.keys(committed.agents).sort()
+    expect(ids.length).toBeGreaterThan(0)
+    for (const id of ids) {
+      const p = await apiGet<{ agent_id: string; versions: unknown[] }>(`/api/agents/${encodeURIComponent(id)}/policy`)
+      expect(p.agent_id).toBe(id)
+      expect(p).toEqual(committed.policy[id])
+    }
+    const summary = await apiGet<{ agents: Array<{ agent_id: string }> }>('/api/memory/summary')
+    expect(summary.agents.map((r) => r.agent_id).sort()).toEqual(ids)
+    expect(await apiGet('/api/practices?limit=5000')).toEqual(committed.practices)
+  })
+
+  it('names the recording command when mock.jsonl is missing', async () => {
+    vi.resetModules()
+    mockFetch(() => new Response('', { status: 404 }))
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { FIXTURE_COMMAND, startFixture } = await import('./fixture')
+    expect(FIXTURE_COMMAND).toBe('void mock-feed --config configs/demo_memory.yaml --ticks 240 --out web/public/fixtures/mock.jsonl')
+    const stop = await startFixture()
+    stop()
+    expect(err).toHaveBeenCalledTimes(1)
+    expect(String(err.mock.calls[0]![0])).toContain(`\`${FIXTURE_COMMAND}\``)
+    expect(String(err.mock.calls[0]![0])).not.toContain('gen:fixture')
+  })
+})

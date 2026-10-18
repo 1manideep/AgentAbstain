@@ -7,7 +7,20 @@
  * In fixture mode GETs are served from /fixtures/api.json and POSTs are no-ops
  * that log.
  */
-import type { AgentDetail, CommandAck, GraveyardResponse, NoteRecord, RunStatus, SelfVersion, SessionResponse, StatusMsg, TreeResponse } from '../protocol'
+import type {
+  AgentDetail,
+  CommandAck,
+  GraveyardResponse,
+  MemorySummaryResponse,
+  NoteRecord,
+  PolicyResponse,
+  PracticesResponse,
+  RunStatus,
+  SelfVersion,
+  SessionResponse,
+  StatusMsg,
+  TreeResponse,
+} from '../protocol'
 import { history, SLOT_STRIDE } from '../state/history'
 import { useStore } from '../state/store'
 import { treeFromRoster } from '../state/lineage'
@@ -112,17 +125,29 @@ async function errorFrom(r: Response, path: string): Promise<ApiError> {
 
 // ------------------------------------------------------------ fixture backing
 
+/**
+ * web/public/fixtures/api.json: the /api answers at the end of the recorded run. `void mock-feed` writes it next to
+ * mock.jsonl (void/cli.py record_feed: agents, tree, graveyard, gadgets, tasks and the memory reads `policy`,
+ * `memory_summary` and `practices`); scripts/gen-fixture.mjs writes a synthetic one with a `session` and without the
+ * memory reads. Every key is optional here, and so is the file: what it lacks is derived from the stream or answered 404.
+ */
 export interface FixtureApi {
   run_id?: string
-  session: SessionResponse
-  tree: TreeResponse
-  agents: Record<string, AgentDetail>
-  graveyard: GraveyardResponse
+  session?: SessionResponse
+  tree?: TreeResponse
+  agents?: Record<string, AgentDetail>
+  graveyard?: GraveyardResponse
+  /** GET /api/agents/{id}/policy per agent id */
+  policy?: Record<string, PolicyResponse>
+  /** GET /api/memory/summary */
+  memory_summary?: MemorySummaryResponse
+  /** GET /api/practices (the route's default limit, newest first) */
+  practices?: PracticesResponse
 }
 
 let fixtureApi: Promise<FixtureApi | null> | null = null
 
-/** api.json is written by scripts/gen-fixture.mjs; a genuine `void mock-feed` recording has none, so it is optional. */
+/** Fetched once; a missing or unreadable api.json leaves fixture mode on the stream-derived answers. */
 function loadFixtureApi(): Promise<FixtureApi | null> {
   if (!fixtureApi) {
     fixtureApi = fetch('/fixtures/api.json')
@@ -181,16 +206,30 @@ function deriveAgentDetail(id: string): AgentDetail {
 async function fixtureGet<T>(path: string): Promise<T> {
   const loaded = await loadFixtureApi()
   const runId = useStore.getState().runId
-  // api.json belongs to the synthetic fixture; ignore it when a different run is playing.
+  // api.json belongs to the recording next to it; ignore it when a different run is playing.
   const api = loaded && (!loaded.run_id || !runId || loaded.run_id === runId) ? loaded : null
-  const clean = path.replace(/^\/api\//, '').split('?')[0]!
+  const [clean = '', query = ''] = path.replace(/^\/api\//, '').split('?')
   if (clean === 'session') return (api?.session ?? { token: 'fixture-token' }) as T
   if (clean === 'tree') return (api?.tree ?? { roots: treeFromRoster(useStore.getState().roster) }) as T
   if (clean === 'graveyard') return (api?.graveyard ?? { agents: [] }) as T
   const m = /^agents\/([^/]+)$/.exec(clean)
   if (m) {
     const id = decodeURIComponent(m[1]!)
-    return (api?.agents[id] ?? deriveAgentDetail(id)) as T
+    return (api?.agents?.[id] ?? deriveAgentDetail(id)) as T
+  }
+  const pol = /^agents\/([^/]+)\/policy$/.exec(clean)
+  if (pol) {
+    const id = decodeURIComponent(pol[1]!)
+    const p = api?.policy?.[id]
+    if (p) return p as T
+    throw new ApiError(404, `fixture has no policy for ${id}`)
+  }
+  if (clean === 'memory/summary' && api?.memory_summary) return api.memory_summary as T
+  if (clean === 'practices' && api?.practices) {
+    // recorded with the route's default limit; a smaller ?limit= keeps the newest rows, like the route
+    const limit = Number(new URLSearchParams(query).get('limit'))
+    const events = api.practices.events
+    return (Number.isInteger(limit) && limit >= 1 && limit < events.length ? { events: events.slice(0, limit) } : api.practices) as T
   }
   if (clean === 'events') return { events: [], last_seq: 0 } as T
   if (clean === 'metrics') return { metrics: [], days: [] } as T
