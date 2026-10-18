@@ -13,21 +13,35 @@ uv venv .venv && VIRTUAL_ENV=.venv uv pip install -e ".[dev]"
 cd web && npm install && npm run build && cd ..
 ```
 
+## Output roots
+
+Two roots, both gitignored:
+
+- `runs/` for everything free (scripted brains): pass `--out runs` to `void run`, `void serve`, `void transplant` and `void generations`. One run lands in `runs/<run.name>/`; a seed sweep (`--seeds`) in `runs/<experiment>/<arm>/seed_<n>/`, which is the experiment directory `compare`, `report`, `gates.py` and `mem_diagnosis.py` read (`runs/<experiment>`).
+- `data/live/` for everything that spends real money. `scripts/live_claude.sh` writes there by default, and every live budget check counts the runs under it whatever `--out` says.
+
+Without `--out`, `void run`, `void serve`, `void transplant` and `void generations` write to the config's `run.data_dir` (`data/runs/` in `base.yaml`) and `void compare --exp NAME` looks in `data/runs/`; the commands below always pass `--out` (or a directory) so nothing lands there by accident.
+
 ## Run
 
 | Goal | Command |
 |---|---|
-| Watch a scripted world | `.venv/bin/void serve --config configs/demo.yaml` then open `http://127.0.0.1:8000` (add `--paused` to start paused, `--tick-seconds 1` to slow it, `--static web/dist` if you built elsewhere) |
+| Watch a scripted world | `.venv/bin/void serve --config configs/demo.yaml --out runs` then open `http://127.0.0.1:8000` (add `--paused` to start paused, `--tick-seconds 1` to slow it, `--static web/dist` if you built elsewhere) |
 | Frontend only, no server | `cd web && VITE_FEED=fixture npm run dev` (replays the recorded fixture) |
-| Headless scripted run | `.venv/bin/void run --config configs/scripted_smoke.yaml --days 3 --out data/runs` |
-| Live two-tier run | `ANTHROPIC_API_KEY=... .venv/bin/void serve --config configs/live_two_tier.yaml` |
-| Live Gemini capability ladder (ten agents, 1/2/4/2/1 by a normal distribution) | `GEMINI_API_KEY=... .venv/bin/void serve --config configs/live_gemini_ladder.yaml` (the resolved rungs print at start; `--seed 7` moves the genius) |
-| Resume a run | add `--resume` (a run whose tick counter is behind its metered calls is marked `inconsistent` and refuses) |
+| Headless scripted run | `.venv/bin/void run --config configs/scripted_smoke.yaml --days 3 --out runs` |
+| Live two-tier run (paid) | `ANTHROPIC_API_KEY=... .venv/bin/void serve --config configs/live_two_tier.yaml --out data/live --budget-usd 60` (a paid Anthropic tier is refused without `--budget-usd`; reserve the run in the spend ledger first, as under "Watch the demo in the 3D viewer" below) |
+| Live Gemini capability ladder (ten agents, 1/2/4/2/1 by a normal distribution; paid) | `GEMINI_API_KEY=... .venv/bin/void serve --config configs/live_gemini_ladder.yaml --out data/live` (the resolved rungs print at start; `--seed 7` moves the genius) |
+| Run the same world again | a run directory that already holds a run is never started over silently: without a flag the command prints `run dir ... already holds a run: pass --resume to continue it, --fresh to archive it and start over, or --out DIR` and exits 2 |
+| Resume a run | add `--resume` (same config and seed: the config hash is checked; a finished run reopens as it ended and runs no tick; a run whose tick counter is behind its metered calls is marked `inconsistent` and refuses) |
+| Start over | add `--fresh`: the existing directory is renamed to `<dir>.prev-<n>` (the first free `n`) and a new run starts |
 | Slow down or pause | in the control room, or `POST /api/control/speed {"tick_seconds": 1.5}`, `/pause`, `/resume`, `/step` |
 | Export protocol schemas | `.venv/bin/void schema --out schemas/` |
-| Record a fixture for the frontend | `.venv/bin/void mock-feed --config configs/demo_memory.yaml --ticks 240 --out web/public/fixtures/mock.jsonl` (the committed fixture; `demo_memory` turns the memory layer on so the feed carries maintenance, policy and exam events) |
-| Inspect a run | `.venv/bin/void inspect --run-dir data/runs/demo --tree` (also `--money`, `--events N`, `--reindex`) |
-| Evolving-memory layer (fog, policy file, nightly maintenance, audit exam) | see the section below; configs `exp_mem_e0_*.yaml` (scripted controls) and `live_mem_e1_*.yaml` (the pilot) |
+| Record a fixture for the frontend | `.venv/bin/void mock-feed` (defaults `--config configs/demo_memory.yaml --ticks 240 --out web/public/fixtures/mock.jsonl`: it rewrites the committed fixture and its `api.json`; `demo_memory` turns the memory layer on so the feed carries maintenance, policy and exam events; pass `--out` elsewhere to keep the committed one) |
+| Inspect a run | `.venv/bin/void inspect --run-dir runs/demo --tree` (also `--money`, `--events N`, `--policy AGENT`, `--memory-commands N`, `--maintenance`, `--exams`, `--reindex`) |
+| Summarize a run | `.venv/bin/void analyze runs/demo --json` (as `scripts/analyze.py`) |
+| Export a run | `.venv/bin/void export runs/demo` (see "Export and the data card" below) |
+| Report on a run or an experiment | `.venv/bin/void report runs/demo --out runs/demo/report.html` (one static HTML file; an experiment directory gives the comparison) |
+| Evolving-memory layer (fog, policy file, nightly maintenance, audit exam) | see the section below; configs `exp_mem_dep_*`, `exp_mem_e0_*`, `exp_mem_e2_*`, `exp_mem_e3a`, `exp_mem_e4s_*`, `exp_mem_e5_eval` (scripted) and `live_mem_e1_*`, `live_mem_e4_*` (paid) |
 
 The server prints the operator token once at startup (or set `VOID_OPERATOR_TOKEN`). The web app fetches it from `/api/session`, which only answers same-origin requests; every POST needs `Authorization: Bearer <token>`.
 
@@ -41,27 +55,44 @@ The server prints the operator token once at startup (or set `VOID_OPERATOR_TOKE
 ## Run directory layout
 
 ```
-data/runs/<name>/
-  world.db               agents, ledger, llm_calls, events, notes index, tasks, gadgets, snapshots, metrics
-  config.resolved.yaml   the exact config (its sha256 is in the run table)
-  metrics.jsonl          one row per tick plus one per day, each with run_id, seed, config_hash, experiment, arm
-  vaults/<agent_id>/     self.md and notes/*.md (open the folder in Obsidian)
-  graveyard/<agent_id>/  vaults of dead agents
-  chronicle/day_NNN.md   the town record
-  gadgets/<gadget_id>/   verified and rejected gadget sources (hash-pinned)
+runs/<name>/               one run (a sweep: runs/<experiment>/<arm>/seed_<n>/)
+  world.db                 agents, ledger, llm_calls, events, notes index, tasks, gadgets, snapshots, metrics
+  config.resolved.yaml     the exact config (its sha256 is in the run table)
+  metrics.jsonl            one row per tick plus one per day, each with run_id, seed, config_hash, experiment, arm
+  vaults/<agent_id>/       self.md, notes/*.md and memory_policy.md (open the folder in Obsidian)
+  graveyard/<agent_id>/    vaults of dead agents
+  chronicle/day_NNN.md     the town record
+  gadgets/<gadget_id>/     verified and rejected gadget sources (hash-pinned)
+  export/                  written by `void export` (one file per table and manifest.json)
+  transplant.json          E5 runs only: what was transplanted into whom
 ```
 
 ## Experiments
 
-Each `configs/exp_*.yaml` extends `base.yaml`, declares its `experiment` block (name, arm, independent variables, primary and secondary outcomes) and runs in `entropy.degeneration.mode: observe`. Run every arm over the same seeds, then compare:
+Each `configs/exp_*.yaml` extends `base.yaml`, declares its `experiment` block (name, arm, independent variables, primary and secondary outcomes, and for some the pre-registered hypotheses) and runs in `entropy.degeneration.mode: observe`. Run every arm over the same seeds, then compare:
 
 ```bash
 for arm in a b; do .venv/bin/void run --config configs/exp_tiers_$arm.yaml --seeds 1-10 --out runs; done
-.venv/bin/python scripts/compare.py runs/exp_tiers
+.venv/bin/python scripts/compare.py runs/exp_tiers           # or: .venv/bin/void compare runs/exp_tiers
 .venv/bin/python scripts/analyze.py runs/exp_tiers/a/seed_1 --json
+.venv/bin/void report runs/exp_tiers --out runs/exp_tiers/report.html
 ```
 
-`compare` refuses runs whose configs differ outside the declared independent variables, whose seed sets differ, or that were not run in `observe` mode. It pairs arms by seed and reports the primary outcome first with n, paired delta, Cohen's d_z, a paired-bootstrap 95% CI and a sign test; secondaries are flagged exploratory.
+`compare` pairs arms by seed and reports the primary outcome first with n, paired delta, Cohen's d_z, a paired-bootstrap 95% CI and a sign test; secondaries are flagged exploratory. It prints `refused: <reason>` and exits 2, computing nothing, when
+
+- the seed sets differ between arms, or two runs of one arm differ outside `run.seed`;
+- an arm was not run in `entropy.degeneration.mode: observe`;
+- the resolved configs differ at any path outside the arms' declared `experiment.independent_variables` (`run.name` and `experiment.arm` are always allowed); for the `exp_tiers`, `exp_scarcity`, `exp_ladder` and `exp_mem` families `economy.world_pricing` must be `equalized`, and `exp_ladder` and `exp_gate` need `population.tier_mutation_prob: 0`;
+- the arms disagree on `experiment.hypotheses`;
+- any run is incomplete: its status is not `completed` (`capped_total`, `extinct`, `inconsistent`, `failed`, or `running` after a crash), or its metrics stop before the last tick or are cut short.
+
+`--allow-incomplete` (both `scripts/compare.py` and `void compare`) drops every seed pair that touches an incomplete run instead, lists the dropped runs in the warnings, and still refuses when a pair of arms has no complete seed in common.
+
+Pre-registered hypotheses (`experiment.hypotheses`: `exp_mem_dep_base.yaml`, `exp_mem_e0_base.yaml`, `live_mem_e1_base.yaml`; `exp_mem_e5_eval.yaml` clears the list it would inherit) are decided on the paired per-seed differences and printed as one `PASS` or `FAIL` line each, with Holm's adjustment across the primary ones (the rules are in the docstring of `void/research/compare.py`). `scripts/compare.py --hypotheses-only` prints only those lines (with `--json`, their rows) and turns them into the exit code: 0 when no primary hypothesis fails (also when none is registered), 1 when one fails, 2 when the comparison is refused.
+
+```bash
+.venv/bin/python scripts/compare.py runs/exp_mem_e0 --hypotheses-only; echo "exit $?"
+```
 
 ## The evolving-memory layer
 
@@ -69,13 +100,14 @@ The thin slice of [docs/research/MEMORY_EVOLUTION.md](research/MEMORY_EVOLUTION.
 
 | Switch | What it does | Where to look afterwards |
 |---|---|---|
-| `run.log_prompts: true` (default) | stores the full user turn, a hash of the system prompt (`prompt_texts`) and the observation as JSON on every `llm_calls` row | `SELECT prompt_text, observation FROM llm_calls`; `void.research.export.export_run(run_dir)` writes every table to CSV or Parquet |
+| `run.log_prompts: true` (default) | stores the full user turn, a hash of the system prompt (`prompt_texts`) and the observation as JSON on every `llm_calls` row | `SELECT prompt_text, observation FROM llm_calls`; `void export RUN_DIR` writes every table to CSV or Parquet (below) |
 | `world.view_radius: 12.0` | fog of war: nodes and inhabitants beyond the radius are not listed; a node's entity stub is created on first sight, never at birth; scripted agents move to remembered node positions | `events` kind `move`; `notes` tagged `entity` per agent equal the nodes it has seen |
 | `world.claim_feedback_p: 0.5` | after a checkable false claim the listener hears, with that probability, that it was false | `events` kinds `claim` and `claim_feedback`; `[feedback]` lines in the heard section of the prompt |
 | `memory.enabled: false` | the amnesic control: `remember` is dropped and nothing is retrieved; the self-summary stays | no `remember` events, only `entity` notes |
 | `memory.policy.enabled: true` | each agent owns `vaults/<id>/memory_policy.md`, seeded from `seed: blank | default | diverse` and inherited at birth; shown fenced in the user turn under "Your memory policy (written by you)" with the one system-prompt carve-out | `policy_versions` (one row per version with source and similarity to the parent) |
 | `memory.maintenance.enabled: true` | one paid structured call per living agent between days: the model (or a scripted strategy, `tiers.<scripted>.maintenance_strategy`) returns a batch of memory commands applied under `rights` | `llm_calls` purpose `maintain`, ledger kind `maintenance_call`, `memory_commands`, events `maintenance` / `maintenance_skipped` / `memory_command` |
 | `memory.exam.enabled: true` | the audit exam: questions generated from what the agent was shown `delay_days` earlier, graded by exact match, never rewarded, provider calls paid by `economy.research_pool_usd` | `exam_items`, `exam_answers`, operator events `exam_asked` / `exam_answered`; outcomes `exam_score`, `exam_abstain_rate` |
+| `memory.selection` (`arm: A` or `B`, `canary.enabled`) | canary facts: one templated fact a day printed unmarked in the chronicle and recorded kernel-side; arm B also asks a daily reward exam about canaries at least `reward_delay_days` old and pays `recall_reward_usd` per correct answer from the research pool | `canary_facts`, ledger kind `recall_reward`; outcomes `reward_exam_accuracy`, `goodhart_gap`, `recall_reward_usd_total` |
 
 The six memory commands (`view`, `create`, `str_replace`, `insert`, `delete`, `rename`) match the shape of Anthropic's memory tool; paths are virtual (`/memories/notes/`, `/memories/index/`, `/memories/memory_policy.md`, `/memories/self.md`) and confined to the agent's own vault (`void.memory.commands.resolve_path`). The database row stays authoritative for provenance; every kernel write is hashed into `note_manifest`, and `reindex` believes a file only when the hash matches (a hand edit in Obsidian is admitted as channel `operator`, not hidden).
 
@@ -93,14 +125,76 @@ for arm in noop index_builder hoarder decoy; do .venv/bin/void run --config conf
 .venv/bin/python scripts/compare.py runs/exp_mem_e0        # primary: mean_balance; pre-registered: index_builder > noop > hoarder (decoy: proposal §6.2)
 ```
 
+**E0's maintenance baselines** (scripted, free; proposal 6.13 row 5): three more strategies in the same world, each an arm of `exp_mem_e0`. `distill` merges near-duplicate notes (same title stem, or cosine at least 0.9) into the newest one; `revert` restores the previous policy version after a day whose income fell (in E0 nothing else edits the policy, so it pays what `noop` pays); `retire` deletes the oldest notes beyond a cap of 40, index notes and kernel anchors exempt. Run them into the same experiment directory, so `compare` sets them against the four controls (the gate below reads only `noop`, `index_builder`, `hoarder` and `decoy`):
+
+```bash
+for arm in distill revert retire; do .venv/bin/void run --config configs/exp_mem_e0_$arm.yaml --seeds 1-20 --tick-seconds 0 --out runs; done
+.venv/bin/python scripts/compare.py runs/exp_mem_e0
+```
+
+**Gate G0, and the diagnosis** (free, from the runs above). `scripts/gates.py` evaluates G0's four conditions (proposal 5.2, 6.2): C1 memory dependence (`mem` over `amnesic`), C2 the index builder over the no-op with power at least 0.8, C3 the hoarder below the no-op, C4 the decoy not above the no-op on balance but above it on policy length. Each condition reads its margin (and C2 its power) from the hypotheses the configs declare and names the file that declares them. It prints one line per condition and a G0 line, and exits 0 when every condition passes, 1 when any fails, 2 when none fails but one could not be evaluated (an arm without completed runs, too few pairs, runs refused). G0 does not pass on scripted brains (section 10.4 has the numbers); the command exits 1.
+
+```bash
+.venv/bin/python scripts/gates.py runs                         # reads runs/exp_mem_dep and runs/exp_mem_e0
+.venv/bin/python scripts/gates.py runs --live data/live        # C1 on the live dependence stages of the Claude test instead
+.venv/bin/python scripts/gates.py runs --g1 data/live/exp_mem_e1   # also gate G1 on the E1 pilot (arms a0, a, b, c)
+```
+
+`--experiments DEP,E0` names other experiment directories, `--allow-incomplete` drops the seed pairs that touch an incomplete run (listed on stderr), `--json` prints the result as JSON. `scripts/mem_diagnosis.py` gives the 10.4 diagnosis of a dependence experiment: per quantity (foraging income, decision-call cost, input tokens per decision, end balance) both arms' means, the paired difference with its bootstrap interval and `d_z`, and the break-even income rise memory would need to pay for itself. `--sweep OUT` also runs the free 10.4 sweep of node capacity, regrowth and view radius on scripted brains (it refuses any config with a paid tier) and tabulates it. Exit 0 when the table was produced, 2 when the runs were refused or missing.
+
+```bash
+.venv/bin/python scripts/mem_diagnosis.py runs/exp_mem_dep
+.venv/bin/python scripts/mem_diagnosis.py runs/exp_mem_dep --sweep runs/mem_sweep --sweep-seeds 1-10 --jobs 4
+```
+
+**E2, which selection signal** (scripted, free; proposal 6.4): the E0 world under the DESIGN 7.2 scripted rules (the founders reproduce from day 1), with canary facts in the chronicle. The arms differ only in `memory.selection.arm`: `a` rewards nothing beyond survival, `b` pays $0.02 per correct reward-exam answer about canaries at least two days old. Primary `exam_accuracy`; `reward_exam_accuracy` is the manipulation check and `goodhart_gap` the Goodhart measure. Scripted brains abstain on the reward exam, so arm `b` pays nothing here: the scripted run checks the plumbing (canaries, reward exam, payments, outcomes, compare), not an effect.
+
+```bash
+for arm in a b; do .venv/bin/void run --config configs/exp_mem_e2_$arm.yaml --seeds 1-20 --tick-seconds 0 --out runs; done
+.venv/bin/python scripts/compare.py runs/exp_mem_e2
+```
+
+**E5, the practice transplant** (scripted, free; proposal 6.7): `void transplant` copies a donor run's live notes and current memory policy into the first `--recipients` (default 3) agents of the evaluation world `configs/exp_mem_e5_eval.yaml` (E0 cut to three days, every agent on the no-op maintenance strategy), once per condition and seed. The conditions are the arms: `none`, `policy`, `vault`, `both`, and the faithfulness controls `shuffled` (the policy's lines in another order) and `inverted` (each imperative bullet negated). `--donors richest | all | names:A,B` picks the donor agents (default the richest). Runs land in `runs/exp_mem_e5/<condition>/seed_<n>/`, each with a `transplant.json` manifest; a completed run with the same config and transplant is skipped, anything else already there makes the exit status 2.
+
+```bash
+.venv/bin/void transplant --donor-run runs/exp_mem_e0/index_builder/seed_1 --conditions none,both,shuffled --seeds 1-20 --out runs
+.venv/bin/python scripts/compare.py runs/exp_mem_e5
+```
+
+**E3a, generations** (scripted, free; proposal 6.5): `void generations` chains worlds of `configs/exp_mem_e3a.yaml` (twelve agents, three days, the E5 world with diverse seed policies and no in-world births). After each generation the top half by end balance survive with their notes and policies, and each dead slot holds a child with a survivor's policy: arm `oblique` adds the survivors' most common bullet the parent lacks, arm `vertical` copies it verbatim. Generation `g` of seed `n` is an ordinary run at `runs/exp_mem_e3a/<arm>/seed_<n>/gen_<g>/`; `seed_<n>/generations.json` holds the cohort-by-generation rows and `<arm>/summary.json` the slopes on generation across seeds. `--plant NAME=BULLET` appends a bullet to a founder's policy in generation 0; `--days` shortens the worlds for a smoke run.
+
+```bash
+.venv/bin/void generations --arms oblique,vertical --generations 10 --seeds 1-10 --out runs
+```
+
+**E4's scripted mirror** (free; proposal 6.6): the E4 design (the five-rung capability ladder crossed with the memory condition) on scripted rungs, so the whole pipeline runs for $0. Arms `default` (no policy, no maintenance), `selfedit` (policy file plus nightly maintenance by the planted `index_builder` strategy) and `flat_tariff` (`selfedit` with output free in-world and one price per input token). A full-length run of one arm takes about a minute. It tests the arms, billing and compare, not the hypothesis: no scripted rung thinks, and scripted agents do not need memory (10.4). The paid arms, `live_mem_e4_*.yaml`, wait for gate G3 (stage S3 of 10.4) and never run under the live Claude budget.
+
+```bash
+for arm in default selfedit flat_tariff; do .venv/bin/void run --config configs/exp_mem_e4s_$arm.yaml --seeds 1-5 --tick-seconds 0 --out runs; done
+.venv/bin/python scripts/compare.py runs/exp_mem_e4s
+```
+
 **The live pilots** (need `GEMINI_API_KEY`; prices in `base.yaml` are list prices to verify before paying; every run is capped by `economy.total_cap_usd`):
 
 | Pilot | Command | Rough cost `[estimate]` |
 |---|---|---|
-| Scarcity and deception on a live tier (`sharp`), 10 seeds | `for arm in high low; do .venv/bin/void run --config configs/live_scarcity_$arm.yaml --seeds 1-10 --out data/exp; done` then `scripts/compare.py data/exp/exp_scarcity_live` | about $30 (about $5 on `average`) |
-| E1, does self-directed memory help (`average`), 10 seeds x 4 arms | `for arm in a0 a b c; do .venv/bin/void run --config configs/live_mem_e1_$arm.yaml --seeds 1-10 --out data/exp; done` then `scripts/compare.py data/exp/exp_mem_e1` | about $100 |
+| Scarcity and deception on a live tier (`sharp`), 10 seeds | `for arm in high low; do .venv/bin/void run --config configs/live_scarcity_$arm.yaml --seeds 1-10 --out data/live; done` then `scripts/compare.py data/live/exp_scarcity_live` | about $30 (about $5 on `average`) |
+| E1, does self-directed memory help (`average`), 10 seeds x 4 arms | `for arm in a0 a b c; do .venv/bin/void run --config configs/live_mem_e1_$arm.yaml --seeds 1-10 --out data/live; done` then `scripts/compare.py data/live/exp_mem_e1` and `scripts/gates.py runs --g1 data/live/exp_mem_e1` | about $100 |
 
 Read the E1 result in this order (section 6.3 of the proposal): `a` must beat `a0` (memory matters under fog at all), then `c` versus `b` is the question; `c` versus `a` is the effect net of its cost.
+
+## Export and the data card
+
+`void export RUN_DIR` writes one file per table of `world.db` (every table; the per-tick `snapshots` are left out) plus `exam_items_answers` (each exam question joined with its answer) to `RUN_DIR/export/`, or `--out DIR`. `manifest.json` beside them is the data card: run id, config hash, seed, status and schema version; the distinct served model strings of `llm_calls`; the code commit and dirty flag recorded when the run was created; the format; per table its row count, file and columns (declared type and the storage classes present); how the tables join; and what was left out (`run.operator_token_hash` is redacted). The system prompts are in `prompt_texts` and every user turn in `llm_calls.prompt_text`, so any logged call can be rebuilt from the export alone. `void.research.export.read_export(out_dir, table)` reads either format back with the original Python types.
+
+```bash
+.venv/bin/void export runs/demo                         # Parquet when pyarrow is importable, else CSV
+.venv/bin/void export runs/demo --format csv --out runs/demo/csv
+VIRTUAL_ENV=.venv uv pip install -e ".[export]"         # the export extra (pyarrow), needed for Parquet
+.venv/bin/void export parquet runs/demo                 # the same as --format parquet; exit 2 with a hint without the extra
+```
+
+The CSV is lossless: RFC 4180, UTF-8, a header row, every string (and every BLOB, as hex) quoted, numbers unquoted and NULL an empty unquoted field, so NULL and the empty string stay distinct. The export reads `world.db` in one transaction, so a live run exports a consistent snapshot.
 
 ## Live Claude test
 

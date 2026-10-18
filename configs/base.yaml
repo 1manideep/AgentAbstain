@@ -229,7 +229,7 @@ memory:
     inherit: true
   maintenance:             # the paid nightly maintenance call (MEMORY_EVOLUTION §5.6)
     enabled: false
-    mode: forced           # forced | optional
+    mode: forced           # forced (optional is not built)
     rights: [notes, policy, structure]   # [notes] = the equal-compute "summarize your day" control
     feedback: F1           # F0 none | F1 day outcomes | F2 outcomes plus retrieval diagnostics
     payer: agent           # agent | research_pool
