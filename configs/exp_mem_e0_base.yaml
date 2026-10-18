@@ -67,5 +67,31 @@ agents:
 experiment:
   name: exp_mem_e0
   independent_variables: [tiers.scripted.maintenance_strategy]
+  # mean_balance stays primary here, not lineage fitness F_L (MEMORY_EVOLUTION 4 and 6.3): in this 6-day scripted
+  # world nobody dies and nobody is born after the roster (pre_7_2 rules, offspring only above 1.6 x the starting
+  # balance), so every agent lives all 6 days, F_L is exactly 6.0 agent-days in every run of every arm, and net worth
+  # is mean_balance. Checked on the 20-seed G0 runs (seeds 1-20 of the four arms above and both dependence arms, 120
+  # runs): no death event, no agent with a parent, lineage_fitness 6.0 and max_generation 0 in every run, net worth
+  # within $0.0001 of mean_balance. F_L and net worth stay as secondaries so a change that brought deaths or births
+  # into these worlds would show.
   primary_outcome: mean_balance
-  secondary_outcomes: [exam_score, probe_recall, notes_by_channel.observed, invalid_action_rate]
+  secondary_outcomes: [exam_score, probe_recall, notes_by_channel.observed, invalid_action_rate, lineage_fitness, net_worth,
+                       exam_accuracy_over_baseline, memory_spend_share, policy_chars, near_duplicate_rate, index_coverage,
+                       empty_retrieval_rate]
+  # G0's E0 conditions (MEMORY_EVOLUTION 6.2), as scripts/compare.py and scripts/gates.py read them; every effect is
+  # arm_b - arm_a, paired by seed. 6.2 fixes the conditions but states no margin, so each margin is 0 (plain
+  # superiority or non-superiority) [assumption]. Holm runs over the three on fitness; the text metric is not a
+  # finding, only the decoy's manipulation check, so it is exploratory.
+  hypotheses:
+    # C2, positive control: "detects index builder over no-op with power at least 0.8 at 20 seeds"
+    - {name: index_builder_over_noop, arm_a: noop, arm_b: index_builder, outcome: mean_balance, kind: superiority,
+       direction: greater, margin: 0.0, min_power: 0.8}
+    # C3, negative control: "ranks hoarder below no-op", read as a significant ranking
+    - {name: hoarder_below_noop, arm_a: noop, arm_b: hoarder, outcome: mean_balance, kind: superiority, direction: less,
+       margin: 0.0}
+    # C4, metric check as revised in 6.2 before any paid run: the decoy does not beat the no-op on fitness ...
+    - {name: decoy_not_above_noop, arm_a: noop, arm_b: decoy, outcome: mean_balance, kind: non_superiority,
+       direction: greater, margin: 0.0}
+    # ... while the naive text metric ranks it above the no-op
+    - {name: decoy_text_metric_above_noop, arm_a: noop, arm_b: decoy, outcome: policy_chars, kind: superiority,
+       direction: greater, margin: 0.0, primary: false}

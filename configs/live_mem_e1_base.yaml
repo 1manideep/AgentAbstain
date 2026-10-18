@@ -1,11 +1,11 @@
 # E1 shared world (docs/research/MEMORY_EVOLUTION.md §6.3): does self-directed memory help? Ten agents on one
-# live Gemini rung under fog with claim feedback, 10 days x 24 ticks, equalized pricing, observe mode, exams
-# every day about two days back (paid by the research pool). The four arms differ ONLY in the memory layer:
+# live rung (`average`, from base.yaml) under fog with claim feedback, 10 days x 24 ticks, equalized pricing, observe
+# mode, exams every day about two days back (paid by the research pool). The four arms differ ONLY in the memory layer:
 #   a0  amnesic (memory.enabled false): no notes, nothing retrieved; the memory-dependence check
 #   a   the default scaffold: per-tick notes and kernel retrieval, no policy, no maintenance
 #   b   equal-compute control: a nightly "summarize your day" call with the notes right only
 #   c   policy plus maintenance at C2 (notes, policy, structure), the main condition
-# Cost `[estimate, prices unverified]`: on `average` (gemini-3.1-flash-lite, no thinking) a decision is about
+# Cost `[estimate, prices unverified]`: on the `average` rung (no thinking) a decision is about
 # $0.0008, a maintenance call about $0.003 and an exam call about $0.001; 10 agents x 240 ticks plus 90
 # maintenance and 270 exam calls is about $2.4 per run, so about $100 for 10 seeds x 4 arms (arm a0 and a
 # have no maintenance). The pilot in the proposal (section 10.4, S1) budgets about $70 for this.
@@ -48,5 +48,31 @@ agents:
 experiment:
   name: exp_mem_e1
   independent_variables: [memory.enabled, memory.policy.enabled, memory.maintenance.enabled, memory.maintenance.rights]
-  primary_outcome: mean_balance
-  secondary_outcomes: [exam_score, exam_abstain_rate, false_claim_rate, notes_by_channel.observed]
+  # MEMORY_EVOLUTION 6.3: "F_L primary; audit exam, net worth, memory spend secondary". Lineage fitness F_L (agent-days
+  # summed over a founder's lineage, averaged over founders; void/research/outcomes/lineage.py) counts every agent the
+  # run held, so it is not biased by who survives the way mean_balance (the living only) is; mean_balance is kept as a
+  # secondary for comparison with E0 and the dependence check.
+  primary_outcome: lineage_fitness
+  secondary_outcomes: [mean_balance, net_worth, exam_score, exam_accuracy_over_baseline, exam_abstain_rate,
+                       memory_spend_share, cost_per_correct_recall, maintenance_valid_command_rate, false_claim_rate]
+  # The pre-registered contrasts of 6.3 (every effect arm_b - arm_a, paired by seed, on F_L). Holm runs over the two
+  # primary ones. Margins are 0 (plain superiority) where 5.2 and 6.3 state none [assumption].
+  hypotheses:
+    # a over a0: the memory-dependence check of 5.2 inside E1 ("a above a0 by construction of the fog")
+    - {name: memory_dependence, arm_a: a0, arm_b: a, outcome: lineage_fitness, kind: superiority, direction: greater,
+       margin: 0.0}
+    # c over b: H1, agent-authored practice beyond equal compute. G1 (10.2) also asks for d_z of at least 0.5 at
+    # 10 seeds in the pilot; scripts/gates.py --g1 checks that, with the maintenance valid-command rate of at least 0.9
+    - {name: h1_self_edit_over_equal_compute, arm_a: b, arm_b: c, outcome: lineage_fitness, kind: superiority,
+       direction: greater, margin: 0.0}
+    # c over a: the nightly edit net of its cost (exploratory)
+    - {name: self_edit_over_scaffold, arm_a: a, arm_b: c, outcome: lineage_fitness, kind: superiority,
+       direction: greater, margin: 0.0, primary: false}
+    # Claims of no effect need an equivalence test with a stated margin (6.11). H1 (section 4) states "0.25 SD", read
+    # here as 0.25 SD of the paired differences, the unit compare offers [assumption]. Two claims of no effect are
+    # possible: "if a matches c, the nightly edit is not earning its cost" (6.3), and H1's "no benefit" (c against b).
+    # A pass supports the claim of no effect within the margin; a failure is not evidence of an effect.
+    - {name: self_edit_matches_scaffold, arm_a: a, arm_b: c, outcome: lineage_fitness, kind: equivalence,
+       margin: 0.25, margin_unit: sd, primary: false}
+    - {name: h1_no_benefit, arm_a: b, arm_b: c, outcome: lineage_fitness, kind: equivalence, margin: 0.25,
+       margin_unit: sd, primary: false}

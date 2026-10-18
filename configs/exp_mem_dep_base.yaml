@@ -17,5 +17,19 @@ memory:
 experiment:
   name: exp_mem_dep
   independent_variables: [memory.enabled]
+  # mean_balance stays primary, not lineage fitness F_L, for the reason given in exp_mem_e0_base.yaml: no agent dies
+  # or is born in this 6-day scripted world, so F_L is 6.0 in every run (checked on seeds 1-20 of both arms).
   primary_outcome: mean_balance
-  secondary_outcomes: [notes_by_channel.observed, invalid_action_rate]
+  # The E0 secondaries that are defined in both arms here. Four of E0's are left out because they are None by
+  # construction in this check, so no seed could ever pair them: exam_accuracy_over_baseline (no exam),
+  # policy_chars (no policy file), near_duplicate_rate and index_coverage (the amnesic arm keeps no vault note).
+  secondary_outcomes: [notes_by_channel.observed, invalid_action_rate, lineage_fitness, net_worth, memory_spend_share,
+                       empty_retrieval_rate]
+  # C1 of G0 (MEMORY_EVOLUTION 5.2): "with fog on, a0 must lose to the default scaffold by a preset margin". 5.2 states
+  # no number, so the preset margin is 0, plain superiority [assumption]; scripts/gates.py and scripts/compare.py both
+  # read it from here. Lists replace, not merge, under `extends`, so this list replaces the four E0 hypotheses of
+  # exp_mem_e0_base.yaml; the live dependence configs (live_claude_dep_*.yaml) extend this file and inherit it, which
+  # is the margin of 0 their pre-registered reading uses (MEMORY_EVOLUTION 10.4).
+  hypotheses:
+    - {name: dependence, arm_a: amnesic, arm_b: mem, outcome: mean_balance, kind: superiority, direction: greater,
+       margin: 0.0}
