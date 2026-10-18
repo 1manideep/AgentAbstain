@@ -6,6 +6,7 @@ No network: a fake ``client.aio.models.generate_content`` records the request an
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 from types import SimpleNamespace
 
@@ -46,6 +47,16 @@ def fake_client(*responses):
     return SimpleNamespace(aio=SimpleNamespace(models=models)), models
 
 
+LADDER = "configs/live_gemini_ladder.yaml"
+
+
+@functools.cache
+def served_model() -> str:
+    """The id a canned response reports as served: a numbered snapshot of the ``slow`` rung's model, read from the
+    config under test, so it never equals the requesting tier's model and is priced at the slow rung's rates."""
+    return load_config(LADDER).tiers["slow"].model + "-001"
+
+
 def resp(text, finish="STOP", *, prompt=1200, cached=0, out=80, thoughts=0, block=None, no_candidates=False):
     usage = SimpleNamespace(prompt_token_count=prompt, cached_content_token_count=cached, candidates_token_count=out,
                             thoughts_token_count=thoughts, total_token_count=prompt + out + thoughts)
@@ -53,7 +64,7 @@ def resp(text, finish="STOP", *, prompt=1200, cached=0, out=80, thoughts=0, bloc
                                                           SimpleNamespace(text=text, thought=False)]),
                            finish_reason=SimpleNamespace(name=finish))
     feedback = SimpleNamespace(block_reason=SimpleNamespace(name=block)) if block else None
-    return SimpleNamespace(candidates=[] if no_candidates else [cand], usage_metadata=usage, model_version="gemini-2.5-flash-lite-001",
+    return SimpleNamespace(candidates=[] if no_candidates else [cand], usage_metadata=usage, model_version=served_model(),
                            response_id="resp_1", prompt_feedback=feedback)
 
 
@@ -61,7 +72,7 @@ GOOD = json.dumps({"thought": "north", "memory_ops": [], "action": {"type": "mov
 
 
 def brain_for(tier, *responses):
-    cfg = load_config("configs/live_gemini_ladder.yaml")
+    cfg = load_config(LADDER)
     client, models = fake_client(*responses)
     return GeminiBrain(tier, cfg, client=client), models, cfg
 
@@ -69,18 +80,20 @@ def brain_for(tier, *responses):
 def test_request_shape_usage_and_parsing():
     brain, models, cfg = brain_for("genius", resp(GOOD, prompt=1200, cached=900, out=80, thoughts=120))
     r = asyncio.run(brain.decide(obs(tier="genius"), Sampling(1.9, 0.9, False, api_temperature=1.7)))
-    assert r.ok and r.decision.action.type == "move" and r.request_id == "resp_1" and r.model.startswith("gemini-2.5-flash-lite")
+    assert r.ok and r.decision.action.type == "move" and r.request_id == "resp_1" and r.model == served_model()
     # prompt_token_count includes the cached part; thinking tokens are output
     assert (r.usage.input_tokens, r.usage.cache_read_tokens, r.usage.output_tokens, r.usage.cache_write_tokens) == (300, 900, 200, 0)
-    assert r.usage.attempts == [("gemini-2.5-flash-lite-001", r.usage.attempts[0][1])]
+    assert r.usage.attempts == [(served_model(), r.usage.attempts[0][1])]
     kw = models.calls[0]
-    assert kw["model"] == "gemini-3.1-pro" and "Tick 5" in kw["contents"]
+    assert kw["model"] == cfg.tiers["genius"].model != served_model() and "Tick 5" in kw["contents"]
     c = kw["config"]
     assert c["max_output_tokens"] == 1536 and c["candidate_count"] == 1 and c["temperature"] == 1.7
     assert c["response_mime_type"] == "application/json" and c["response_json_schema"]["type"] == "object"
     assert c["system_instruction"].startswith("You are an inhabitant of the Void") and "genius" in c["system_instruction"]
     assert c["thinking_config"] == {"thinking_budget": 2048, "include_thoughts": False}
-    # served model priced at its own table rate (a fallback-style attempt list), not the genius tier's
+    # served model priced at the slow rung's rates (a fallback-style attempt list), not the genius tier's
+    slow = cfg.tiers["slow"]
+    assert (slow.price_in_per_mtok, slow.price_cache_read_per_mtok, slow.price_out_per_mtok) == (0.10, 0.01, 0.40)
     assert real_cost_micro(r.usage, cfg.tiers["genius"], cfg.tiers) == 300 * 0.10 + 900 * 0.01 + 200 * 0.40
 
 
@@ -125,18 +138,18 @@ def test_api_errors_map_to_the_shared_error_classes():
 
 
 def test_lazy_client_reports_missing_credentials_as_client_error(monkeypatch):
-    cfg = load_config("configs/live_gemini_ladder.yaml")
+    cfg = load_config(LADDER)
     brain = GeminiBrain("average", cfg)  # no client, no key in the environment (conftest strips it)
     r = asyncio.run(brain.decide(obs(tier="average"), Sampling(1.0, 0.2, False, api_temperature=0.5)))
     assert r.decision is None and r.error.startswith("client:") and r.usage.total == 0
 
 
 def test_hold_reserves_thinking_tokens_and_entropy_maps_to_the_provider_range():
-    cfg = load_config("configs/live_gemini_ladder.yaml", {"economy": {"world_pricing": "real", "min_call_reserve_usd": 0.0}})
+    cfg = load_config(LADDER, {"economy": {"world_pricing": "real", "min_call_reserve_usd": 0.0}})
     genius = cfg.tiers["genius"]
     no_thinking = genius.model_copy(update={"thinking_budget": 0})
     assert hold_micro(genius, cfg.economy, 1000) - hold_micro(no_thinking, cfg.economy, 1000) == 2048 * 12  # 2048 tokens at $12/MTok
-    eq = load_config("configs/live_gemini_ladder.yaml")  # equalized world price: the hold bounds the larger of the two prices
+    eq = load_config(LADDER)  # equalized world price: the hold bounds the larger of the two prices
     assert hold_micro(genius, eq.economy, 1000) >= hold_micro(genius, cfg.economy, 1000)
     t = TierConfig(provider="gemini", model="g", price_in_per_mtok=1, price_out_per_mtok=1, supports_temperature=True, api_temperature_max=2.0,
                    collapse_temperature=1.8, max_temperature=2.0, entropy_budget_max=100.0)
@@ -149,9 +162,9 @@ def test_hold_reserves_thinking_tokens_and_entropy_maps_to_the_provider_range():
 
 
 def test_utility_calls_run_on_a_gemini_tier(tmp_path):
-    cfg = load_config("configs/live_gemini_ladder.yaml", {"run": {"days": 1, "tick_seconds": 0}, "gossip": {"paraphrase": "llm"},
-                                                          "chronicle": {"writer": "llm"}, "intelligence": {"ladder": []},
-                                                          "agents": [{"name": "Ada", "tier": "average"}, {"name": "Bao", "tier": "scripted"}]})
+    cfg = load_config(LADDER, {"run": {"days": 1, "tick_seconds": 0}, "gossip": {"paraphrase": "llm"},
+                               "chronicle": {"writer": "llm"}, "intelligence": {"ladder": []},
+                               "agents": [{"name": "Ada", "tier": "average"}, {"name": "Bao", "tier": "scripted"}]})
     client, models = fake_client(resp("Bao said the north node is [[Node n1]] and rich.", out=40),
                                  resp("Day 1: a quiet day\nNothing happened.", out=60))
     sim = Simulation(cfg, tmp_path / "run", gemini_client=client)
@@ -164,7 +177,7 @@ def test_utility_calls_run_on_a_gemini_tier(tmp_path):
     c = models.calls[0]["config"]
     assert "response_json_schema" not in c and "system_instruction" not in c and c["max_output_tokens"] == PARAPHRASE_MAX_TOKENS
     row = sim.db.fetchone("SELECT purpose, provider, model, real_cost FROM llm_calls WHERE agent_id=?", (ada.agent_id,))
-    assert row["purpose"] == "gossip" and row["provider"] == "gemini" and row["real_cost"] > 0 and row["model"].startswith("gemini-2.5")
+    assert row["purpose"] == "gossip" and row["provider"] == "gemini" and row["real_cost"] > 0 and row["model"] == served_model()
     assert asyncio.run(para(bao.agent_id, "x", 1)) is None and len(models.calls) == 1  # scripted listener: never a paid call
     writer = make_chronicle_writer(sim)
     assert writer is not None and asyncio.run(writer("Day 1: a quiet day\n")) and len(models.calls) == 2
@@ -189,7 +202,7 @@ def test_complete_json_request_shape_usage_and_parsing():
     system = maintenance_system_prompt(cfg, "average")
     r = asyncio.run(complete_json(brain, "# Memory maintenance", schema=schema, system=system, max_tokens=512))
     assert r.decision is None and r.error is None and r.raw_text == MAINTENANCE_JSON and r.stop_reason == "end_turn"
-    assert r.request_id == "resp_1" and r.model.startswith("gemini-2.5-flash-lite")
+    assert r.request_id == "resp_1" and r.model == served_model()
     assert (r.usage.input_tokens, r.usage.cache_read_tokens, r.usage.output_tokens, r.usage.cache_write_tokens) == (600, 300, 40, 0)
     parsed = MaintenanceResponse.model_validate_json(r.raw_text)
     assert parsed.reflection == "tidy" and parsed.commands[0].command == "create"
