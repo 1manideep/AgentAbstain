@@ -1,8 +1,10 @@
 # E2 shared world (docs/research/MEMORY_EVOLUTION.md §6.4; 10.4 S2 "E2 with arms A and B only"): which selection
-# signal? The E0 world on scripted brains: six agents under fog (view radius 12 in a 60-unit world), claim feedback
-# on, the policy file seeded, the nightly maintenance call paid by the agent at every right, the audit exam asked two
-# days back, and the chronicle printing one canary fact a day (§5.8: a templated, world-like line with a closed answer
-# set, printed unmarked among the chronicle's other lines and recorded kernel-side in canary_facts).
+# signal? The E0 world on scripted brains, with one difference: E2 follows the DESIGN 7.2 scripted rules (E0 is pinned
+# to pre_7_2), so the six founders reproduce from day 1 up to the population cap of 12. Fog (view radius 12 in a
+# 60-unit world), claim feedback on, the policy file seeded, the nightly maintenance call paid by the agent at every
+# right, the audit exam asked two days back, and the chronicle printing one canary fact a day (§5.8: a templated,
+# world-like line with a closed answer set, printed unmarked among the chronicle's other lines and recorded
+# kernel-side in canary_facts).
 # The arms differ ONLY in memory.selection.arm:
 #   a  selection arm A: nothing beyond survival is rewarded. Canaries are still printed, so both worlds read the same
 #      kind of chronicle; no reward exam is asked.
