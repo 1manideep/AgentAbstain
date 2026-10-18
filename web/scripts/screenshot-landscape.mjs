@@ -7,6 +7,9 @@
  *
  *   VITE_FEED=fixture npm run dev -- --port 5173   (in another shell)
  *   npm run screenshot:landscape
+ *
+ * VOID_URL overrides the server. The browser is Playwright's own Chromium
+ * (`npx playwright install chromium`) unless VOID_CHROME names an executable.
  */
 import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -17,13 +20,27 @@ const here = dirname(fileURLToPath(import.meta.url))
 const outDir = resolve(here, '..', 'screenshots')
 mkdirSync(outDir, { recursive: true })
 const url = process.env.VOID_URL ?? 'http://127.0.0.1:5173/'
-const executablePath = process.env.VOID_CHROME ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome'
+// Playwright's own Chromium (`npx playwright install chromium`; honours PLAYWRIGHT_BROWSERS_PATH) unless
+// VOID_CHROME names a Chrome/Chromium executable to use instead.
+const chrome = process.env.VOID_CHROME || undefined
+// On a launch failure print Playwright's whole message, not just its first line: the cause (the browser's own
+// stderr, such as a missing shared library, or Playwright's host-dependency report) comes after it.
+const launchFailed = (e) => {
+  console.error(`could not launch Chromium${chrome ? ` (VOID_CHROME=${chrome})` : ''}:`)
+  console.error(String(e?.message ?? e).trim())
+  console.error('hint: run npx playwright install chromium, or set VOID_CHROME to a Chrome/Chromium executable')
+  console.error(
+    'hint: if the browser is installed but will not start (e.g. missing shared libraries), run ' +
+      'npx playwright install-deps chromium (Linux), or npx playwright install --with-deps chromium',
+  )
+  process.exit(1)
+}
 
 const browser = await chromium.launch({
   headless: true,
-  executablePath,
+  ...(chrome ? { executablePath: chrome } : {}),
   args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
-})
+}).catch(launchFailed)
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1 })
 const errors = []
 page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`))
