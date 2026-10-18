@@ -70,9 +70,9 @@ distinct facts within a day, those never asked to the agent first (:meth:`Exams.
 from ``rng.stream("reward_exam", agent_id, day)``, so the audit exam's draws are the same in every arm. The question is
 the fact's line with the answer blanked (:func:`void.research.canary.question`) and the options are its closed answer
 set, finalised like the audit's. Scripted tiers answer from retrieval: the first retrieved note that holds the line
-with one of the options in the blank (:func:`void.research.canary.fill_from`) answers it, else they abstain; scripted
-brains remember the chronicle's headline, not its lines, so they abstain on canaries unless something else put the line
-in their notes. Provider tiers get the same paid call as the audit exam (research pool, purpose ``exam``) with a system
+with one of the options in the blank (:func:`void.research.canary.fill_from`) answers it, else they abstain; in canary
+worlds a scripted reader notes the chronicle lines it read (elsewhere only the headline), so it answers the canaries of
+the days it read and abstains on the rest. Provider tiers get the same paid call as the audit exam (research pool, purpose ``exam``) with a system
 prompt that names the reward (:func:`reward_system_prompt`). Grading is the same exact match. Each correct answer is
 paid ``recall_reward_usd`` from the ``research_pool`` kernel wallet to the agent (``Wallet.transfer``, both ledger rows
 of kind ``recall_reward``, ``ref`` the item id), after the agent's items commit and outside any transaction, and emits
