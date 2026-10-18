@@ -145,9 +145,6 @@ function splitByPurpose(calls: CallRecord[]): PurposeCost[] | null {
   return [...core, ...rest]
 }
 
-const NUM_CELL = { textAlign: 'right', padding: '1px 0 1px 10px' } as const
-const NAME_CELL = { textAlign: 'left', padding: '1px 0', fontWeight: 400 } as const
-
 /**
  * The agent's recent call cost split by purpose (decide, maintain, exam, then any other purpose present), in
  * real and world dollars. When the calls carry no purpose the costs are labelled decide only.
@@ -164,30 +161,22 @@ export const CallCostSplit = memo(function CallCostSplit({ calls }: { calls: Cal
   }
   const hasWorld = calls.some((c) => typeof (c.world_cost_usd ?? c.cost_usd) === 'number')
   return (
-    <table className="cost-split small" style={{ borderCollapse: 'collapse', width: '100%', margin: '2px 0 6px' }}>
+    <table className="cost-split small">
       <thead>
         <tr className="muted">
-          <th style={NAME_CELL}>last {calls.length} calls</th>
-          <th style={NUM_CELL}>calls</th>
-          <th style={NUM_CELL}>real</th>
-          {hasWorld ? <th style={NUM_CELL}>world</th> : null}
+          <th className="cost-name">last {calls.length} calls</th>
+          <th className="cost-num">calls</th>
+          <th className="cost-num">real</th>
+          {hasWorld ? <th className="cost-num">world</th> : null}
         </tr>
       </thead>
       <tbody>
         {split.map((r) => (
           <tr key={r.purpose} data-purpose={r.purpose} className={r.calls === 0 ? 'muted' : undefined}>
-            <td style={NAME_CELL}>{r.purpose}</td>
-            <td className="tnum" style={NUM_CELL}>
-              {r.calls}
-            </td>
-            <td className="tnum" style={NUM_CELL}>
-              {fmtUsd(r.realUsd, 4)}
-            </td>
-            {hasWorld ? (
-              <td className="tnum" style={NUM_CELL}>
-                {fmtUsd(r.worldUsd, 4)}
-              </td>
-            ) : null}
+            <td className="cost-name">{r.purpose}</td>
+            <td className="cost-num tnum">{r.calls}</td>
+            <td className="cost-num tnum">{fmtUsd(r.realUsd, 4)}</td>
+            {hasWorld ? <td className="cost-num tnum">{fmtUsd(r.worldUsd, 4)}</td> : null}
           </tr>
         ))}
       </tbody>
@@ -210,22 +199,17 @@ export const Persona = memo(function Persona({ motto, traits }: { motto?: string
   return (
     <>
       <h3 className="sub">Persona</h3>
-      {text ? (
-        <p className="motto" style={{ margin: '0 0 6px', fontStyle: 'italic', color: 'var(--text-2)' }}>
-          “{text}”
-        </p>
-      ) : null}
+      {text ? <p className="motto">“{text}”</p> : null}
       {entries.length > 0 ? (
-        <div className="traits" style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr 34px', gap: '2px 10px', alignItems: 'center' }}>
+        <div className="traits">
           {entries.map(([k, v]) => (
             <Fragment key={k}>
               <span className="muted">{k}</span>
-              <span style={{ height: 6, borderRadius: 3, background: 'var(--surface-3)', overflow: 'hidden' }}>
-                <span data-trait={k} style={{ display: 'block', height: '100%', width: `${Math.round(Math.min(1, Math.max(0, v)) * 100)}%`, background: SERIES[6] }} />
+              <span className="trait-bar">
+                {/* the fill's geometry is inline because its width is the value (PolicyHistory.test.tsx reads the whole string); its colour is .trait-fill's */}
+                <span className="trait-fill" data-trait={k} style={{ display: 'block', height: '100%', width: `${Math.round(Math.min(1, Math.max(0, v)) * 100)}%` }} />
               </span>
-              <span className="tnum small" style={{ textAlign: 'right' }}>
-                {fmtNum(v, 2)}
-              </span>
+              <span className="trait-value tnum small">{fmtNum(v, 2)}</span>
             </Fragment>
           ))}
         </div>
@@ -345,10 +329,10 @@ export const AgentPanel = memo(function AgentPanel() {
       <Persona motto={agent?.motto} traits={agent?.traits} />
 
       <h3 className="sub">Call history · cost per call</h3>
-      <Sparkline values={costs} color={SERIES[0]} format={fmtCost} />
+      <Sparkline values={costs} color={SERIES[0]} format={fmtCost} ariaLabel="real cost per call" />
       {detail ? <CallCostSplit calls={detail.calls} /> : null}
       <h3 className="sub">Balance</h3>
-      <Sparkline values={balances} color={color} format={fmtBal} />
+      <Sparkline values={balances} color={color} format={fmtBal} ariaLabel="balance over time" emptyText="No balance history yet." />
 
       <h3 className="sub">Self summary · versions</h3>
       {detail ? <SelfHistory versions={detail.self_versions} /> : err ? <div className="error small">{err}</div> : <div className="muted small">loading…</div>}

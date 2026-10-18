@@ -37,6 +37,8 @@ export function ingest(msg: ServerMsg): void {
       }
       s.applyHello(msg)
       history.configure(msg.config.population_cap, 8)
+      // the render-delay floor, for the fixture replayer too (the WebSocket client also sets it after ingest)
+      history.setRenderDelayTicks(msg.config.render_delay_ticks)
       break
     }
     case 'roster':

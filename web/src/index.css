@@ -348,6 +348,25 @@ select {
 .tag.tracer {
   color: var(--warning);
 }
+/* policy version sources (PolicyHistory); a source the client does not know is .src-other, the plain tag */
+.tag.src-seed {
+  color: var(--muted);
+}
+.tag.src-self_edit {
+  color: var(--accent);
+}
+.tag.src-inherited {
+  color: var(--accent-2);
+}
+.tag.src-adapted {
+  color: var(--good);
+}
+.tag.src-mutated {
+  color: var(--serious);
+}
+.tag.src-adopted {
+  color: var(--warning);
+}
 
 /* ---------------------------------------------------------------- cards */
 .card {
@@ -759,6 +778,47 @@ select {
   margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* the agent's recent call cost by purpose */
+.cost-split {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 2px 0 6px;
+}
+.cost-split .cost-name {
+  text-align: left;
+  padding: 1px 0;
+  font-weight: 400;
+}
+.cost-split .cost-num {
+  text-align: right;
+  padding: 1px 0 1px 10px;
+}
+/* persona: the motto, then one bar per trait (values in [0, 1]; the fill's width is the value) */
+.motto {
+  margin: 0 0 6px;
+  font-style: italic;
+  color: var(--text-2);
+}
+.traits {
+  display: grid;
+  grid-template-columns: max-content 1fr 34px;
+  gap: 2px 10px;
+  align-items: center;
+}
+.trait-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.trait-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.trait-value {
+  text-align: right;
 }
 .self-versions {
   list-style: none;

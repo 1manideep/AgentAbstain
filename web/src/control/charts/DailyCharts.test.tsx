@@ -12,11 +12,8 @@ import { DailyCharts } from './DailyCharts'
 
 const tierColor = (t: string) => (t === 'genius' ? '#3987e5' : '#d95926')
 
-/**
- * Day rows shaped like void/sim/metrics.py record_day (plus the loop's tracer extras), as in public/fixtures/mock.jsonl.
- * The cast is needed because DayRow inherits a required `population` from MetricsAgg that real day rows do not carry.
- */
-const DAYS = [
+/** Day rows shaped like void/sim/metrics.py record_day (plus the loop's tracer extras), as in public/fixtures/mock.jsonl. */
+const DAYS: DayRow[] = [
   {
     day: 1,
     end_tick: 24,
@@ -64,16 +61,19 @@ const DAYS = [
     tracer_reach_by_channel: { observed: 1, gossip: 2, unknown: 1 },
     tracer_adopters: 2,
   },
-] as unknown as DayRow[]
+]
 
-/** Rows from older servers or filtered exports: optional fields missing, null, or of the wrong type. */
-const SPARSE = [
+/**
+ * Rows from older servers or filtered exports: optional fields missing, null, or of the wrong type. Some values break
+ * the DayRow type on purpose, so these stay `unknown` until the render, as a parsed wire row would.
+ */
+const SPARSE: unknown[] = [
   { day: 0 },
   { day: 1, births: 2 },
   { day: 2, deaths: 1, gossip_similarity_by_hop: { '1': null } },
   { day: 3, notes_by_channel: { observed: 'x', gossip: Number.NaN }, births_by_kind: { fresh: -1 } },
   { day: 5, gadget_use_failure_rate: null, tracer_adopters: 1, gossip_similarity_by_hop: null },
-] as unknown as DayRow[]
+]
 
 const render = (rows: DayRow[]) => renderToStaticMarkup(<DailyCharts rows={rows} tierColor={tierColor} tierOrder={['genius', 'dim']} />)
 
@@ -110,7 +110,7 @@ describe('DailyCharts', () => {
   })
 
   it('renders rows missing optional fields without NaN', () => {
-    const html = render(SPARSE)
+    const html = render(SPARSE as DayRow[])
     expectFinite(html)
     // births from the bare total, deaths without a tier breakdown
     expect(html).toContain('</span>other</span>')
@@ -124,7 +124,7 @@ describe('DailyCharts', () => {
   })
 
   it('shows empty states and no tracer chart for a lone bare row', () => {
-    const html = render([{ day: 4 } as DayRow])
+    const html = render([{ day: 4 }])
     expectFinite(html)
     expect(html).toContain('No births or deaths yet.')
     expect(html).toContain('No gossip yet.')
@@ -132,12 +132,12 @@ describe('DailyCharts', () => {
   })
 
   it('clamps out-of-range rates and treats non-finite values as gaps', () => {
-    const rows = [
+    const rows: DayRow[] = [
       { day: 1, gadget_use_failure_rate: 1.5 },
       { day: 2, gadget_use_failure_rate: Number.POSITIVE_INFINITY },
       { day: 3, gadget_use_failure_rate: 0.5 },
       { day: 4, gadget_use_failure_rate: 0.25 },
-    ] as unknown as DayRow[]
+    ]
     const html = render(rows)
     expectFinite(html)
     // day 1 stands alone (a dot), days 3-4 form one segment
@@ -146,10 +146,10 @@ describe('DailyCharts', () => {
   })
 
   it('draws hops 1-4 as their own lines and folds deeper hops into one', () => {
-    const rows = [
+    const rows: DayRow[] = [
       { day: 1, gossip_similarity_by_hop: { '1': 0.9, '2': 0.8, '3': 0.7, '4': 0.6, '5': 0.5, '7': 0.3 } },
       { day: 2, gossip_similarity_by_hop: { '1': 0.9, '6': 0.4, x: 0.1 } },
-    ] as unknown as DayRow[]
+    ]
     const html = render(rows)
     expectFinite(html)
     for (const h of ['hop 1', 'hop 2', 'hop 3', 'hop 4', 'hop 5+']) expect(html).toContain(`</span>${h}</span>`)

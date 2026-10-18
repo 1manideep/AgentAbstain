@@ -2,9 +2,18 @@ import { memo, useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent
 import type { PolicyResponse, PolicyVersion } from '../protocol'
 import { ApiError, apiGet, FIXTURE_MODE } from '../net/api'
 import { fmtNum } from './charts/chartTheme'
+import { POLICY_SOURCES } from './Lineage'
 import { wordDiff } from './wordDiff'
 
 const REFRESH_MS = 20000
+
+/** The empty state of fixture playback whose recording has no policy history for the agent. */
+export const FIXTURE_NO_POLICY = 'Policy history is not recorded in fixture playback.'
+
+const KNOWN_SOURCES: ReadonlySet<string> = new Set(POLICY_SOURCES)
+
+/** The source tag's classes (index.css .tag.src-*): a source the client does not know is src-other, never its raw text. */
+const sourceClass = (source: string) => 'tag src-' + (KNOWN_SOURCES.has(source) ? source : 'other')
 
 /**
  * Stands in for a line break while diffing. wordDiff splits on whitespace, so without it a policy's lines
@@ -106,7 +115,7 @@ export const PolicyHistoryList = memo(function PolicyHistoryList({ versions, nam
             <details open={i === 0}>
               <summary className="self-head">
                 <span className="tnum">v{v.version}</span>
-                <span className={'tag ' + v.source} data-source={v.source}>
+                <span className={sourceClass(v.source)} data-source={v.source}>
                   {v.source}
                 </span>
                 <span className="muted small tnum">tick {v.tick}</span>
@@ -131,37 +140,74 @@ export const PolicyHistoryList = memo(function PolicyHistoryList({ versions, nam
   )
 })
 
+/** What GET /api/agents/{id}/policy answered for one agent. */
+export interface PolicyLoad {
+  id: string
+  /** null after a failure other than a 404 */
+  versions: PolicyVersion[] | null
+  /** The route answered 404: no policy yet, or (fixture playback) a recording without this agent's history. */
+  missing: boolean
+  err: string | null
+}
+
+/**
+ * One agent's policy history through the api layer, which in fixture playback answers from the recording's api.json
+ * (net/api.ts fixtureGet). Never rejects: a failure is in the result.
+ */
+// oxlint-disable-next-line react/only-export-components
+export function fetchPolicyHistory(agentId: string, get: (path: string) => Promise<PolicyResponse> = apiGet): Promise<PolicyLoad> {
+  return get(`/api/agents/${encodeURIComponent(agentId)}/policy`).then(
+    (r): PolicyLoad => ({ id: agentId, versions: Array.isArray(r?.versions) ? r.versions : [], missing: false, err: null }),
+    (e: unknown): PolicyLoad =>
+      e instanceof ApiError && e.status === 404
+        ? { id: agentId, versions: [], missing: true, err: null }
+        : { id: agentId, versions: null, missing: false, err: e instanceof Error ? e.message : String(e) },
+  )
+}
+
+export interface PolicyHistoryViewProps {
+  /** The answer for the agent shown; null while it loads. */
+  load: PolicyLoad | null
+  /** Fixture playback: a 404 means the recording has no history for the agent. Defaults to the build's feed mode. */
+  fixtureMode?: boolean
+  nameOf?: (id: string) => string
+  onSelectAgent?: (id: string) => void
+}
+
+/** The panel for one answer: loading, the error, the fixture's empty state for a 404 in fixture playback, or the list. */
+export const PolicyHistoryView = memo(function PolicyHistoryView({ load, fixtureMode = FIXTURE_MODE, nameOf, onSelectAgent }: PolicyHistoryViewProps) {
+  if (!load) return <div className="muted small">loading…</div>
+  if (load.err !== null) return <div className="error small">{load.err}</div>
+  if (load.missing && fixtureMode) return <div className="muted small">{FIXTURE_NO_POLICY}</div>
+  return <PolicyHistoryList versions={load.versions ?? []} nameOf={nameOf} onSelectAgent={onSelectAgent} />
+})
+
 export interface PolicyHistoryProps {
   agentId: string
   nameOf?: (id: string) => string
   onSelectAgent?: (id: string) => void
-  /** Fixture playback has no policy endpoint; defaults to the build's feed mode. */
+  /**
+   * Show the fixture empty state without asking: for a view with no policy route behind it at all. Fixture playback
+   * does not need it: the api layer serves the recorded histories, and a 404 for an agent the recording lacks shows
+   * the same empty state.
+   */
   fixture?: boolean
 }
 
-interface Loaded {
-  id: string
-  versions: PolicyVersion[] | null
-  err: string | null
-}
-
-/** GET /api/agents/{id}/policy (newest first), refreshed like the agent detail. A 404 means no policy yet. */
-export const PolicyHistory = memo(function PolicyHistory({ agentId, nameOf, onSelectAgent, fixture = FIXTURE_MODE }: PolicyHistoryProps) {
-  const [loaded, setLoaded] = useState<Loaded | null>(null)
+/**
+ * GET /api/agents/{id}/policy (newest first), refreshed like the agent detail, live or from the fixture recording.
+ * A 404 means no policy yet (live) or none recorded (fixture playback).
+ */
+export const PolicyHistory = memo(function PolicyHistory({ agentId, nameOf, onSelectAgent, fixture = false }: PolicyHistoryProps) {
+  const [loaded, setLoaded] = useState<PolicyLoad | null>(null)
 
   useEffect(() => {
     if (fixture) return
     let cancelled = false
     const load = () => {
-      apiGet<PolicyResponse>(`/api/agents/${encodeURIComponent(agentId)}/policy`)
-        .then((r) => {
-          if (!cancelled) setLoaded({ id: agentId, versions: Array.isArray(r?.versions) ? r.versions : [], err: null })
-        })
-        .catch((e: unknown) => {
-          if (cancelled) return
-          if (e instanceof ApiError && e.status === 404) setLoaded({ id: agentId, versions: [], err: null })
-          else setLoaded({ id: agentId, versions: null, err: e instanceof Error ? e.message : String(e) })
-        })
+      void fetchPolicyHistory(agentId).then((l) => {
+        if (!cancelled) setLoaded(l)
+      })
     }
     load()
     const t = setInterval(load, REFRESH_MS)
@@ -171,9 +217,6 @@ export const PolicyHistory = memo(function PolicyHistory({ agentId, nameOf, onSe
     }
   }, [agentId, fixture])
 
-  if (fixture) return <div className="muted small">Policy history is not recorded in fixture playback.</div>
-  const mine = loaded && loaded.id === agentId ? loaded : null
-  if (!mine) return <div className="muted small">loading…</div>
-  if (mine.err !== null) return <div className="error small">{mine.err}</div>
-  return <PolicyHistoryList versions={mine.versions ?? []} nameOf={nameOf} onSelectAgent={onSelectAgent} />
+  if (fixture) return <div className="muted small">{FIXTURE_NO_POLICY}</div>
+  return <PolicyHistoryView load={loaded && loaded.id === agentId ? loaded : null} nameOf={nameOf} onSelectAgent={onSelectAgent} />
 })

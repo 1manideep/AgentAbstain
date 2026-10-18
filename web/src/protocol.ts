@@ -584,8 +584,12 @@ export interface DayReport {
   [key: string]: unknown
 }
 
-/** The daily row (void/sim/metrics.py record_day plus the loop's extras). */
-export interface DayRow extends MetricsAgg {
+/**
+ * The daily row (void/sim/metrics.py record_day plus the loop's extras). record_day writes `population_end`, not the
+ * aggregate block's `population`, so that field is optional here.
+ */
+export interface DayRow extends Omit<MetricsAgg, 'population'> {
+  population?: number
   run_id?: string
   seed?: number
   config_hash?: string

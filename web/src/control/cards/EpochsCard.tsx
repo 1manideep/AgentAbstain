@@ -1,7 +1,8 @@
 import { memo, useMemo } from 'react'
 import { useStore } from '../../state/store'
 import { Card } from '../Card'
-import { EpochsStrip, epochBlocks } from '../charts/EpochsStrip'
+import { epochBlocks } from '../charts/degradationEpochsModel'
+import { EpochsStrip } from '../charts/EpochsStrip'
 
 export const EpochsCard = memo(function EpochsCard() {
   const rev = useStore((s) => s.seriesRev)
