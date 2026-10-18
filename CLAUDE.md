@@ -18,6 +18,7 @@ A closed 3D world of LLM agents with a real-dollar economy. Backend in `void/` (
 cd web && npx vitest run --root . && npx tsc -b        # web tests and the build typecheck (tsc -b includes tests)
 .venv/bin/void run --config configs/demo.yaml --seeds 1 --tick-seconds 0 --out runs   # scripted demo
 .venv/bin/python scripts/compare.py runs/<experiment>  # paired comparison of arms
+.venv/bin/python scripts/check_design_sync.py         # DESIGN.md vs the code; prints nothing when in sync
 ```
 
 ## Conventions
@@ -28,6 +29,7 @@ cd web && npx vitest run --root . && npx tsc -b        # web tests and the build
 - Web text rendered with troika must be plain ASCII (missing glyphs make it fetch fonts the CSP blocks).
 - Run vitest with `--root .` from `web/`.
 - Every claim in `docs/research/` is either computed by a script or tagged `[assumption]`.
+- `docs/DESIGN.md` is held to the code by `scripts/check_design_sync.py` (run by `tests/test_design_sync.py`): a new `void/` module, CLI subcommand, config key or `base.yaml` default, db table or column, `exp_*.yaml` arm, or CSP change updates DESIGN.md in the same change.
 
 ## Where things are tracked
 
