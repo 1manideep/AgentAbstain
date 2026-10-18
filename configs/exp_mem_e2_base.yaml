@@ -12,9 +12,12 @@
 #      least two days earlier, and each correct answer is paid $0.02 from the research pool (ledger kind recall_reward).
 # Primary: audit-exam accuracy (H2: does a paid proxy for recall move the unpaid measure?). Manipulation check:
 # reward_exam_accuracy; the Goodhart measure: goodhart_gap (reward minus audit accuracy, arm B only).
-# Scripted brains remember the chronicle's headline, not its lines, so on this world they abstain on the reward exam
-# and arm B pays nothing: the scripted run checks the plumbing (canaries, the reward exam, payments, the outcomes and
-# compare), not an effect. Free and deterministic; a live E2 replaces the scripted tier.
+# Scripted brains note the chronicle's lines when they read it in this world (a world with canaries; elsewhere they
+# keep only its headline) and answer a reward question from their retrieved notes: right when a note holds the line,
+# an abstention otherwise. So arm B pays recall_reward from the research pool for what was read and retrieved, and the
+# scripted run exercises the whole paid path (canaries, the reward exam, payments, money conservation, the outcomes and
+# compare). It checks the plumbing, not an effect: a scripted agent reads and notes the chronicle by the same rule in
+# both arms (no rule of it looks at the reward). Free and deterministic; a live E2 replaces the scripted tier.
 # Not an arm itself (no experiment.arm): exp_mem_e2_a.yaml and exp_mem_e2_b.yaml extend it.
 extends: base.yaml
 run:

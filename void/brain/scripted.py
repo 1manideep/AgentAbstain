@@ -22,6 +22,7 @@ from void.agents.models import PersonalitySeed
 from void.brain.base import BrainResult, Sampling, Usage
 from void.brain.decision import (
     MAX_NAME_CHARS,
+    MAX_NOTE_CHARS,
     SHARE_PRACTICE,
     Action,
     Claim,
@@ -56,8 +57,12 @@ _VEIN_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-__all__ = ["ScriptedBrain", "NodeMemory", "VeinMemory", "node_memory", "vein_memory", "child_name", "BEACON_GADGET",
-           "BEACON_TESTS", "BROKEN_GADGET"]
+# "# The Void Chronicle, Day 3": the title line of a chronicle page (void.culture.chronicle._render)
+_PAGE_DAY_RE = re.compile(r"^#\s.*\bday\s+(\d+)\s*$", re.IGNORECASE)
+_READ_CHRONICLE_OK = "read_chronicle: ok"
+
+__all__ = ["ScriptedBrain", "NodeMemory", "VeinMemory", "node_memory", "vein_memory", "child_name", "chronicle_lines",
+           "chronicle_read_notes", "BEACON_GADGET", "BEACON_TESTS", "BROKEN_GADGET"]
 
 # The prompt size the simulation prices the kernel's minimum hold at (Simulation.hold_min_for): the endowment floor
 # lifecycle.create_offspring enforces is that hold times population.min_endowment_calls.
@@ -179,6 +184,64 @@ def vein_memory(memories: list[RetrievedNote]) -> dict[str, VeinMemory]:
     return {nid: VeinMemory(nid, pos[nid][0], pos[nid][1], len(seen[nid]), until[nid]) for nid in sorted(seen)}
 
 
+def chronicle_lines(page: str) -> list[str]:
+    """The lines of a chronicle page as its reader was shown them, in page order (pure).
+
+    Every non-empty line that is not a heading, with its markdown taken off (a ``- `` bullet, ``**`` emphasis): the
+    headline first, then each section's items. Nothing is selected: a canary line is one item among the others.
+    """
+    out: list[str] = []
+    for raw in page.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line[:2] in ("- ", "* "):
+            line = line[2:]
+        line = line.strip().strip("*").strip()
+        if line:
+            out.append(line)
+    return out
+
+
+def chronicle_read_notes(page: str, fallback_day: int, max_chars: int, max_notes: int = 2) -> list[tuple[str, str]]:
+    """``(title, text)`` of the notes a reader keeps of a chronicle page: its lines (:func:`chronicle_lines`) packed in
+    page order into at most ``max_notes`` notes of at most ``max_chars`` characters each (pure).
+
+    The first note is ``Chronicle of day N`` and starts ``The chronicle said:``; a second, when the lines do not fit
+    one, is ``Chronicle of day N, continued`` and starts ``The chronicle also said:``. A line never straddles two
+    notes; lines that fit in none are left out (the page's tail), and a single line longer than a note is cut to
+    fit. ``N`` is the day the page's title names, else ``fallback_day``. Empty when the page has no lines.
+    """
+    lines = chronicle_lines(page)
+    if not lines or max_notes <= 0:
+        return []
+    day = fallback_day
+    first = page.lstrip().split("\n", 1)[0].strip()
+    hit = _PAGE_DAY_RE.match(first)
+    if hit:
+        day = int(hit.group(1))
+    heads = ("The chronicle said:", "The chronicle also said:")
+    titles = (f"Chronicle of day {day}", f"Chronicle of day {day}, continued")
+    notes: list[tuple[str, str]] = []
+    k = 0
+    while k < len(lines) and len(notes) < min(max_notes, len(heads)):
+        head = heads[len(notes)]
+        text = head
+        while k < len(lines):
+            add = "\n" + lines[k]
+            if len(text) + len(add) <= max_chars:
+                text += add
+                k += 1
+            elif text == head:  # one line longer than a whole note: cut it to fit
+                text = (text + add)[:max_chars]
+                k += 1
+                break
+            else:
+                break
+        notes.append((titles[len(notes)], text))
+    return notes
+
+
 BEACON_GADGET = '''
 def describe():
     return {"render": {"shape": "pyramid", "color": "#ffcc33", "scale": 1.2, "label": "beacon"},
@@ -232,6 +295,11 @@ class ScriptedBrain:
         self._hold_min: dict[str, int] = {}  # tier -> the kernel's minimum hold (micro), computed once
         # MEMORY_EVOLUTION §5.7: share_practice is weighed only in worlds that offer it; elsewhere it draws nothing
         self._practices = share_practice_enabled(cfg)
+        # MEMORY_EVOLUTION §5.8: in a world whose chronicle prints canary facts (memory.selection.canary with the
+        # chronicle on, as void.research.canary.Canaries.enabled reads it) a reader notes the chronicle's lines, not
+        # only its headline; every other world keeps the headline note and draws exactly what it drew before
+        self._note_chronicle_lines = bool(cfg.memory.selection.canary.enabled and cfg.chronicle.enabled)
+        self._note_max_chars = max(1, min(int(cfg.memory.note_max_chars), MAX_NOTE_CHARS))
 
     def export_state(self) -> dict[str, Any]:
         return {"last_chronicle_day": dict(sorted(self._last_chronicle_day.items())),
@@ -580,6 +648,17 @@ class ScriptedBrain:
         return text, kept_claims[:4]
 
     # ------------------------------------------------------------------ memory ops
+    def _chronicle_read_ops(self, obs: Observation) -> list[MemoryOp]:
+        """The notes of the chronicle page the agent read last tick (:func:`chronicle_read_notes`): the page is the text
+        the kernel returned with ``read_chronicle: ok`` in the observation's last action result, which is what any
+        brain is shown. Empty unless the last action was a successful read. Pure: no draw."""
+        res = obs.last_action_result
+        if not res or not res.startswith(_READ_CHRONICLE_OK):
+            return []
+        page = res.partition("\n")[2]
+        return [MemoryOp(op="remember", title=title, text=text, tags=["chronicle"])
+                for title, text in chronicle_read_notes(page, max(1, obs.day - 1), self._note_max_chars)]
+
     def _memory_ops(self, obs: Observation, seed: PersonalitySeed, action: Action, rng: random.Random) -> list[MemoryOp]:
         ops: list[MemoryOp] = []
         vein = self._vein_note(obs)
@@ -598,7 +677,12 @@ class ScriptedBrain:
             if h.kind == "talk" and h.from_name and rng.random() < 0.25 * seed.curiosity:
                 ops.append(MemoryOp(op="remember", title=f"{h.from_name} said something on day {obs.day}", text=f"[[{h.from_name}]] told me: {h.text[:120]}", tags=["people"], links_to=[h.from_name]))
                 break
-        if not ops and obs.last_action_result and obs.last_action_result.startswith("read_chronicle: ok") and obs.chronicle_headline:
+        read = self._chronicle_read_ops(obs) if self._note_chronicle_lines else []
+        if read:
+            # a canary world: the page just read is noted line by line, ahead of this tick's other notes (it is in
+            # view for this one tick, and a note written now carries the chronicle channel); no draw either way
+            ops = read + ops
+        elif not ops and obs.last_action_result and obs.last_action_result.startswith(_READ_CHRONICLE_OK) and obs.chronicle_headline:
             ops.append(MemoryOp(op="remember", title=f"Chronicle of day {max(1, obs.day - 1)}", text=f"The chronicle said: {obs.chronicle_headline}", tags=["chronicle"]))
         if not ops and obs.last_action_result and obs.last_action_result.startswith("forage: ok") and rng.random() < 0.3 + 0.4 * seed.curiosity:
             near = min(obs.nodes, key=lambda n: n.distance) if obs.nodes else None

@@ -6,8 +6,9 @@ and canaries refuse to run without the chronicle. Then scripted runs of the E2 c
 
 * ``e2_dir``: arms a and b at seeds 1 and 2 over three days, with ``reward_delay_days`` 1 so a three-day run reaches
   the reward exam. Canaries are recorded, linked to their chronicle items and the same in both arms; arm a asks no
-  reward item; arm b asks some and (scripted brains keep the headline, not the lines) pays nothing; money is
-  conserved; ``compare`` accepts the experiment and reports the reward outcomes.
+  reward item; arm b asks some, a scripted agent answers right only from a note that holds the line (a reader notes
+  the chronicle's lines in a canary world, tests/test_scripted_canary_recall.py) and abstains otherwise, and each
+  right answer is paid; money is conserved; ``compare`` accepts the experiment and reports the reward outcomes.
 * ``paid``: arm b over four days with a hook that writes each canary line into half the agents' notes as soon as it
   is printed, so some reward answers are right. Each correct answer is paid exactly ``recall_reward_usd`` from the
   research pool (ledger rows of kind ``recall_reward`` with the item as ``ref``), wrong and abstained ones are not,
@@ -279,9 +280,11 @@ def test_arm_a_asks_no_reward_item_and_arm_b_does(e2_dir: Path) -> None:
             assert r["question"] == cn.question(fact["text"], fact["answer"]) and r["tick_about"] == fact["tick"]
             opts = json.loads(r["options"])
             assert opts[-1] == ABSTAIN and sorted(opts[:-1]) == json.loads(fact["options"])
-            # scripted brains keep the headline, not the line: they abstain, and nothing is paid
-            assert r["answer"] == ABSTAIN and r["abstained"] == 1 and r["correct"] == 0
-        assert b.execute("SELECT COUNT(*) AS n FROM wallet_ledger WHERE kind=?", (RECALL_REWARD_KIND,)).fetchone()["n"] == 0
+            # a scripted answer is the line read back from a note, or an abstention: never a wrong option
+            assert (r["correct"] == 1 and r["answer"] == fact["answer"]) or (r["answer"] == ABSTAIN and r["abstained"] == 1)
+        right = sum(r["correct"] for r in rows)
+        # both rows of each payment: one per right answer on each side
+        assert b.execute("SELECT COUNT(*) AS n FROM wallet_ledger WHERE kind=?", (RECALL_REWARD_KIND,)).fetchone()["n"] == 2 * right
         asked = _rows(b, "SELECT payload FROM events WHERE kind=? ORDER BY seq", (Kind.EXAM_ASKED,))
         tagged = [json.loads(e["payload"]) for e in asked if json.loads(e["payload"]).get("exam") == "reward"]
         assert len(tagged) == len(rows) and all(p["kind"] == CANARY_KIND for p in tagged)
@@ -308,8 +311,14 @@ def test_compare_accepts_e2_and_reports_the_reward_outcomes(e2_dir: Path) -> Non
     for seed in SEEDS:
         a, b = result["values"]["a"][str(seed)], result["values"]["b"][str(seed)]
         assert a["reward_exam_accuracy"] is None and a["goodhart_gap"] is None and a["recall_reward_usd_total"] == 0.0
-        assert b["reward_exam_accuracy"] == 0.0 and b["recall_reward_usd_total"] == 0.0
-        assert b["goodhart_gap"] == pytest.approx(0.0 - exam_accuracy(e2_dir / "b" / f"seed_{seed}"))
+        run_b = e2_dir / "b" / f"seed_{seed}"
+        conn = _db(run_b)
+        right = conn.execute("SELECT COUNT(*) AS n FROM exam_items i JOIN exam_answers x ON x.item_id=i.item_id "
+                             "WHERE i.exam='reward' AND x.correct=1").fetchone()["n"]
+        conn.close()
+        assert b["reward_exam_accuracy"] == pytest.approx(reward_exam_accuracy(run_b))
+        assert b["recall_reward_usd_total"] == pytest.approx(right * 0.02)
+        assert b["goodhart_gap"] == pytest.approx(b["reward_exam_accuracy"] - exam_accuracy(run_b))
     text = render(result)
     assert "reward_exam_accuracy" in text and "goodhart_gap" in text and "recall_reward_usd_total" in text
 
@@ -324,6 +333,15 @@ class _Paid:
         gossip, or inherited at birth (a child copies its parent's top notes, DESIGN §13)."""
         return any(n.agent_id == agent_id and (n.provenance.transfer_tick or n.created_tick) <= tick
                    for origin in self.origins[fact_id] for n in self.sim.memory.descendants_of(origin))
+
+    def noted_line(self, fact_id: str, agent_id: str, tick: int) -> bool:
+        """Whether ``agent_id`` held, by ``tick``, a note of its own reading of the chronicle that holds the fact's line
+        (a scripted reader notes the chronicle's lines in a canary world), or a copy of one."""
+        fact = self.sim.exams.canaries.get(fact_id)
+        assert fact is not None
+        line = " ".join(fact.text.split()).casefold()
+        return any((n.provenance.transfer_tick or n.created_tick) <= tick and line in " ".join(n.body.split()).casefold()
+                   for n in self.sim.memory.list_notes(agent_id, include_archived=True))
 
 
 @pytest.fixture(scope="module")
@@ -363,8 +381,10 @@ def test_arm_b_pays_exactly_the_reward_per_correct_answer(paid: Any) -> None:
         fact_id = r["source_ref"].split(":", 1)[1]
         if r["agent_id"] in paid.planted[fact_id]:  # the line itself is in the agent's notes: answered right
             assert r["correct"] and r["answer"] == r["truth"]
-        elif r["correct"]:  # or a copy reached the agent before it was asked (with twelve agents, gossip and births do)
-            assert r["answer"] == r["truth"] and paid.had_copy(fact_id, r["agent_id"], r["tick_asked"])
+        elif r["correct"]:  # or a copy reached the agent before it was asked (with twelve agents, gossip and births do),
+            # or the agent read the chronicle itself and noted its lines
+            assert r["answer"] == r["truth"] and (paid.had_copy(fact_id, r["agent_id"], r["tick_asked"])
+                                                  or paid.noted_line(fact_id, r["agent_id"], r["tick_asked"]))
         else:  # scripted recall needs the line: without it the agent abstains
             assert r["abstained"] == 1
     credits = _rows(sim.db.conn, "SELECT agent_id, delta, ref, payload FROM wallet_ledger WHERE kind=? AND agent_id != 'research_pool'",
@@ -483,7 +503,8 @@ def test_a_provider_tier_gets_one_paid_call_per_reward_item(tmp_path: Path) -> N
     sim.brains["frontier"] = fake  # type: ignore[assignment]
     pool = sim.wallet.balance("research_pool")
     report = asyncio.run(sim.exams.run_reward_day(3, _tick(3)))
-    assert report is not None and report.calls == len(fake.calls) == 1 and report.correct == report.paid == 1
+    # one call (Ada's); the scripted agents that noted the day-1 line answer right too, and every right answer is paid
+    assert report is not None and report.calls == len(fake.calls) == 1 and report.correct == report.paid >= 1
     row = sim.db.fetchone("SELECT i.item_id, x.call_id, x.answer, x.correct FROM exam_items i JOIN exam_answers x ON x.item_id=i.item_id "
                           "WHERE i.exam='reward' AND i.agent_id=?", (ada.agent_id,))
     assert row["correct"] == 1 and row["call_id"] is not None
@@ -494,7 +515,7 @@ def test_a_provider_tier_gets_one_paid_call_per_reward_item(tmp_path: Path) -> N
     stored = sim.db.fetchone("SELECT text FROM prompt_texts WHERE hash=?", (call["system_hash"],))
     assert stored is not None and stored["text"] == reward_system_prompt(sim.cfg, "frontier")
     amount = usd_to_micro(sim.cfg.memory.selection.recall_reward_usd)
-    assert sim.wallet.balance("research_pool") == pool - int(call["world_cost"]) - amount
+    assert sim.wallet.balance("research_pool") == pool - int(call["world_cost"]) - report.paid * amount
     reward = sim.db.fetchone("SELECT agent_id, delta FROM wallet_ledger WHERE kind=? AND ref=? AND agent_id != 'research_pool'",
                              (RECALL_REWARD_KIND, row["item_id"]))
     assert reward["agent_id"] == ada.agent_id and reward["delta"] == amount
