@@ -18,6 +18,8 @@ Re-recorded once, deliberately, when the scripted brain started to follow DESIGN
 2 x min_reserve + endowment under per-parent names, greed-scaled transfers, nudges toward yield-positive weather,
 random gadget parameters, sleep when calls burn more than a forage earns): both worlds now have births. Run under
 ``population.scripted_rules: pre_7_2`` they still reproduce the digests from before (tests/test_scripted_selection.py).
+Re-recorded again when the kernel began classifying failed actions as invalid or stale against the agent's
+observation (see the note above BASE_GOLDEN).
 """
 
 from __future__ import annotations
@@ -73,23 +75,32 @@ NO_CHILD_PROVIDERS = {"population": {"tier_mutation_prob": 0.0}, "run": {"days":
 # run.log_prompts (full response text per call, MEMORY_EVOLUTION §7.4); cutting every raw_text back to 4000
 # characters gives the digest recorded before that change exactly. The base world has no response over 4000
 # characters, so its "calls" digest held.
+# Every digest moved, deliberately, when the kernel began classifying a failed action against the observation the
+# agent decided on (DESIGN §5, §7.4): stale only if the observation showed the action valid, invalid (failed_action
+# drain, invalid_action_rate) if it already showed it could not work. First difference in the base world: a
+# use_gadget refused for its fee at tick 35 by an agent whose observed balance could not cover it above the reserve
+# (stale -> invalid); in the amnesic fog world: at tick 2 a talk to an inhabitant in view at 9.23 units, beyond the
+# 4-unit earshot (stale -> invalid). Kernel.apply without an observation keeps the old kinds, and with the loop's
+# observation dropped both worlds give the digests recorded before exactly (base metrics 8b7a0f7a..., events
+# 7b86641d..., calls 8cbe69f9..., ledger 7270da62...; amnesic fog metrics aceec850..., events 4c285707..., calls
+# e5a71250..., ledger 53cef135...).
 
 BASE_GOLDEN = {
     "status": "completed",
     "config_hash": "f589277f12656996537c99ed2f9968389a7d067d6bb94a5b6683ba201fbc1b51",
-    "metrics": "8b7a0f7a23744324bff96edc96f5c2f3ef08d9ad412ae786aaeaf722f86bbbd8",
-    "events": "7b86641db05416f9e6777345858843f861e952465fea8623ecb28a5081fc4038",
-    "calls": "8cbe69f9a6789fb9a9f14a703bdd5ae15dc5af98636f2868b5013580e92660e8",
-    "ledger": "7270da6251493fa8fef512b3eb91b864d03c3f873a1c0eebe3e7c2791c29cd86",
+    "metrics": "cec0964c193d53516c44d98fb3f4384c05d43bcbe02668a87c9c52994e4fd911",
+    "events": "704f63314cf34e28d075cfeb54f24adb9388ac5a87108e72020c6721e0cd9e7b",
+    "calls": "2ee87969e26d3ddfd3f604db69824e36c6080aa667ae0f94abfa4112e5fdb133",
+    "ledger": "50facf0e1aa21271f3f2fe89524385baeadc6d5d37fb7203af1ab1c2d7f74aa6",
 }
 
 AMNESIC_FOG_GOLDEN = {
     "status": "completed",
     "config_hash": "fb105920e6b0993e29971b43cf9f1c984343500dcb33fa8178b837499498c47d",
-    "metrics": "aceec8505aae9bb3c3ebb685df68af7f53c882f738faa09d3e9dd799ca08871e",
-    "events": "4c2857075a953610723d500bca16e048f78b2d80dc6c370cc63582aaed0a11fb",
-    "calls": "e5a71250b2af8c467a1e7c9cce6b400851cb464f6c49016b2108cc29809ff954",
-    "ledger": "53cef13500522cca21b3096354dcf1f1f0a30da269d27fa5488a11e0f8ea61f6",
+    "metrics": "c438467e7549a2d2b6298018164f70da672daef2fb90beed329c1163cb90fb05",
+    "events": "35ca27dbe83803f3915a3b4d7edbdcbe0087b6df76af55c92d82730e99d03c6c",
+    "calls": "494b379794d2328fa4eba495063cd5c77010b57b6874a575776190a4f4a75973",
+    "ledger": "ac3153bdd45825b70fd85f577de947d9ae36b7347a48667663d1f1c312389137",
 }
 
 

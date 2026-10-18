@@ -1,9 +1,13 @@
 """The referee (DESIGN §7.3, §14): the only writer to world state.
 
-``validate`` reads live state only; preconditions that earlier agents in the same tick can
-invalidate are re-checked in ``apply``. Outcomes are ``ok``, ``invalid`` (never valid; adds
-failed-action drain) or ``stale`` (valid against the observation but not against live state;
-no drain). Invalid or stale actions are applied as idle with a reason the agent sees next tick.
+Whether an action succeeds is decided on live state only; preconditions that earlier agents in the same
+tick can invalidate are re-checked in ``apply``. Outcomes are ``ok``, ``invalid`` (never valid; adds
+failed-action drain) or ``stale`` (valid against the observation but not against live state; no drain).
+A failed action is classified against the observation the agent decided on (``apply(..., obs=...)``):
+``stale`` when the observation showed the failed precondition met, so an earlier agent this tick changed
+the world; ``invalid`` when the observation already showed it unmet, or the action was malformed. Without
+an observation each failure keeps its fixed kind. Invalid or stale actions are applied as idle with a
+reason the agent sees next tick.
 """
 
 from __future__ import annotations
@@ -25,7 +29,16 @@ from void.economy.taskboard import TaskBoard
 from void.economy.wallet import Wallet
 from void.events import Event, EventBus, Kind
 from void.rng import RNG
-from void.types import ActionOutcome, AgentStatus, HeardMessage, Vec2, balance_bucket, stress_label
+from void.types import (
+    ActionOutcome,
+    AgentStatus,
+    HeardMessage,
+    NeighbourView,
+    Observation,
+    Vec2,
+    balance_bucket,
+    stress_label,
+)
 from void.world.resources import ResourceNode, forage_units, forage_value_micro
 from void.world.weather import Weather
 
@@ -36,6 +49,30 @@ if TYPE_CHECKING:
     from void.sandbox.registry import GadgetRegistry
 
 __all__ = ["Kernel", "KernelState"]
+
+
+def _miss(action_type: str, reason: str, obs: Observation | None, observed_ok: bool, *, legacy: str = "stale") -> ActionOutcome:
+    """A live precondition failed. Against the agent's observation (DESIGN §5, §7.4) the failure is ``stale`` when
+    the observation showed the precondition met and ``invalid`` when it already showed it unmet; without an
+    observation it keeps its fixed kind, ``legacy``."""
+    kind = legacy if obs is None else ("stale" if observed_ok else "invalid")
+    return ActionOutcome(False, action_type, reason, kind)
+
+
+def _seen_neighbour(obs: Observation, target: str | None) -> NeighbourView | None:
+    """The neighbour the observation listed under ``target``: by agent id, else by an unambiguous name."""
+    if not target:
+        return None
+    for n in obs.neighbours:
+        if n.agent_id == target:
+            return n
+    named = [n for n in obs.neighbours if n.name.lower() == target.lower()]
+    return named[0] if len(named) == 1 else None
+
+
+def _observed_room(obs: Observation, reserve: int) -> int:
+    """What the observation showed the agent could part with: its balance less ``reserve``, in micro-dollars."""
+    return usd_to_micro(obs.balance_usd) - reserve
 
 
 @dataclass
@@ -330,14 +367,17 @@ class Kernel:
         return made, false
 
     # --- apply ------------------------------------------------------------------------------------------------
-    async def apply(self, agent: AgentRecord, action: Action, *, hold_min: int = 0) -> ActionOutcome:
+    async def apply(self, agent: AgentRecord, action: Action, *, obs: Observation | None = None, hold_min: int = 0) -> ActionOutcome:
+        """Apply one action on live state. ``obs`` is the observation the agent decided on this tick: a failure is
+        ``invalid`` when that observation already showed it could not work and ``stale`` when it showed it could
+        (DESIGN §5, §7.4). ``obs=None`` keeps each failure's fixed kind."""
         tick, day = self.state.tick, self.state.day
         handler = getattr(self, f"_do_{action.type}", None)
         if handler is None:
             outcome = ActionOutcome.invalid(action.type, "unknown_action")
         else:
             try:
-                outcome = await handler(agent, action, hold_min=hold_min)
+                outcome = await handler(agent, action, obs=obs, hold_min=hold_min)
             except Exception as e:  # a kernel bug must never take the run down; record and idle
                 outcome = ActionOutcome.invalid(action.type, f"kernel_error:{type(e).__name__}")
                 self.bus.emit(Event(tick, day, Kind.BRAIN_ERROR, {"agent_id": agent.agent_id, "error": f"{type(e).__name__}: {e}"[:300]},
@@ -352,6 +392,8 @@ class Kernel:
         for k in ("code", "tests"):
             if k in compact:
                 compact[k] = str(compact[k])[:400]
+        # last_action_ok feeds the next tick's failed_action drain (DESIGN §8, the loop's entropy step): only an
+        # invalid action counts as failed; a stale one was valid against what the agent saw
         self.registry.update(agent.agent_id, last_action=json.dumps(compact, sort_keys=True),
                              last_action_ok=outcome.ok or outcome.kind == "stale")
         return outcome
@@ -372,12 +414,22 @@ class Kernel:
                                                                         "to": [new.x, new.y], "target": [target.x, target.y]}, agent.agent_id))
         return ActionOutcome(True, "move", f"now at ({new.x:.1f}, {new.y:.1f})")
 
-    async def _do_forage(self, agent: AgentRecord, action: Action, **_: Any) -> ActionOutcome:
+    def _observed_forageable(self, obs: Observation | None) -> bool:
+        """Whether the observation showed a node to forage: its nearest node within ``world.forage_radius``, and
+        that node above the empty bucket or forage offered (it had stock left, however little)."""
+        if obs is None or not obs.nodes:
+            return False
+        nearest = min(obs.nodes, key=lambda n: (n.distance, n.node_id))
+        if nearest.distance > self.cfg.world.forage_radius:
+            return False
+        return nearest.stock_bucket != "empty" or "forage" in obs.available_actions
+
+    async def _do_forage(self, agent: AgentRecord, action: Action, *, obs: Observation | None = None, **_: Any) -> ActionOutcome:
         node, d = self.nearest_node(agent.pos)
         if node is None or d > self.cfg.world.forage_radius:
-            return ActionOutcome.invalid("forage", "no_node_in_reach")
+            return _miss("forage", "no_node_in_reach", obs, self._observed_forageable(obs), legacy="invalid")
         if node.stock <= 0:
-            return ActionOutcome.stale("forage", "node_empty")
+            return _miss("forage", "node_empty", obs, self._observed_forageable(obs))
         units = forage_units(self.cfg.world, node)
         lo, hi = self.cfg.world.weather.yield_mult_bounds
         wmult = max(lo, min(hi, self.weather.yield_multiplier()))
@@ -404,20 +456,34 @@ class Kernel:
         return ActionOutcome(True, "forage", f"gathered {units:.1f} units worth ${micro_to_usd(value):.3f} {where}",
                              effects={"usd": micro_to_usd(value)})
 
-    def _reach_check(self, agent: AgentRecord, target: AgentRecord | None, kind: str) -> ActionOutcome | None:
+    def _reach_check(self, agent: AgentRecord, target: AgentRecord | None, kind: str, *, named: str | None = None,
+                     obs: Observation | None = None) -> ActionOutcome | None:
+        """Live reach of an agent-targeted action. With an observation, a target it did not list as a neighbour, or
+        listed asleep or beyond earshot, is ``invalid``; one it listed awake within earshot that is now asleep, out of
+        range or dead is ``stale``."""
+        radius = self.talk_radius_for(agent)
+
+        def reachable(seen: NeighbourView | None) -> bool:
+            return seen is not None and not seen.asleep and seen.distance <= radius
+
         if target is None:
-            return ActionOutcome.invalid(kind, "no_such_agent")
+            # by name only the living answer, so a listed neighbour nobody answers to any more has died since
+            seen = _seen_neighbour(obs, named) if obs is not None else None
+            if seen is None:
+                return ActionOutcome.invalid(kind, "no_such_agent")
+            return _miss(kind, "target_unavailable", obs, reachable(seen))
         if target.agent_id == agent.agent_id:
             return ActionOutcome.invalid(kind, "cannot_target_self")
+        observed_ok = obs is not None and reachable(_seen_neighbour(obs, target.agent_id))
         if target.status != AgentStatus.ALIVE or target.asleep:
-            return ActionOutcome.stale(kind, "target_unavailable")
-        if agent.pos.dist(target.pos) > self.talk_radius_for(agent):
-            return ActionOutcome.stale(kind, "target_out_of_range")
+            return _miss(kind, "target_unavailable", obs, observed_ok)
+        if agent.pos.dist(target.pos) > radius:
+            return _miss(kind, "target_out_of_range", obs, observed_ok)
         return None
 
-    async def _do_talk(self, agent: AgentRecord, action: Action, **_: Any) -> ActionOutcome:
+    async def _do_talk(self, agent: AgentRecord, action: Action, *, obs: Observation | None = None, **_: Any) -> ActionOutcome:
         target = self._target_agent(action.target)
-        bad = self._reach_check(agent, target, "talk")
+        bad = self._reach_check(agent, target, "talk", named=action.target, obs=obs)
         if bad:
             return bad
         assert target is not None
@@ -432,9 +498,9 @@ class Kernel:
             self.gossip.queue(agent.agent_id, target.agent_id, self.state.tick)
         return ActionOutcome(True, "talk", f"said to {target.name}", effects={"claims_made": made, "claims_false": false})
 
-    async def _do_share_note(self, agent: AgentRecord, action: Action, **_: Any) -> ActionOutcome:
+    async def _do_share_note(self, agent: AgentRecord, action: Action, *, obs: Observation | None = None, **_: Any) -> ActionOutcome:
         target = self._target_agent(action.target)
-        bad = self._reach_check(agent, target, "share_note")
+        bad = self._reach_check(agent, target, "share_note", named=action.target, obs=obs)
         if bad:
             return bad
         assert target is not None
@@ -445,9 +511,9 @@ class Kernel:
                                                                               "note_title": sanitize_text(action.note_title or "", single_line=True, max_len=60)}, agent.agent_id))
         return ActionOutcome(True, "share_note", f"shared a note with {target.name}")
 
-    async def _do_transfer(self, agent: AgentRecord, action: Action, **_: Any) -> ActionOutcome:
+    async def _do_transfer(self, agent: AgentRecord, action: Action, *, obs: Observation | None = None, **_: Any) -> ActionOutcome:
         target = self._target_agent(action.target)
-        bad = self._reach_check(agent, target, "transfer")
+        bad = self._reach_check(agent, target, "transfer", named=action.target, obs=obs)
         if bad:
             return bad
         assert target is not None
@@ -457,36 +523,54 @@ class Kernel:
         if amount <= 0:
             return ActionOutcome.invalid("transfer", "amount_must_be_positive")
         if not self.wallet.transfer(agent.agent_id, target.agent_id, self.state.tick, amount, ref="transfer"):
-            return ActionOutcome.stale("transfer", "insufficient_funds_keeping_reserve")
+            # stale only if the observed balance covered the amount above the reserve (it has changed since)
+            room = obs is not None and amount <= _observed_room(obs, self.wallet.min_reserve)
+            return _miss("transfer", "insufficient_funds_keeping_reserve", obs, room)
         self.hear(target.agent_id, HeardMessage("transfer", agent.agent_id, agent.name, f"{agent.name} gave you ${action.amount_usd:.2f}.", self.state.tick))
         self.bus.emit(Event(self.state.tick, self.state.day, Kind.TRANSFER, {"from": agent.agent_id, "to": target.agent_id,
                                                                             "amount_usd": micro_to_usd(amount)}, agent.agent_id))
         return ActionOutcome(True, "transfer", f"gave ${micro_to_usd(amount):.2f} to {target.name}")
 
-    async def _do_read_chronicle(self, agent: AgentRecord, action: Action, **_: Any) -> ActionOutcome:
+    async def _do_read_chronicle(self, agent: AgentRecord, action: Action, *, obs: Observation | None = None, **_: Any) -> ActionOutcome:
         text = self.chronicle_reader() if self.chronicle_reader is not None else None
         if not text:
-            return ActionOutcome.stale("read_chronicle", "no_chronicle_yet")
+            offered = obs is not None and "read_chronicle" in obs.available_actions
+            return _miss("read_chronicle", "no_chronicle_yet", obs, offered)
         self.state.read_chronicle_tick[agent.agent_id] = self.state.tick
         self.bus.emit(Event(self.state.tick, self.state.day, Kind.READ_CHRONICLE, {"agent_id": agent.agent_id}, agent.agent_id))
         return ActionOutcome(True, "read_chronicle", "read the chronicle", effects={"text": text[:1500]})
 
-    async def _do_apply_task(self, agent: AgentRecord, action: Action, **_: Any) -> ActionOutcome:
+    async def _do_apply_task(self, agent: AgentRecord, action: Action, *, obs: Observation | None = None, **_: Any) -> ActionOutcome:
         if self.taskboard is None:
             return ActionOutcome.invalid("apply_task", "no_task_board")
         if not action.target:
             return ActionOutcome.invalid("apply_task", "task_id_required")
         res = self.taskboard.apply(agent.agent_id, action.target, action.text or "", self.state.tick, self.state.day)
         if not res.ok:
-            kind = ActionOutcome.stale if res.reason in ("task_not_open", "cannot_afford_fee") else ActionOutcome.invalid
-            return kind("apply_task", res.reason)
+            if obs is None:
+                kind = ActionOutcome.stale if res.reason in ("task_not_open", "cannot_afford_fee") else ActionOutcome.invalid
+                return kind("apply_task", res.reason)
+            seen = next((t for t in obs.tasks if t.task_id == action.target), None)
+            if seen is None or seen.status != "open":  # a task the observation did not show open was never there to take
+                return ActionOutcome.invalid("apply_task", res.reason)
+            if res.reason == "task_not_open":  # assigned since the observation
+                return ActionOutcome.stale("apply_task", res.reason)
+            if res.reason == "cannot_afford_fee":
+                fee = usd_to_micro(self.cfg.economy.pitch_fee_usd)
+                return _miss("apply_task", res.reason, obs, fee <= _observed_room(obs, self.wallet.min_reserve))
+            return ActionOutcome.invalid("apply_task", res.reason)
         made, false = self._check_claims(agent, action)
         return ActionOutcome(True, "apply_task", f"applied to {action.target}", effects={"claims_made": made, "claims_false": false})
 
-    async def _do_nudge_weather(self, agent: AgentRecord, action: Action, **_: Any) -> ActionOutcome:
+    async def _do_nudge_weather(self, agent: AgentRecord, action: Action, *, obs: Observation | None = None, **_: Any) -> ActionOutcome:
         if action.delta is None:
             return ActionOutcome.invalid("nudge_weather", "delta_required")
         w = self.cfg.world.weather
+        spent = agent.weather_nudge_used >= w.nudge_cap_per_agent_day - 1e-9
+        if obs is not None and spent and "nudge_weather" not in obs.available_actions:
+            # the observation no longer offered a nudge: the allowance was spent before this tick (only the agent's own
+            # nudges spend it, so no earlier agent can have done so since)
+            return ActionOutcome.invalid("nudge_weather", "daily_allowance_spent")
         remaining_global = max(0.0, w.global_nudge_cap_per_tick - self.state.global_nudge_this_tick)
         if remaining_global <= 1e-9:
             return ActionOutcome.stale("nudge_weather", "global_nudge_cap_reached")
@@ -501,7 +585,7 @@ class Kernel:
                                                                                  "weather": round(self.weather.value, 4), "shield": shield}, agent.agent_id))
         return ActionOutcome(True, "nudge_weather", f"weather moved by {applied:+.3f} to {self.weather.label}")
 
-    async def _do_propose_gadget(self, agent: AgentRecord, action: Action, **_: Any) -> ActionOutcome:
+    async def _do_propose_gadget(self, agent: AgentRecord, action: Action, *, obs: Observation | None = None, **_: Any) -> ActionOutcome:
         if self.gate is None or not self.cfg.sandbox.enabled:
             return ActionOutcome.invalid("propose_gadget", "sandbox_disabled")
         if not (action.name and action.code and action.tests is not None):
@@ -512,11 +596,12 @@ class Kernel:
                                       recent_failure=self.recent_failure(agent.agent_id))
         if res.ok:
             return ActionOutcome(True, "propose_gadget", f"gadget {action.name} verified ({res.gadget_id})", effects={"gadget_id": res.gadget_id})
-        if res.stage == "availability":
-            return ActionOutcome.stale("propose_gadget", res.reason)
+        if res.stage == "availability":  # stale only if the observation offered a proposal (budgets spent since)
+            offered = obs is not None and "propose_gadget" in obs.available_actions
+            return _miss("propose_gadget", res.reason, obs, offered)
         return ActionOutcome.invalid("propose_gadget", f"rejected at {res.stage}: {res.reason[:120]}")
 
-    async def _do_use_gadget(self, agent: AgentRecord, action: Action, **_: Any) -> ActionOutcome:
+    async def _do_use_gadget(self, agent: AgentRecord, action: Action, *, obs: Observation | None = None, **_: Any) -> ActionOutcome:
         if self.gate is None or self.gadgets is None:
             return ActionOutcome.invalid("use_gadget", "sandbox_disabled")
         if not action.target:
@@ -528,16 +613,31 @@ class Kernel:
         res = await self.gate.use(agent.agent_id, self.state.tick, self.state.day, action.target, action.params or {}, d)
         if res.ok:
             return ActionOutcome(True, "use_gadget", f"{rec.name}: {res.kind} {res.value:.3f} until tick {res.expires_tick}")
-        if res.reason in ("too_far", "cooldown", "sandbox_busy", "sandbox_budget_exhausted", "cannot_afford_fee"):
-            return ActionOutcome.stale("use_gadget", res.reason)
+        if obs is None:
+            if res.reason in ("too_far", "cooldown", "sandbox_busy", "sandbox_budget_exhausted", "cannot_afford_fee"):
+                return ActionOutcome.stale("use_gadget", res.reason)
+            return ActionOutcome.invalid("use_gadget", res.reason)
+        seen = next((g for g in obs.gadgets if g.gadget_id == action.target), None)
+        if seen is None:  # a gadget the observation did not show
+            return ActionOutcome.invalid("use_gadget", res.reason)
+        if res.reason in ("sandbox_busy", "sandbox_budget_exhausted", "no_such_gadget"):
+            return ActionOutcome.stale("use_gadget", res.reason)  # shared budgets spent, or quarantined, by earlier agents
+        if res.reason == "too_far":
+            return _miss("use_gadget", res.reason, obs, seen.distance <= self.cfg.world.gadget_radius)
+        if res.reason == "cannot_afford_fee":
+            fee = usd_to_micro(self.cfg.sandbox.use_fee_usd)
+            return _miss("use_gadget", res.reason, obs, fee <= _observed_room(obs, self.wallet.min_reserve))
+        # cooldown (only the agent's own last use sets it), tampering found now, a failed run: never valid
         return ActionOutcome.invalid("use_gadget", res.reason)
 
-    async def _do_create_offspring(self, agent: AgentRecord, action: Action, *, hold_min: int = 0, **_: Any) -> ActionOutcome:
+    async def _do_create_offspring(self, agent: AgentRecord, action: Action, *, obs: Observation | None = None, hold_min: int = 0,
+                                   **_: Any) -> ActionOutcome:
         if self.lifecycle is None:
             return ActionOutcome.invalid("create_offspring", "no_lifecycle")
         if not action.name or action.amount_usd is None:
             return ActionOutcome.invalid("create_offspring", "name_and_amount_required")
-        return self.lifecycle.create_offspring(agent, action.name, usd_to_micro(action.amount_usd), self.state.tick, self.state.day, hold_min)
+        return self.lifecycle.create_offspring(agent, action.name, usd_to_micro(action.amount_usd), self.state.tick, self.state.day, hold_min,
+                                               obs=obs)
 
     async def _do_sleep(self, agent: AgentRecord, action: Action, **_: Any) -> ActionOutcome:
         if agent.asleep:

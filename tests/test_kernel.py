@@ -2,7 +2,9 @@
 
 A Simulation is built and ticked once so world state is real (nodes placed, vaults, brains);
 then actions are applied directly and their outcome kinds checked: ``invalid`` adds to the
-failure window that gates gadget proposals, ``stale`` does not.
+failure window that gates gadget proposals, ``stale`` does not. Actions here are applied without
+an observation, so each failure keeps its fixed kind; tests/test_kernel_validate.py classifies
+failures against the observation the agent decided on, as the tick loop does.
 """
 
 from __future__ import annotations

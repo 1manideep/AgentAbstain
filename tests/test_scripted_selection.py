@@ -7,7 +7,8 @@ reproduction are byte-identical and have offspring in them.
 
 ``population.scripted_rules: pre_7_2`` keeps the rules from before §7.2 for the worlds recorded under them (G0's E0
 arms and dependence check): its rows are checked the same way, and the two golden worlds run under it reproduce the
-digests recorded before this change.
+digests recorded before this change (re-recorded once since, for the kernel's observation-based invalid/stale
+classification; see BEFORE_7_2).
 """
 
 from __future__ import annotations
@@ -307,19 +308,26 @@ def test_pre_7_2_rules_are_the_old_generators() -> None:
 # tests/test_world_goldens.py's two worlds as recorded on the code before the scripted brain followed §7.2. Under
 # pre_7_2 the events, calls and ledger must match byte for byte, and metrics.jsonl too once the config hash its
 # identity carries is the old one (the switch is itself a config field, so the hash differs).
+# Re-recorded when the kernel began classifying a failed action against the agent's observation (DESIGN §7.4): in
+# these worlds a gadget cooldown and, under fog, a talk to an inhabitant in view but beyond earshot became invalid
+# instead of stale, so they now add the failed_action drain. Kernel.apply without an observation keeps the old kinds,
+# and with the loop's observation dropped both worlds give the digests recorded before exactly (base metrics
+# c2be52a5..., events 3f9ddd52..., calls 8e3f8834..., ledger 69cc1acf...; amnesic fog metrics e26476ce..., events
+# 75e82ce6..., calls b1a777de..., ledger 61b2acd0...).
 BEFORE_7_2 = {
     "base": {"config_hash": "f589277f12656996537c99ed2f9968389a7d067d6bb94a5b6683ba201fbc1b51",
-             "metrics": "c2be52a599c4ff3e282ce931ca3145ebef011ed16c5df42991f951192ad5e427",
-             "events": "3f9ddd5211be312b1f17d4af60967f3e0b2a5ed5da5ca61f8511597603993807",
-             "calls": "8e3f88341f07b77eff388dbccc83737e01792e6398cdfb6d6eb13b772ae8c5dc",
-             "ledger": "69cc1acf2f945851cd6d75ee5c73bf715048ae2366f340d9658728b9b5cd7b37"},
+             "metrics": "62012f275bcb693b633f7a59cb556f6655ed32acc3ead77ddf07a421e8e7a801",
+             "events": "2f211f014a43ad1052d3cde95f78f432eb3d2b80d0c73738183940c6748480b1",
+             "calls": "bf6e449237c81f80b295c49141067355eb517c732c8bf2f5bbee57348cea0d0a",
+             "ledger": "c6708a83be68ce4fe697fac24249b70cd0ecdfe7bdf00535754ad9ab8002dc86"},
     "amnesic_fog": {"config_hash": "fb105920e6b0993e29971b43cf9f1c984343500dcb33fa8178b837499498c47d",
-                    "metrics": "e26476ceec9018344294c550a42a3c40e45b3b825106081920b882aed01cc72f",
-                    "events": "75e82ce6cb6f8ee827b7293a303f35a15829efc68c589294df1420c6f3686294",
-                    # full response text under run.log_prompts (the memory-audit item): one 25953-character scripted
-                    # gadget proposal is now stored whole; cut back to 4000 characters it gives f266313e... as before
-                    "calls": "b1a777debe18bfcaab06321b2cbdbfcdeddbf965a6a809acc30268eb72553cbb",
-                    "ledger": "61b2acd093d556e97364681d40ca452c4b623a9508cab9b1959579be5ff77905"},
+                    "metrics": "1218d2415794c998097dc3ad686e43f135e4b662846908232f9c7d6ae73fc7b4",
+                    "events": "2b2721a88789099da945adb5b9650ff5672e9ebb01d0585334337828204c624c",
+                    # full response text under run.log_prompts (the memory-audit item): a 25953-character scripted
+                    # gadget proposal is stored whole (before the kernel item, cut back to 4000 characters, the old
+                    # world's calls gave f266313e... as before that item)
+                    "calls": "3287c65833ed914cf0ae0c964b5531d840c211122fe775cdcaeac73916c61c93",
+                    "ledger": "f1ef1e019444057038fa8e5c46abbea7ad04b55fc7b092fd37705fbadcae4188"},
 }
 
 

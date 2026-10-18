@@ -521,6 +521,7 @@ class Simulation:
             since = None if a.last_forage_tick is None else tick - a.last_forage_tick
             if a.last_forage_tick is None:
                 since = tick - a.born_tick
+            # the failed_action drain (DESIGN §8): last_action_ok is False only after an invalid action (Kernel.apply)
             inp = entropy.DrainInputs(
                 balance_ratio=micro_to_usd(a.balance) / max(1e-9, cfg.population.starting_balance_usd),
                 last_action_failed=not a.last_action_ok, neighbours=len(neighbours),
@@ -643,8 +644,8 @@ class Simulation:
                 hist.append(decision.action.type)
                 # memory ops
                 self._apply_memory_ops(a, decision.memory_ops, tick, call_id=call_ids[aid])
-                # kernel
-                outcome = await self.kernel.apply(a, decision.action, hold_min=hold_min_map[a.model_tier])
+                # kernel: a failure is invalid or stale against the observation this decision was made on (DESIGN §7.4)
+                outcome = await self.kernel.apply(a, decision.action, obs=obs[aid], hold_min=hold_min_map[a.model_tier])
                 if outcome.effects.get("child_id"):
                     births.append(str(outcome.effects["child_id"]))
                     self._ensure_entities(str(outcome.effects["child_id"]), tick)
