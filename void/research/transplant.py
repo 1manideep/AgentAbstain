@@ -23,6 +23,14 @@ turned into their opposites.
 Layout and fairness. Runs are ordinary run directories at ``OUT/<experiment.name>/<condition>/seed_<n>/``
 (``exp_mem_e5`` for the shipped config). The condition is written into ``experiment.arm`` and into ``run.name``
 (``<run.name>_<condition>``), the two paths compare always allows, so the arms' resolved configs differ only there.
+That does not make the condition the only difference between the arms' worlds. The run name, which carries the
+condition, is part of the run id (``<run.name>-s<seed>``), every id the run hands out (agents, notes, calls, gadgets;
+:class:`void.ids.IdFactory`) carries a digest of the run id, and many named random streams are keyed on those ids:
+the scripted brain's ``rng.stream("scripted", agent_id, tick)``, claim feedback, gossip, nightly maintenance and the
+exam among them. So two conditions at one seed share what is drawn from the seed alone (node placement, the founders'
+personalities and starting positions, the order agents act in each tick) but not those streams: their worlds differ by
+that random noise as well as by the transplant. Pairing by seed does not cancel it within a pair; it averages out over
+seeds, and the paired interval includes it.
 The transplant itself is recorded in the run: the notes and policy rows carry it, ``world_kv['transplant']`` holds
 the manifest (donor run, donors, recipients, what each received) and ``transplant.json`` mirrors it beside
 ``world.db``. A directory that already holds a run is never overwritten: a completed run with the same config and

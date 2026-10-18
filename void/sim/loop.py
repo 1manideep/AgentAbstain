@@ -22,7 +22,14 @@ from void.agents.models import AgentRecord, PersonalitySeed
 from void.agents.registry import AgentRegistry
 from void.brain import coherence, entropy
 from void.brain.base import Brain, BrainResult, Sampling, Usage
-from void.brain.decision import Action, Decision, MemoryOp, sanitize_text, strict_json_schema
+from void.brain.decision import (
+    Action,
+    Decision,
+    MemoryOp,
+    sanitize_text,
+    share_practice_enabled,
+    strict_json_schema,
+)
 from void.brain.factory import build_brains
 from void.brain.prompt import estimate_tokens, render_observation, system_prompt
 from void.config import VoidConfig, micro_to_usd, usd_to_micro
@@ -184,8 +191,10 @@ class Simulation:
             from void.brain.utility_calls import make_chronicle_writer
             self.chronicle.llm_writer = make_chronicle_writer(self)
         self.system_tokens = {t: estimate_tokens(system_prompt(cfg, t)) for t in cfg.tiers}
-        # the structured-output schema is sent as input on every provider decision; the hold counts it
-        self.schema_tokens = estimate_tokens(json.dumps(strict_json_schema(), separators=(",", ":")))
+        # the structured-output schema is sent as input on every provider decision; the hold counts it. It is the
+        # schema the provider brains send: with share_practice only in worlds that offer it, so it is unchanged otherwise
+        self.schema_tokens = estimate_tokens(json.dumps(strict_json_schema(share_practice=share_practice_enabled(cfg)),
+                                                        separators=(",", ":")))
         self.system_hash = {t: self._store_prompt_text(system_prompt(cfg, t)) for t in cfg.tiers}
         self.snapshot_listeners: list[Callable[[dict[str, Any]], None]] = []
         self.status = "running"

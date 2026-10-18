@@ -63,10 +63,7 @@ RESERVED_KINDS: dict[str, str] = {
 IN_FLIGHT_KINDS: dict[str, str] = {}
 # Kinds emitted outside the registry, with why they still are. Each one needs a Kind constant in void/events.py (a
 # shared surface) before its emitter can switch to it; the entry must then go.
-OUTSIDE_REGISTRY: dict[str, str] = {
-    "gossip_paraphrase_downgraded": "void/culture/gossip.py emits its own module constant GOSSIP_PARAPHRASE_DOWNGRADED; "
-                                    "it needs Kind.GOSSIP_PARAPHRASE_DOWNGRADED in void/events.py",
-}
+OUTSIDE_REGISTRY: dict[str, str] = {}
 
 # Enumerated database values written somewhere, with the evidence the SQL scan cannot see: (module, code fragment).
 EVIDENCE: dict[tuple[str, str, str], tuple[str, str]] = {

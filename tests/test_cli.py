@@ -14,10 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = str(ROOT / "configs" / "scripted_smoke.yaml")
 
 
-def test_schema_writes_nine_valid_schemas(tmp_path: Path) -> None:
+def test_schema_writes_ten_valid_schemas(tmp_path: Path) -> None:
     assert main(["schema", "--out", str(tmp_path)]) == 0
     files = sorted(p.name for p in tmp_path.glob("*.schema.json"))
-    assert files == sorted(f"{n}.schema.json" for n in SCHEMA_NAMES) and len(files) == 9
+    assert files == sorted(f"{n}.schema.json" for n in SCHEMA_NAMES) and len(files) == 10
     for name in SCHEMA_NAMES:
         schema = json.loads((tmp_path / f"{name}.schema.json").read_text())
         assert schema["$schema"].startswith("https://json-schema.org/")

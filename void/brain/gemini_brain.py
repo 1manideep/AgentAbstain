@@ -29,7 +29,7 @@ import time
 from typing import Any
 
 from void.brain.base import BrainResult, Sampling, Usage
-from void.brain.decision import Decision, parse_lenient, strict_json_schema
+from void.brain.decision import Decision, parse_lenient, share_practice_enabled, strict_json_schema
 from void.brain.prompt import render_observation, system_prompt
 from void.config import TierConfig, VoidConfig
 from void.types import Observation
@@ -54,7 +54,8 @@ class GeminiBrain:
         self._client = client
         self.semaphore = semaphore or asyncio.Semaphore(cfg.server.max_concurrent_calls)
         self._system = system_prompt(cfg, tier)
-        self._schema = strict_json_schema()
+        # share_practice is in the action enum only in worlds that offer it; without practices the schema is unchanged
+        self._schema = strict_json_schema(share_practice=share_practice_enabled(cfg))
         self._thinking_ok = self.tcfg.thinking_budget is not None
 
     # --- client -------------------------------------------------------------------------

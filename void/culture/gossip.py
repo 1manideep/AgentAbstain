@@ -42,7 +42,7 @@ __all__ = [
     "EXCLUDED_TAGS",
 ]
 
-GOSSIP_PARAPHRASE_DOWNGRADED = "gossip_paraphrase_downgraded"
+GOSSIP_PARAPHRASE_DOWNGRADED = Kind.GOSSIP_PARAPHRASE_DOWNGRADED  # kept for importers; the event kind is the Kind constant
 GOSSIP_TAG = "gossip"
 # Index files are an agent's own structure (MEMORY_EVOLUTION §5.4): practice travels through the policy file,
 # so neither gossip nor inheritance copies them.
@@ -442,7 +442,7 @@ class Gossip:
             Event(
                 tick,
                 day,
-                GOSSIP_PARAPHRASE_DOWNGRADED,
+                Kind.GOSSIP_PARAPHRASE_DOWNGRADED,
                 payload={
                     "speaker_id": item.speaker_id,
                     "listener_id": item.listener_id,

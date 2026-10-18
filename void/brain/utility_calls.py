@@ -3,8 +3,9 @@
 Both go through ``Wallet.charged_call`` so they reserve, are metered from real usage and count
 toward the caps. A gated-out call returns ``None`` and the caller falls back to the template; so does a
 call that failed, was refused or stopped at its output cap (the brains report those as errors).
-Any provider brain that sets ``is_llm = True`` and implements ``complete_text`` can serve them;
-scripted tiers never trigger a paid call.
+Each call is an ``llm_calls`` row whose ``raw_text`` is the whole response when ``run.log_prompts`` is on
+(cut at 4000 characters otherwise), like the decide and maintain rows. Any provider brain that sets
+``is_llm = True`` and implements ``complete_text`` can serve them; scripted tiers never trigger a paid call.
 """
 
 from __future__ import annotations
@@ -49,13 +50,14 @@ def _record(sim: Simulation, wallet_id: str, tier_name: str, purpose: str, cc: A
     if r is None or m is None:
         return
     tier = sim.cfg.tiers[tier_name]
+    raw = r.raw_text or ""  # whole when prompts are logged, as decide and maintain store it (MEMORY_EVOLUTION §7.4)
     sim.db.execute(
         "INSERT INTO llm_calls(call_id, tick, agent_id, purpose, tier, model, provider, input_tokens, output_tokens, cache_read_tokens, "
         "cache_write_tokens, real_cost, world_cost, hold, estimated, latency_ms, stop_reason, request_id, error, raw_text) "
         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (ref, tick, wallet_id, purpose, tier_name, r.model or tier.model, tier.provider, r.usage.input_tokens, r.usage.output_tokens,
          r.usage.cache_read_tokens, r.usage.cache_write_tokens, m.real_cost, m.world_cost, cc.hold, int(m.estimated), r.latency_ms,
-         r.stop_reason, r.request_id, r.error, (r.raw_text or "")[:4000]),
+         r.stop_reason, r.request_id, r.error, raw if sim.cfg.run.log_prompts else raw[:4000]),
     )
 
 

@@ -1,0 +1,28 @@
+{
+  "$id": "https://void.local/schemas/day.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "day": {
+      "title": "Day",
+      "type": "integer"
+    },
+    "row": {
+      "additionalProperties": true,
+      "description": "The daily aggregate row (DESIGN \u00a717)",
+      "title": "Row",
+      "type": "object"
+    },
+    "type": {
+      "const": "day",
+      "default": "day",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "day",
+    "row"
+  ],
+  "title": "DayMsg",
+  "type": "object"
+}
