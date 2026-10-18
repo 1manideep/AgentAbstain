@@ -1,11 +1,12 @@
 # exp_scarcity_live, arm high: the scripted scarcity-and-deception experiment re-run on a live Gemini tier.
 # Same world as exp_scarcity_high (scarcity 0.5, starting balance 0.60, equalized pricing, observe mode);
-# the roster runs on the `sharp` rung (gemini-3.7-flash) instead of scripted agents, 5 days x 12 ticks.
+# the roster runs on the `sharp` rung (its model and prices come from base.yaml's tiers) instead of scripted
+# agents, 5 days x 12 ticks.
 # Personalities are kept for parity with the scripted arms; a provider brain never sees them (only its motto).
 # Cost `[estimate, prices unverified]`: about 1.3k prompt + 0.9k cached system + 0.25k output tokens and up to
 # 1k thinking tokens per call at sharp's list prices is about $0.004 per call; 6 agents x 60 ticks is at most
-# 360 calls, so about $1.5 per run and about $30 for 10 seeds x 2 arms. On `average` (gemini-3.1-flash-lite,
-# no thinking) the same pilot is about $5. The real-dollar ceiling per run is economy.total_cap_usd.
+# 360 calls, so about $1.5 per run and about $30 for 10 seeds x 2 arms. On the `average` rung (no thinking)
+# the same pilot is about $5. The real-dollar ceiling per run is economy.total_cap_usd.
 # Run:  GEMINI_API_KEY=... .venv/bin/void run --config configs/live_scarcity_high.yaml --seeds 1-10 --out data/exp
 # then the low arm, then  .venv/bin/python scripts/compare.py data/exp/exp_scarcity_live
 extends: exp_scarcity_high.yaml
