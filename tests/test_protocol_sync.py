@@ -5,8 +5,8 @@ exports ``schemas/*.schema.json`` from the same models (tests/test_surfaces.py k
 reads protocol.ts as text and checks the parts a drift would silently break: the ``RunStatus`` union and the other
 string unions the schemas pin, and the message ``type`` literals of the ``ServerMsg`` union.
 
-The ``day`` message has a pydantic model but no exported schema (it is not in ``SCHEMA_NAMES``); it is the only
-message allowed to be missing from ``schemas/``, and the test keeps passing once it is exported.
+Every message type has an exported schema (``day`` joined ``SCHEMA_NAMES`` with schemas/day.schema.json), so a new
+message without one fails here.
 
 The small TypeScript readers here (:func:`ts_union`, :func:`ts_interface_fields`) are also used by
 tests/test_server_memory_api.py to hold the memory-layer HTTP responses to their protocol.ts interfaces.
@@ -29,7 +29,7 @@ PROTOCOL_TS = REPO / "web" / "src" / "protocol.ts"
 SCHEMAS = REPO / "schemas"
 
 # Messages that have a wire model but no exported schema yet (see the module docstring).
-UNEXPORTED_ALLOWED = frozenset({"day"})
+UNEXPORTED_ALLOWED: frozenset[str] = frozenset()
 
 
 # --- reading protocol.ts ---------------------------------------------------------------------------------------
