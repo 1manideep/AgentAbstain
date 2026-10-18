@@ -9,6 +9,13 @@ Sources (§5.7): ``seed`` at birth of a founder, ``inherited`` when a child copi
 ``self_edit`` for the nightly edit, ``adapted`` for the child's first maintenance edit, ``mutated`` for a
 kernel-paid random rewrite, ``adopted`` when the kernel measures that a neighbour's suggestion was taken up.
 
+The command layer writes every agent edit as ``self_edit``; the kernel's lineage labels are applied afterwards
+through :meth:`PolicyStore.relabel`, which the nightly step calls (``adapted`` when :meth:`PolicyStore.inherited_from`
+names a parent, ``adopted`` when it measures a suggestion in the new text). ``self_edit``, ``adapted`` and
+``adopted`` are the agent-authored sources (:data:`AGENT_SOURCES`): all three count toward the daily edit budget.
+:func:`mutate_text` is the kernel's scripted mutation at birth (``mutated``): drop, duplicate or move one practice
+line, drawn from the caller's RNG.
+
 Write path: every version passes through :meth:`PolicyStore.set`, which cleans the text (control characters
 and angle brackets neutralised, a spoofed frontmatter block dropped, trailing whitespace removed), enforces
 ``max_chars`` (an agent-authored version over the limit is refused so the agent is told; a kernel-written one
@@ -25,7 +32,9 @@ the agent's own practices file is advice it gave itself, to follow unless it con
 
 from __future__ import annotations
 
+import dataclasses
 import difflib
+import random
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,13 +47,17 @@ from void.db import Database
 from void.memory.notes import render_frontmatter, split_frontmatter
 
 __all__ = ["PolicySource", "PolicyVersion", "PolicyStore", "SEED_DEFAULT", "SEED_DIVERSE", "SOURCES", "KERNEL_SOURCES",
-           "FILE_NAME", "similarity", "clean_policy_text"]
+           "AGENT_SOURCES", "MUTATIONS", "FILE_NAME", "similarity", "clean_policy_text", "mutate_text"]
 
 PolicySource = Literal["seed", "self_edit", "inherited", "adapted", "mutated", "adopted"]
 SOURCES: tuple[PolicySource, ...] = ("seed", "self_edit", "inherited", "adapted", "mutated", "adopted")
 # Versions the kernel writes are cut to ``max_chars``; an agent-authored one over the limit is refused instead,
 # so the agent learns the limit rather than silently losing the end of its file.
 KERNEL_SOURCES: frozenset[str] = frozenset({"seed", "inherited", "mutated"})
+# Versions the agent wrote itself: the command layer records them as ``self_edit`` and the kernel may relabel them
+# ``adapted`` or ``adopted`` (its measured lineage); all three count toward ``max_edits_per_day``.
+AGENT_SOURCES: frozenset[str] = frozenset({"self_edit", "adapted", "adopted"})
+MUTATIONS: tuple[str, ...] = ("drop", "duplicate", "reorder")
 FILE_NAME = "memory_policy.md"
 
 SEED_DEFAULT = """# How I remember (v1)
@@ -99,6 +112,35 @@ def clean_policy_text(text: str) -> str:
         if not data:
             return out
         out = rest.strip("\n")
+
+
+def mutate_text(text: str, rng: random.Random) -> tuple[str, str] | None:
+    """The kernel's scripted mutation at birth (§5.7 ``mutated``): one small random change to a policy's practice lines
+    (non-empty lines that are not markdown headings; a heading names the file, it is no practice).
+
+    The operation is drawn uniformly from those that apply (:data:`MUTATIONS`): ``drop`` removes one practice line,
+    ``duplicate`` repeats one right after itself, ``reorder`` moves one to another practice line's place (needs two).
+    Returns ``(new_text, operation)``, or None when the text has no practice line or the change leaves it as it was
+    (moving a line among identical ones). Deterministic given ``rng``; every other line keeps its place and form.
+    """
+    lines = text.split("\n")
+    units = [i for i, line in enumerate(lines) if line.strip() and not line.strip().startswith("#")]
+    if not units:
+        return None
+    ops = [op for op in MUTATIONS if op != "reorder" or len(units) >= 2]
+    op = rng.choice(ops)
+    i = rng.choice(units)
+    out = list(lines)
+    if op == "drop":
+        del out[i]
+    elif op == "duplicate":
+        out.insert(i + 1, lines[i])
+    else:  # reorder: the line leaves its place and takes another practice line's, the rest keep their order
+        j = rng.choice([u for u in units if u != i])
+        line = out.pop(i)
+        out.insert(j, line)
+    new = "\n".join(out)
+    return (new, op) if clean_policy_text(new) != clean_policy_text(text) else None
 
 
 def _word_diff(old: list[str], new: list[str]) -> tuple[int, int]:
@@ -181,10 +223,23 @@ class PolicyStore:
         return ((t - 1) // self.ticks_per_day) * self.ticks_per_day + 1
 
     def edits_today(self, agent_id: str, tick: int) -> int:
-        """Self-edits recorded on the day of ``tick`` (the ``max_edits_per_day`` budget counts these)."""
-        row = self.db.fetchone("SELECT COUNT(*) AS n FROM policy_versions WHERE agent_id=? AND tick>=? AND tick<=? AND source='self_edit'",
+        """Versions the agent wrote on the day of ``tick`` (:data:`AGENT_SOURCES`: a ``self_edit`` the kernel relabelled
+        ``adapted`` or ``adopted`` still counts; the ``max_edits_per_day`` budget counts these)."""
+        row = self.db.fetchone("SELECT COUNT(*) AS n FROM policy_versions WHERE agent_id=? AND tick>=? AND tick<=? "
+                               "AND source IN ('self_edit','adapted','adopted')",
                                (agent_id, self.day_start(tick), self.day_start(tick) + self.ticks_per_day - 1))
         return int(row["n"]) if row is not None else 0
+
+    def inherited_from(self, agent_id: str, version: int) -> str | None:
+        """The parent to credit when ``version`` is the agent's first own edit of the policy it inherited at birth
+        (§5.7 ``adapted``): its first version is ``inherited`` and every version before ``version`` was written by the
+        kernel (``inherited``, ``mutated``). None otherwise: a founder, a transplant recipient (its first version is
+        its seed), or an agent that has edited its policy before."""
+        rows = self.db.fetchall("SELECT version, source, source_agent_id FROM policy_versions WHERE agent_id=? AND version<? "
+                                "ORDER BY version", (agent_id, int(version)))
+        if not rows or rows[0]["source"] != "inherited" or any(r["source"] in AGENT_SOURCES for r in rows):
+            return None
+        return rows[0]["source_agent_id"]
 
     # --- write -----------------------------------------------------------------------------------
     def seed_text(self, index: int) -> str:
@@ -255,6 +310,32 @@ class PolicyStore:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(self.render_file(version), encoding="utf-8")
         return version
+
+    def relabel(self, agent_id: str, version: int, *, source: PolicySource, source_agent_id: str | None) -> PolicyVersion:
+        """Re-attribute a version the agent wrote to the kernel's measured lineage (§5.7): ``adapted`` for a child's first
+        own edit of its inherited policy, ``adopted`` when a neighbour's suggestion is measured in it. Only an
+        agent-authored version (:data:`AGENT_SOURCES`) may be relabelled, and only to an agent-authored source; text,
+        tick, parent and similarity stay as written. The file mirror follows when ``version`` is the current one.
+        Raises ``ValueError`` otherwise. Returns the relabelled row.
+        """
+        if source not in AGENT_SOURCES:
+            raise ValueError(f"only an agent-authored source may be given by relabelling, not {source!r}")
+        with self.db.tx():
+            row = self.db.fetchone(
+                "SELECT agent_id, version, tick, text, parent_version, source, source_agent_id, similarity_to_parent "
+                "FROM policy_versions WHERE agent_id=? AND version=?", (agent_id, int(version)))
+            if row is None:
+                raise ValueError(f"{agent_id} has no policy version {version}")
+            old = PolicyVersion(**{k: row[k] for k in row.keys()})
+            if old.source not in AGENT_SOURCES:
+                raise ValueError(f"version {version} of {agent_id} was written by the kernel ({old.source}); it cannot be relabelled")
+            new = dataclasses.replace(old, source=source, source_agent_id=source_agent_id)
+            self.db.execute("UPDATE policy_versions SET source=?, source_agent_id=? WHERE agent_id=? AND version=?",
+                            (new.source, new.source_agent_id, agent_id, int(version)))
+            cur = self.current(agent_id)
+            if cur is not None and cur.version == new.version:
+                self.path_for(agent_id).write_text(self.render_file(new), encoding="utf-8")
+        return new
 
     @staticmethod
     def event_payload(version: PolicyVersion) -> dict[str, object]:

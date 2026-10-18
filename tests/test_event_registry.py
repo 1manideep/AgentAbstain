@@ -57,10 +57,6 @@ VOID = REPO / "void"
 RESERVED_KINDS: dict[str, str] = {
     Kind.LLM_CALL: "ledger kind only: a decision call is an llm_calls row and a wallet_ledger entry of kind llm_call",
     Kind.BANKRUPT: "death payload carries cause: a bankruptcy is a death event whose cause says why",
-    Kind.PRACTICE_ADOPTED: "WP6 adoption, wave 4",
-    Kind.PRACTICE_PERSISTED: "WP6 adoption, wave 4",
-    Kind.PRACTICE_DROPPED: "WP6 adoption, wave 4",
-    Kind.PRACTICE_ROYALTY: "WP7 arm C, wave 4",
 }
 # Kinds a parallel wave-3 item starts to emit: tolerated whether or not that work is merged yet. Remove the entry
 # once it is.
@@ -84,9 +80,15 @@ EVIDENCE: dict[tuple[str, str, str], tuple[str, str]] = {
     ("gadgets", "status", "rejected"): ("void/sandbox/gate.py", '"rejected", {}, {}, verification'),
     ("gadgets", "status", "verified"): ("void/sandbox/gate.py", 'sha256(tests), "verified"'),
     ("practice_events", "kind", "suggested"): ("void/culture/practices.py", 'return self.record("suggested", tick'),
+    ("practice_events", "kind", "adopted"): ("void/culture/practices.py", 'return self.record("adopted", tick'),
+    ("practice_events", "kind", "persisted"): ("void/culture/practices.py", 'return self.record("persisted", tick'),
+    ("practice_events", "kind", "dropped"): ("void/culture/practices.py", 'return self.record("dropped", tick'),
     ("policy_versions", "source", "seed"): ("void/memory/policy.py", 'source="seed"'),
     ("policy_versions", "source", "inherited"): ("void/memory/policy.py", 'source="inherited"'),
     ("policy_versions", "source", "self_edit"): ("void/memory/commands.py", 'source="self_edit"'),
+    ("policy_versions", "source", "adapted"): ("void/sim/maintenance.py", 'source="adapted", source_agent_id=parent'),
+    ("policy_versions", "source", "mutated"): ("void/agents/lifecycle.py", 'source="mutated")'),
+    ("policy_versions", "source", "adopted"): ("void/sim/maintenance.py", 'source="adopted", source_agent_id=adopted[0]'),
     ("memory_commands", "purpose", "maintain"): ("void/sim/maintenance.py", 'purpose="maintain", rights='),
     ("memory_commands", "purpose", "tick"): ("void/memory/commands.py", 'tick, "tick", command'),
     **{("memory_commands", "command", c): ("void/memory/commands.py",
@@ -99,14 +101,8 @@ EVIDENCE: dict[tuple[str, str, str], tuple[str, str]] = {
 }
 # Enumerated values nothing writes yet, with the reason.
 RESERVED_VALUES: dict[tuple[str, str, str], str] = {
-    ("policy_versions", "source", "adapted"): "wave 4",
-    ("policy_versions", "source", "mutated"): "wave 4",
-    ("policy_versions", "source", "adopted"): "wave 4",
     ("memory_commands", "purpose", "recall"): "C3/C4, [proposed]",
     ("memory_commands", "purpose", "kernel"): "C3/C4, [proposed]",
-    ("practice_events", "kind", "adopted"): "WP6 adoption, wave 4",
-    ("practice_events", "kind", "persisted"): "WP6 adoption, wave 4",
-    ("practice_events", "kind", "dropped"): "WP6 adoption, wave 4",
     ("gadgets", "status", "proposed"): "the gate settles a proposal in the tick it is made: its row is inserted verified or rejected",
     ("note_manifest", "written_by", "agent"): "agents change their vault only through memory commands, which the kernel applies "
                                               "and records as written_by kernel",
