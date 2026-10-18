@@ -1,0 +1,24 @@
+# E5 evaluation world (docs/research/MEMORY_EVOLUTION.md §6.7, WP9): the standard 3-day world a transplanted
+# memory policy and vault are tested in. It is the E0 world (fog, claim feedback, seeded policies, paid nightly
+# maintenance, the audit exam, R1 retrieval) cut to three days. `void transplant` (void.research.transplant) runs it
+# once per condition and seed: before the first tick it copies a donor's live notes and current policy into the
+# first `--recipients` roster agents, then runs it as `void run` would.
+# The conditions are none, policy, vault, both, shuffled and inverted. Each is written into experiment.arm (and
+# into run.name, as exp_mem_e5_<condition>) at run time, so the arms' resolved configs differ only in those two
+# paths, which compare always allows. That is why independent_variables is empty and this file is the `none` arm.
+# Every agent's maintenance strategy is the no-op: recipients pay for the nightly call like everyone else but
+# nothing in the world rebuilds or edits their memory, so the transplant is the only difference between arms.
+# Fitness is end-of-run mean balance, as in E0.
+extends: exp_mem_e0_base.yaml
+run:
+  name: exp_mem_e5
+  days: 3
+tiers:
+  scripted:
+    maintenance_strategy: noop
+experiment:
+  name: exp_mem_e5
+  arm: none
+  independent_variables: []
+  primary_outcome: mean_balance
+  secondary_outcomes: [exam_score, probe_recall, notes_by_channel.inherited, notes_by_channel.observed, invalid_action_rate]
