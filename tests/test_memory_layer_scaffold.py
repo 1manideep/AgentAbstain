@@ -129,12 +129,17 @@ def test_log_prompts_off_stores_nulls(run_sim) -> None:
 
 
 def test_export_writes_every_layer_table(logged, tmp_path: Path) -> None:
-    manifest = export_run(logged.run_dir, tmp_path / "export")
-    assert manifest["format"] in ("csv", "parquet")
-    for t in ("llm_calls", "events", "wallet_ledger", "notes", "policy_versions", "memory_commands", "exam_items", "metrics"):
+    out = tmp_path / "export"
+    manifest = export_run(logged.run_dir, out)
+    assert manifest["format"] in ("csv", "parquet") and manifest["created_by"] == "void export"
+    for t in ("llm_calls", "prompt_texts", "run", "events", "wallet_ledger", "notes", "policy_versions", "memory_commands",
+              "exam_items", "exam_answers", "exam_items_answers", "note_manifest", "metrics", "world_kv"):
         assert t in manifest["tables"], t
-        assert Path(manifest["tables"][t]["path"]).exists()
+        assert (out / manifest["tables"][t]["path"]).exists()
     assert manifest["tables"]["llm_calls"]["rows"] == int(logged.db.fetchone("SELECT COUNT(*) AS n FROM llm_calls")["n"])
+    assert manifest["tables"]["prompt_texts"]["rows"] == int(logged.db.fetchone("SELECT COUNT(*) AS n FROM prompt_texts")["n"]) > 0
+    assert manifest["run_id"] == logged.sim.run_id and manifest["served_models"]
+    assert "snapshots" not in manifest["tables"]  # optional: export_run(..., include_snapshots=True)
 
 
 # --- the amnesic control (E1 arm a0) ------------------------------------------------------------------------
