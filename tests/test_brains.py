@@ -76,13 +76,15 @@ class FakeMessages:
         r = self.responses.pop(0)
         if isinstance(r, Exception):
             raise r
+        if r.model is None:  # like the API, echo the model that was asked for (the fakes name no model of their own)
+            r.model = kw["model"]
         return r
 
 
-def resp(text, stop="end_turn", **usage):
+def resp(text, stop="end_turn", model=None, **usage):
     u = SimpleNamespace(input_tokens=usage.get("i", 1000), output_tokens=usage.get("o", 50),
                         cache_read_input_tokens=usage.get("cr", 0), cache_creation_input_tokens=usage.get("cw", 0))
-    r = SimpleNamespace(content=[SimpleNamespace(type="text", text=text)], stop_reason=stop, usage=u, model="claude-opus-5-5",
+    r = SimpleNamespace(content=[SimpleNamespace(type="text", text=text)], stop_reason=stop, usage=u, model=model,
                         stop_details=SimpleNamespace(category="cyber") if stop == "refusal" else None)
     r._request_id = "req_1"
     return r
@@ -101,7 +103,9 @@ def test_anthropic_brain_request_shape_and_parsing():
     r = asyncio.run(brain.decide(obs(tier="budget"), Sampling(1.0, 0.2, False, api_temperature=0.5)))
     assert r.ok and r.decision.action.type == "move" and r.usage.cache_read_tokens == 900 and r.request_id == "req_1"
     kw = msgs.calls[0]
-    assert kw["model"] == "claude-haiku-4-5" and kw["max_tokens"] == 1024
+    # the budget tier's model as the config names it; the two tiers' models differ, so the wrong tier cannot pass
+    assert cfg.tiers["budget"].model != cfg.tiers["frontier"].model
+    assert kw["model"] == cfg.tiers["budget"].model and kw["max_tokens"] == 1024
     assert kw["output_config"]["format"]["type"] == "json_schema" and "effort" not in kw["output_config"]
     assert kw["extra_body"] == {"temperature": 0.5}
     assert kw["system"][0]["cache_control"] == {"type": "ephemeral"}
