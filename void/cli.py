@@ -509,7 +509,7 @@ def cmd_export(args: argparse.Namespace) -> int:
     except RuntimeError as e:
         if "pyarrow" not in str(e).lower():
             raise
-        print(f"void export: {e}: {EXPORT_EXTRA_HINT}", file=sys.stderr)
+        print(f"void export: pyarrow missing: {EXPORT_EXTRA_HINT}", file=sys.stderr)
         return 2
     tables = manifest.get("tables", {})
     for name, info in tables.items():
