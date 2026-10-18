@@ -5,6 +5,12 @@ small and strict, which is what the Messages API structured-output format wants 
 a small scripted policy can fill in without a parser. Numeric fields are bounded and
 finite at the schema level; semantic validation (does the target exist, is it in range,
 can the agent afford it) is the kernel's job.
+
+``share_practice`` (MEMORY_EVOLUTION §5.7) is the one action type a world offers only when a feature is on
+(``memory.practices`` together with ``memory.policy``; :func:`share_practice_enabled`). ``Action`` always accepts
+it, but the JSON schema of ``Action.type`` lists only :data:`ACTION_TYPES`, and :func:`strict_json_schema` adds it
+on request. The provider schema is config-dependent for that reason: one that always listed it would change the
+bytes (and so the priced schema tokens) of every world recorded without practice transmission.
 """
 
 from __future__ import annotations
@@ -14,12 +20,25 @@ import json
 import math
 import re
 from functools import cache
-from typing import Annotated, Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeVar
 
-from pydantic import BaseModel, BeforeValidator, Field, ValidationError, WithJsonSchema, field_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    WithJsonSchema,
+    field_validator,
+)
+from pydantic_core import PydanticCustomError
 
-__all__ = ["ActionType", "ACTION_TYPES", "Claim", "MemoryOp", "Action", "Decision", "strict_json_schema",
-           "NAME_RE", "sanitize_text", "parse_lenient", "clamp_to_schema"]
+if TYPE_CHECKING:
+    from void.config import VoidConfig
+
+__all__ = ["ActionType", "ACTION_TYPES", "PracticeActionType", "SHARE_PRACTICE", "MAX_EXCERPT_CHARS", "Claim", "MemoryOp",
+           "Action", "Decision", "strict_json_schema", "share_practice_enabled", "NAME_RE", "sanitize_text", "parse_lenient",
+           "clamp_to_schema"]
 
 M = TypeVar("M", bound=BaseModel)
 
@@ -28,6 +47,10 @@ ActionType = Literal[
     "nudge_weather", "propose_gadget", "use_gadget", "create_offspring", "sleep", "idle",
 ]
 ACTION_TYPES: tuple[str, ...] = ActionType.__args__  # type: ignore[attr-defined]
+# Offered only when practice transmission is on (see the module docstring), so it is not in ACTION_TYPES.
+PracticeActionType = Literal["share_practice"]
+SHARE_PRACTICE = "share_practice"
+_ActionKind = Literal[ActionType, PracticeActionType]  # flattened: one literal, so a bad type is one error as before
 
 MAX_THOUGHT_CHARS = 600
 MAX_TALK_CHARS = 280
@@ -35,6 +58,9 @@ MAX_NOTE_CHARS = 600
 MAX_TITLE_CHARS = 60
 MAX_NAME_CHARS = 20
 MAX_CODE_CHARS = 8000
+# The longest share_practice excerpt an Action accepts: the upper bound of memory.practices.excerpt_max_chars. The
+# kernel clips each excerpt to the configured limit; every other action's `text` keeps MAX_TALK_CHARS.
+MAX_EXCERPT_CHARS = 2000
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9 _'-]{0,19}$")
 PARAM_KEY_RE = re.compile(r"^[a-z_]{1,16}$")
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -98,13 +124,19 @@ class MemoryOp(BaseModel):
         return [s[:MAX_TITLE_CHARS] for s in v]
 
 
+# The JSON schemas of Action.type and Action.text stay what they were before share_practice existed (the base enum,
+# MAX_TALK_CHARS): strict_json_schema() adds the action on request, and Action._text_length holds the length rule.
+_TYPE_SCHEMA: dict[str, Any] = {"enum": list(ACTION_TYPES), "type": "string"}
+_TEXT_SCHEMA: dict[str, Any] = {"anyOf": [{"maxLength": MAX_TALK_CHARS, "type": "string"}, {"type": "null"}]}
+
+
 class Action(BaseModel):
     model_config = {"extra": "forbid"}
-    type: ActionType
+    type: Annotated[_ActionKind, WithJsonSchema(_TYPE_SCHEMA)]
     target: str | None = Field(default=None, max_length=80)
     x: float | None = Field(default=None, ge=-1e4, le=1e4, allow_inf_nan=False)
     y: float | None = Field(default=None, ge=-1e4, le=1e4, allow_inf_nan=False)
-    text: str | None = Field(default=None, max_length=MAX_TALK_CHARS)
+    text: Annotated[str | None, WithJsonSchema(_TEXT_SCHEMA)] = None
     note_title: str | None = Field(default=None, max_length=MAX_TITLE_CHARS)
     amount_usd: float | None = Field(default=None, ge=1e-6, le=1000.0, allow_inf_nan=False)
     delta: float | None = Field(default=None, ge=-1.0, le=1.0, allow_inf_nan=False)
@@ -113,6 +145,18 @@ class Action(BaseModel):
     tests: str | None = Field(default=None, max_length=MAX_CODE_CHARS)
     params: Annotated[dict[str, float] | None, BeforeValidator(_coerce_params), WithJsonSchema(PARAMS_SCHEMA)] = None
     claims: list[Claim] = Field(default_factory=list, max_length=4)
+
+    @field_validator("text")
+    @classmethod
+    def _text_length(cls, v: str | None, info: ValidationInfo) -> str | None:
+        """At most MAX_TALK_CHARS, or MAX_EXCERPT_CHARS for a share_practice excerpt. The error is the one a
+        ``max_length`` field raises, so lenient parsing and error reports read it as before."""
+        if v is None:
+            return None
+        limit = MAX_EXCERPT_CHARS if info.data.get("type") == SHARE_PRACTICE else MAX_TALK_CHARS
+        if len(v) > limit:
+            raise PydanticCustomError("string_too_long", "String should have at most {max_length} characters", {"max_length": limit})
+        return v
 
     @field_validator("name")
     @classmethod
@@ -186,8 +230,19 @@ def _strictify(schema: dict[str, Any]) -> dict[str, Any]:
     return walk(copy.deepcopy(schema))
 
 
-def strict_json_schema() -> dict[str, Any]:
-    return _strictify(Decision.model_json_schema())
+def strict_json_schema(*, share_practice: bool = False) -> dict[str, Any]:
+    """The strict decision schema sent to providers. ``share_practice`` adds that action to the enum of
+    ``Action.type``; a caller passes :func:`share_practice_enabled` of its config. Without it the schema is the one
+    every world without practice transmission was recorded with, byte for byte."""
+    schema = _strictify(Decision.model_json_schema())
+    if share_practice:
+        schema["$defs"]["Action"]["properties"]["type"]["enum"].append(SHARE_PRACTICE)
+    return schema
+
+
+def share_practice_enabled(cfg: VoidConfig) -> bool:
+    """Whether a world offers ``share_practice``: practice transmission is on and agents have a policy to excerpt."""
+    return bool(cfg.memory.practices.enabled and cfg.memory.policy.enabled)
 
 
 # --- lenient parsing --------------------------------------------------------------------------------------------

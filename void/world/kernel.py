@@ -22,8 +22,9 @@ from typing import TYPE_CHECKING, Any
 from void.agents.models import AgentRecord
 from void.agents.registry import AgentRegistry
 from void.brain.claims import ClaimContext, evaluate
-from void.brain.decision import Action, sanitize_text
+from void.brain.decision import Action, sanitize_text, share_practice_enabled
 from void.config import VoidConfig, micro_to_usd, usd_to_micro
+from void.culture.practices import PracticeLedger
 from void.db import Database
 from void.economy.taskboard import TaskBoard
 from void.economy.wallet import Wallet
@@ -114,6 +115,10 @@ class Kernel:
         self.gossip = gossip
         self.lifecycle = lifecycle
         self.chronicle_reader = chronicle_reader
+        # practice transmission (MEMORY_EVOLUTION §5.7): share_practice is offered only with memory.practices and
+        # memory.policy on; the ledger writes nothing until an agent shares
+        self.practices_enabled = share_practice_enabled(cfg)
+        self.practices = PracticeLedger(db)
         self.state = KernelState()
         if db.kv_get("scarcity") is None:
             db.kv_set("scarcity", cfg.world.scarcity)
@@ -198,6 +203,8 @@ class Kernel:
             out += ["talk", "transfer"]
             if self.gossip is not None and self.cfg.gossip.enabled:
                 out.append("share_note")
+            if self.practices_enabled:
+                out.append("share_practice")
         if not agent.asleep:
             out.append("sleep")
         if self.chronicle_reader is not None and self.chronicle_reader() is not None:
@@ -510,6 +517,32 @@ class Kernel:
         self.bus.emit(Event(self.state.tick, self.state.day, Kind.SHARE_NOTE, {"speaker_id": agent.agent_id, "listener_id": target.agent_id,
                                                                               "note_title": sanitize_text(action.note_title or "", single_line=True, max_len=60)}, agent.agent_id))
         return ActionOutcome(True, "share_note", f"shared a note with {target.name}")
+
+    async def _do_share_practice(self, agent: AgentRecord, action: Action, *, obs: Observation | None = None,
+                                 **_: Any) -> ActionOutcome:
+        """Suggest an excerpt of one's memory policy to a neighbour (MEMORY_EVOLUTION §5.7). Talk's reach rules,
+        classified against the observation; the excerpt is sanitized (newlines kept) and clipped to
+        ``memory.practices.excerpt_max_chars``, recorded in ``practice_events`` as ``suggested`` and delivered to
+        the target's inbox as a ``practice`` message, which the prompt renders quoted in a code block."""
+        if not self.practices_enabled:
+            return ActionOutcome.invalid("share_practice", "practices_disabled")
+        target = self._target_agent(action.target)
+        bad = self._reach_check(agent, target, "share_practice", named=action.target, obs=obs)
+        if bad:
+            return bad
+        assert target is not None
+        text = sanitize_text((action.text or "").replace("\r\n", "\n").replace("\r", "\n")).strip()
+        excerpt = text[: self.cfg.memory.practices.excerpt_max_chars].rstrip()
+        if not excerpt:
+            return ActionOutcome.invalid("share_practice", "empty_excerpt")
+        tick, day = self.state.tick, self.state.day
+        event_id = self.practices.suggest(tick, agent.agent_id, target.agent_id, excerpt)
+        self.hear(target.agent_id, HeardMessage("practice", agent.agent_id, agent.name, excerpt, tick))
+        self.bus.emit(Event(tick, day, Kind.PRACTICE_SUGGESTED, {"event_id": event_id, "source_agent_id": agent.agent_id,
+                                                               "target_agent_id": target.agent_id, "excerpt": excerpt},
+                            agent.agent_id))
+        return ActionOutcome(True, "share_practice", f"suggested a memory practice to {target.name}",
+                             effects={"practice_event_id": event_id})
 
     async def _do_transfer(self, agent: AgentRecord, action: Action, *, obs: Observation | None = None, **_: Any) -> ActionOutcome:
         target = self._target_agent(action.target)

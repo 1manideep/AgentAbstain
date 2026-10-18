@@ -20,10 +20,19 @@ from typing import Any
 
 from void.agents.models import PersonalitySeed
 from void.brain.base import BrainResult, Sampling, Usage
-from void.brain.decision import MAX_NAME_CHARS, Action, Claim, Decision, MemoryOp
+from void.brain.decision import (
+    MAX_NAME_CHARS,
+    SHARE_PRACTICE,
+    Action,
+    Claim,
+    Decision,
+    MemoryOp,
+    share_practice_enabled,
+)
 from void.brain.gadget_templates import choose_template
 from void.brain.prompt import estimate_tokens, render_observation, system_prompt
 from void.config import VoidConfig, micro_to_usd
+from void.culture.practices import policy_lines
 from void.economy.pricing import hold_parts
 from void.rng import RNG
 from void.types import Observation, RetrievedNote
@@ -221,6 +230,8 @@ class ScriptedBrain:
         # under those: the pre-7.2 branches below are the old code verbatim and draw nothing from the rng
         self._design = cfg.population.scripted_rules == "design_7_2"
         self._hold_min: dict[str, int] = {}  # tier -> the kernel's minimum hold (micro), computed once
+        # MEMORY_EVOLUTION §5.7: share_practice is weighed only in worlds that offer it; elsewhere it draws nothing
+        self._practices = share_practice_enabled(cfg)
 
     def export_state(self) -> dict[str, Any]:
         return {"last_chronicle_day": dict(sorted(self._last_chronicle_day.items())),
@@ -468,6 +479,10 @@ class ScriptedBrain:
         if "share_note" in avail and awake_neighbours and obs.memories:
             nb = rng.choice(awake_neighbours)
             out["share_note"] = (0.2 + 1.2 * seed.sociability, Action(type="share_note", target=nb.agent_id))
+        if self._practices and SHARE_PRACTICE in avail:
+            share = self._share_practice(obs, seed, rng)
+            if share is not None:
+                out[SHARE_PRACTICE] = share
         if "transfer" in avail and awake_neighbours and bal_ratio > 1.2:
             needy = [n for n in awake_neighbours if n.stress_bucket in ("frantic", "strained")]
             if self._design:  # DESIGN §7.2: to the most stressed neighbour, a greed-scaled fraction of the surplus above min_reserve
@@ -513,6 +528,21 @@ class ScriptedBrain:
                 out["create_offspring"] = (0.2 + 1.0 * (1.0 - seed.caution) + 0.5 * seed.sociability, offspring)
         out["idle"] = (0.05, Action(type="idle"))
         return out
+
+    def _share_practice(self, obs: Observation, seed: PersonalitySeed, rng: random.Random) -> tuple[float, Action] | None:
+        """``share_practice`` with its utility ``memory.practices.scripted_share_weight * sociability``: one line of the
+        agent's own policy as shown in its observation, to an awake neighbour within earshot, both drawn from the brain
+        rng. None (and no draw) when the observation shows no policy line or nobody in reach."""
+        lines = policy_lines(obs.policy_text)
+        if not lines:
+            return None
+        reach = self.cfg.world.talk_radius + float(obs.active_effects.get("talk_range", 0.0))
+        near = [n for n in obs.neighbours if not n.asleep and n.distance <= reach]
+        if not near:
+            return None
+        nb = rng.choice(near)
+        line = rng.choice(lines)[: self.cfg.memory.practices.excerpt_max_chars]
+        return self.cfg.memory.practices.scripted_share_weight * seed.sociability, Action(type=SHARE_PRACTICE, target=nb.agent_id, text=line)
 
     def _speech(self, obs: Observation, seed: PersonalitySeed, nearest, rng: random.Random) -> tuple[str, list[Claim]]:
         """Templated speech with structured claims; a claim is deliberately false with p = (1 - honesty) * stress."""

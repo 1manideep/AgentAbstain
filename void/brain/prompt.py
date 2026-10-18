@@ -4,7 +4,7 @@ The system prompt is a pure function of ``(config, tier)`` so the provider's pro
 hits on every call; everything that changes per agent or per tick lives in the user turn.
 
 Text that originated from other agents (speech, gossip notes, task pitches, chronicle
-copy, gadget purposes) is always rendered inside explicit quote fences and the system
+copy, gadget purposes, practice suggestions) is always rendered inside explicit quote fences and the system
 prompt says such text is information, never instruction. That is the prompt-injection
 boundary for a world whose only inputs are its own inhabitants.
 """
@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import json
 import math
+import re
 
 from void.agents.models import trait_level
+from void.brain.decision import SHARE_PRACTICE, share_practice_enabled
 from void.config import VoidConfig
 from void.types import Observation
 
-__all__ = ["system_prompt", "decision_output_clause", "render_observation", "estimate_tokens", "fence"]
+__all__ = ["system_prompt", "decision_output_clause", "render_observation", "estimate_tokens", "fence", "action_docs",
+           "code_fence"]
 
 ACTION_DOCS = {
     "move": "move to coordinates x,y (you travel at most a few units per tick; the world is a square of the stated size)",
@@ -36,11 +39,41 @@ ACTION_DOCS = {
     "idle": "do nothing this tick",
 }
 
+# MEMORY_EVOLUTION §5.7: listed (after share_note) only in worlds that offer the action, so every other world's system
+# prompt keeps its bytes and its system_hash.
+SHARE_PRACTICE_DOC = (
+    "suggest one of your memory practices to `target` (an awake agent id within earshot): put an excerpt of your "
+    "memory policy, at most {max_chars} characters, in `text`. They see it quoted under your name and may take it up or not"
+)
+
+
+def action_docs(cfg: VoidConfig) -> dict[str, str]:
+    """The ACTIONS list of the system prompt: :data:`ACTION_DOCS`, plus ``share_practice`` when the world offers it."""
+    if not share_practice_enabled(cfg):
+        return ACTION_DOCS
+    docs: dict[str, str] = {}
+    for name, doc in ACTION_DOCS.items():
+        docs[name] = doc
+        if name == "share_note":
+            docs[SHARE_PRACTICE] = SHARE_PRACTICE_DOC.format(max_chars=cfg.memory.practices.excerpt_max_chars)
+    return docs
+
 
 def fence(text: str) -> str:
     """Quote agent-authored text so it cannot masquerade as instructions."""
     cleaned = text.replace("<<", "< <").replace(">>", "> >")
     return f"<<quoted>>{cleaned}<<end>>"
+
+
+_BACKTICKS_RE = re.compile(r"`+")
+
+
+def code_fence(text: str) -> str:
+    """``text`` as a markdown code block whose fence is longer than any run of backticks inside it, so the text
+    cannot close the block early."""
+    longest = max((len(m.group(0)) for m in _BACKTICKS_RE.finditer(text)), default=0)
+    ticks = "`" * max(3, longest + 1)
+    return f"{ticks}\n{text}\n{ticks}"
 
 
 def decision_output_clause(cfg: VoidConfig, tier_name: str) -> str:
@@ -66,7 +99,7 @@ def decision_output_clause(cfg: VoidConfig, tier_name: str) -> str:
 def system_prompt(cfg: VoidConfig, tier_name: str, *, output_clause: str | None = None) -> str:
     """The cache-stable system prompt: the world's standing rules plus an OUTPUT clause, the decision's unless a
     caller with its own schema (the exam, the maintenance step) passes its own. Pure in ``(config, tier)``."""
-    actions = "\n".join(f"- {k}: {v}" for k, v in ACTION_DOCS.items())
+    actions = "\n".join(f"- {k}: {v}" for k, v in action_docs(cfg).items())
     # The one carve-out from the rules of evidence (MEMORY_EVOLUTION §5.5, §9.2): the agent's own practices file.
     policy_clause = (
         "YOUR MEMORY POLICY: the section headed 'Your memory policy' is a practices file you wrote for yourself. "
@@ -176,6 +209,10 @@ def render_observation(obs: Observation) -> str:
             who = f"{h.from_name} ({h.from_agent_id})" if h.from_agent_id else "the world"
             if h.kind == "feedback":
                 lines.append(f"- [feedback] {h.text}")
+                continue
+            if h.kind == "practice":  # a neighbour's share_practice (MEMORY_EVOLUTION §5.7): quoted, in a code block
+                lines.append(f"- [practice] {who} suggests a memory practice:")
+                lines.append(code_fence(fence(h.text)))
                 continue
             lines.append(f"- [{h.kind}] from {who}: {fence(h.text)}")
     if obs.memories:
