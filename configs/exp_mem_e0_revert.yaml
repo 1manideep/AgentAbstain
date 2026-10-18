@@ -1,0 +1,9 @@
+# exp_mem_e0, arm revert (MEMORY_EVOLUTION 6.13 row 5, EvolveMem's revert-on-regression): restores the previous policy version when the day's income fell below the day before's, else does nothing. A guard: in E0 nothing else edits the policy, so it has no earlier version to restore and pays what noop pays.
+extends: exp_mem_e0_base.yaml
+run:
+  name: exp_mem_e0_revert
+tiers:
+  scripted:
+    maintenance_strategy: revert
+experiment:
+  arm: revert
