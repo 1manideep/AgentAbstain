@@ -3,13 +3,6 @@ import { EPOCH_COLORS, INK } from './chartTheme'
 import { ChartTip, useChartTip } from './ChartTip'
 import { dayStep, type EpochBlock } from './degradationEpochsModel'
 
-/**
- * Compatibility for degradationEpochs.test.tsx, which still imports these from here: the model lives in
- * degradationEpochsModel.ts. Remove once that test imports from the model.
- */
-// oxlint-disable-next-line react/only-export-components
-export { dayStep, epochBlocks, MAX_EPOCH_LANES } from './degradationEpochsModel'
-
 interface Props {
   blocks: EpochBlock[]
   /** The render clock's day, fractional within the day. */

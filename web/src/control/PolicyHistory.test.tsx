@@ -311,9 +311,9 @@ describe('persona', () => {
       'honesty',
       'luck',
     ])
-    expect(html).toContain('data-trait="greed" style="display:block;height:100%;width:25%')
+    expect(html).toContain('data-trait="greed" style="width:25%')
     // out-of-range values are clamped in the bar, shown as given
-    expect(html).toContain('data-trait="caution" style="display:block;height:100%;width:100%')
+    expect(html).toContain('data-trait="caution" style="width:100%')
     expect(html).toContain('1.40')
   })
 

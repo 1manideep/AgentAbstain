@@ -4,13 +4,6 @@ import { fmtNum, fmtPct, INK, linePath } from './chartTheme'
 import { ChartTip, useChartTip } from './ChartTip'
 import { calibrationLabel, pointLabel, type DegradationMetric, type DegradationView } from './degradationEpochsModel'
 
-/**
- * Compatibility for degradationEpochs.test.tsx, which still imports these from here: the model lives in
- * degradationEpochsModel.ts. Remove once that test imports from the model.
- */
-// oxlint-disable-next-line react/only-export-components
-export { CALIBRATION_LABEL, calibrationLabel, degradationView, pointLabel } from './degradationEpochsModel'
-
 /** The label as a note at the top of a card body; renders nothing in `observe` mode. */
 export const CalibrationNote = memo(function CalibrationNote({ config }: { config: Pick<HelloConfig, 'degeneration_mode'> | null }) {
   const label = calibrationLabel(config)

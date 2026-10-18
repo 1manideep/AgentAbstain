@@ -2,8 +2,9 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { DegenerationMode, Epoch, EventMsg, MetricsGroup, MetricsRow, RosterAgent, SnapshotMsg, StressBin } from '../../protocol'
 import { DEGRADATION_BINS, Series } from '../../state/series'
-import { CALIBRATION_LABEL, CalibrationNote, calibrationLabel, DegradationVsStress, degradationView, pointLabel } from './DegradationVsStress'
-import { dayStep, epochBlocks, EpochsStrip, MAX_EPOCH_LANES } from './EpochsStrip'
+import { CalibrationNote, DegradationVsStress } from './DegradationVsStress'
+import { CALIBRATION_LABEL, calibrationLabel, dayStep, degradationView, epochBlocks, MAX_EPOCH_LANES, pointLabel } from './degradationEpochsModel'
+import { EpochsStrip } from './EpochsStrip'
 
 const roster = new Map<string, RosterAgent>()
 const color = (tier: string) => (tier === 'genius' ? '#3987e5' : '#d95926')

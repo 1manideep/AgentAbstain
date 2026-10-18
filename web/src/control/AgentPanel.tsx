@@ -206,8 +206,8 @@ export const Persona = memo(function Persona({ motto, traits }: { motto?: string
             <Fragment key={k}>
               <span className="muted">{k}</span>
               <span className="trait-bar">
-                {/* the fill's geometry is inline because its width is the value (PolicyHistory.test.tsx reads the whole string); its colour is .trait-fill's */}
-                <span className="trait-fill" data-trait={k} style={{ display: 'block', height: '100%', width: `${Math.round(Math.min(1, Math.max(0, v)) * 100)}%` }} />
+                {/* the width is the value, so it stays inline; the rest of the fill is .trait-fill's */}
+                <span className="trait-fill" data-trait={k} style={{ width: `${Math.round(Math.min(1, Math.max(0, v)) * 100)}%` }} />
               </span>
               <span className="trait-value tnum small">{fmtNum(v, 2)}</span>
             </Fragment>

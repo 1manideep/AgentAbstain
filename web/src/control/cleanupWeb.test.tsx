@@ -178,9 +178,9 @@ describe('presentation classes', () => {
     expect(html).toContain('<div class="traits">')
     expect(html).toContain('<span class="trait-bar"><span class="trait-fill" data-trait="greed"')
     expect(html).toContain('<span class="trait-value tnum small">0.25</span>')
-    // every inline style is a fill's geometry: no colour, no layout of its own
+    // every inline style is a fill's width: the value; everything else is .trait-fill's
     const styles = [...html.matchAll(/style="([^"]*)"/g)].map((m) => m[1])
-    expect(styles).toEqual(['display:block;height:100%;width:25%', 'display:block;height:100%;width:100%'])
+    expect(styles).toEqual(['width:25%', 'width:100%'])
   })
 
   it('leaves no inline style in the policy history and no HTML injection anywhere', () => {
@@ -235,14 +235,9 @@ describe('degradation and epochs model', () => {
     expect(model.pointLabel(curve, 0, 'invalid', 'rows')).toBe('sharp · 2 rows')
   })
 
-  it('is what the chart modules still re-export for older imports', () => {
-    expect(degradationChart.calibrationLabel).toBe(model.calibrationLabel)
-    expect(degradationChart.degradationView).toBe(model.degradationView)
-    expect(degradationChart.pointLabel).toBe(model.pointLabel)
-    expect(degradationChart.CALIBRATION_LABEL).toBe(model.CALIBRATION_LABEL)
-    expect(epochsChart.epochBlocks).toBe(model.epochBlocks)
-    expect(epochsChart.dayStep).toBe(model.dayStep)
-    expect(epochsChart.MAX_EPOCH_LANES).toBe(model.MAX_EPOCH_LANES)
+  it('lives only in the model module, so the chart modules export components alone', () => {
+    for (const name of ['calibrationLabel', 'degradationView', 'pointLabel', 'CALIBRATION_LABEL']) expect(name in degradationChart).toBe(false)
+    for (const name of ['epochBlocks', 'dayStep', 'MAX_EPOCH_LANES']) expect(name in epochsChart).toBe(false)
   })
 })
 
