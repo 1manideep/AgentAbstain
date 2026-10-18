@@ -2,11 +2,12 @@
  * scripts/gen-fixture.mjs writes its synthetic fixture to a fresh OS temp dir by default and refuses
  * web/public/fixtures (the committed, genuine `void mock-feed` recording) unless given --force. Its tiers
  * carry placeholder model names: no model identifier from configs/base.yaml appears in the script or its output.
+ * The committed api.json holds no path of the temp dir it was recorded in, and samples the memory reads.
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, relative, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 
 const WEB = resolve(import.meta.dirname, '..', '..')
@@ -103,5 +104,39 @@ describe('the committed fixture', () => {
       if (m.type === 'roster') for (const a of m.agents ?? []) roster.add(a.id)
     }
     expect(Object.keys(api.agents).sort()).toEqual([...roster].sort())
+  })
+
+  it('api.json does not depend on where it was recorded', () => {
+    // `void mock-feed` records into a random temp dir; an absolute vault path would change on every re-record
+    const text = readFileSync(join(COMMITTED, 'api.json'), 'utf8')
+    expect(text).not.toContain('void-mock-feed-')
+    const api = JSON.parse(text) as { agents: Record<string, { agent: { memory_path: string | null } }> }
+    const paths = Object.values(api.agents).map((d) => d.agent.memory_path)
+    expect(paths.length).toBeGreaterThan(0)
+    for (const p of paths) {
+      expect(typeof p, String(p)).toBe('string')
+      expect(isAbsolute(p!) || /^[A-Za-z]:[\\/]/.test(p!), p!).toBe(false)
+      expect(p!.split(/[\\/]/), p!).not.toContain('..')
+    }
+  })
+
+  it('api.json samples the memory reads: policy per agent, memory summary, practices', () => {
+    const api = JSON.parse(readFileSync(join(COMMITTED, 'api.json'), 'utf8')) as {
+      agents: Record<string, unknown>
+      policy?: Record<string, { agent_id: string; versions: Array<{ version: number; tick: number; source: string; text: string }> }>
+      memory_summary?: { agents: Array<{ agent_id: string }> }
+      practices?: { events: unknown[] }
+    }
+    const ids = Object.keys(api.agents).sort()
+    expect(Object.keys(api.policy ?? {}).sort()).toEqual(ids)
+    for (const [id, p] of Object.entries(api.policy ?? {})) {
+      expect(p.agent_id).toBe(id)
+      expect(p.versions.length, id).toBeGreaterThan(0) // demo_memory seeds every agent's policy
+      for (const v of p.versions) expect(typeof v.text).toBe('string')
+      const versions = p.versions.map((v) => v.version)
+      expect(versions, id).toEqual([...versions].sort((a, b) => b - a)) // newest first, like the route
+    }
+    expect((api.memory_summary?.agents ?? []).map((r) => r.agent_id).sort()).toEqual(ids)
+    expect(Array.isArray(api.practices?.events)).toBe(true)
   })
 })
