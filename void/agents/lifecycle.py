@@ -16,7 +16,7 @@ from void.memory.notes import Provenance
 from void.memory.policy import PolicyStore
 from void.memory.store import MemoryStore
 from void.rng import RNG
-from void.types import ActionOutcome, AgentStatus, Vec2
+from void.types import ActionOutcome, AgentStatus, Observation, Vec2
 
 __all__ = ["Lifecycle"]
 
@@ -163,19 +163,29 @@ class Lifecycle:
                                                   "parent_id": parent.agent_id, "kind": kind, "endowment_usd": micro_to_usd(funding[1])}, rec.agent_id))
         return self.registry.get(rec.agent_id) or rec
 
-    def create_offspring(self, parent: AgentRecord, name: str, endowment: int, tick: int, day: int, hold_min: int) -> ActionOutcome:
+    def create_offspring(self, parent: AgentRecord, name: str, endowment: int, tick: int, day: int, hold_min: int, *,
+                         obs: Observation | None = None) -> ActionOutcome:
+        """A birth funded by the parent. With the parent's observation (DESIGN §7.4), a full population or an
+        endowment the observed balance could not cover above the reserve is ``invalid``; ``stale`` only when the
+        observation showed room and an earlier agent this tick (a birth, a call's cost) took it. Without one both
+        are ``stale``."""
         p = self.cfg.population
         if not p.reproduction_enabled:
             return ActionOutcome.invalid("create_offspring", "reproduction_disabled")
         if any(a.name.lower() == name.lower() for a in self.registry.alive()):
             return ActionOutcome.invalid("create_offspring", "name_taken")
         if self.population >= p.cap:
+            if obs is not None and obs.population >= obs.population_cap:
+                return ActionOutcome.invalid("create_offspring", "population_cap")
             return ActionOutcome.stale("create_offspring", "population_cap")
         min_endow = hold_min * p.min_endowment_calls
         if endowment < min_endow:
             return ActionOutcome.invalid("create_offspring", f"endowment_below_minimum ${micro_to_usd(min_endow):.2f}")
         bal = self.wallet.balance(parent.agent_id)
-        if bal - endowment < usd_to_micro(p.min_reserve_usd):
+        reserve = usd_to_micro(p.min_reserve_usd)
+        if bal - endowment < reserve:
+            if obs is not None and usd_to_micro(obs.balance_usd) - endowment < reserve:
+                return ActionOutcome.invalid("create_offspring", "insufficient_reserve_after_endowment")
             return ActionOutcome.stale("create_offspring", "insufficient_reserve_after_endowment")
         child = self._child_of(parent, name, tick, day, (parent.agent_id, endowment, "endowment_out", "endowment_in"), "offspring")
         return ActionOutcome(True, "create_offspring", f"child {child.name} ({child.agent_id}) born", effects={"child_id": child.agent_id})

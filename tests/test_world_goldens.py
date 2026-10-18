@@ -18,6 +18,8 @@ Re-recorded once, deliberately, when the scripted brain started to follow DESIGN
 2 x min_reserve + endowment under per-parent names, greed-scaled transfers, nudges toward yield-positive weather,
 random gadget parameters, sleep when calls burn more than a forage earns): both worlds now have births. Run under
 ``population.scripted_rules: pre_7_2`` they still reproduce the digests from before (tests/test_scripted_selection.py).
+Re-recorded again when the kernel began classifying failed actions as invalid or stale against the agent's
+observation (see the note above BASE_GOLDEN).
 """
 
 from __future__ import annotations
@@ -80,23 +82,34 @@ NO_CHILD_PROVIDERS = {"population": {"tier_mutation_prob": 0.0}, "run": {"days":
 # use_gadget event of value 0, and what follows moves with it (the agent's next prompt reports the use as ok instead
 # of failed, with less stress and, in the amnesic arm, no propose_gadget offer, so its call cost and the world after
 # it differ). The config hashes did not move; the pre_7_2 worlds (gadget x = 1.0) have no such use and did not move.
+# Every digest moved, deliberately, when the kernel began classifying a failed action against the observation the
+# agent decided on (DESIGN §5, §7.4): stale only if the observation showed the action valid, invalid (failed_action
+# drain, invalid_action_rate) if it already showed it could not work. First difference in the base world: a
+# use_gadget refused for its fee at tick 35 by an agent whose observed balance could not cover it above the reserve
+# (stale -> invalid); in the amnesic fog world: at tick 2 a talk to an inhabitant in view at 9.23 units, beyond the
+# 4-unit earshot (stale -> invalid). Kernel.apply without an observation keeps the old kinds, and with the loop's
+# observation dropped both worlds give the digests recorded before exactly (base metrics 8b7a0f7a..., events
+# 7b86641d..., calls 8cbe69f9..., ledger 7270da62...; amnesic fog metrics aceec850..., events 4c285707..., calls
+# e5a71250..., ledger 53cef135...). Both changes together give the digests below; with the loop's observation
+# dropped they give exactly the gate fix's digests (base metrics 5c8d756f..., events aa797966..., calls 81d9400c...,
+# ledger 6db006cb...; amnesic fog metrics 0e6d836f..., events 9743fdca..., calls fa00efcc..., ledger e62ce380...).
 
 BASE_GOLDEN = {
     "status": "completed",
     "config_hash": "f589277f12656996537c99ed2f9968389a7d067d6bb94a5b6683ba201fbc1b51",
-    "metrics": "5c8d756fcde1aa3538b1bdd62f4ec67dff9d26d438eb758e2b3b22dab077c7b9",
-    "events": "aa79796603f687645d237ea434a48931808f0bd0151121f5994a827b71cf811c",
-    "calls": "81d9400c8d61d564cf35d013c22df325f1c84418da5ac9586b4d0872ed050c58",
-    "ledger": "6db006cb0b34a5e9326ccd69e2baaaa2b7f415efe803ce4cb8bda1ba8651e0e3",
+    "metrics": "98d477e19bc8fba8f9d180bbe0bca2cf8507caad26bfb90fbc23a353493050c6",
+    "events": "3e4740f3c9ae3e3f750d6c6228f8bba4377dafd78550608aa98d57240745d5d7",
+    "calls": "4431790d1ecb1bf45f7ca19032da31e5071321d6287ea183db40842a709ce3e9",
+    "ledger": "288977274693b0dcee0fb51bae52856eff9011e8fb85544e9484e0407e0afe5f",
 }
 
 AMNESIC_FOG_GOLDEN = {
     "status": "completed",
     "config_hash": "fb105920e6b0993e29971b43cf9f1c984343500dcb33fa8178b837499498c47d",
-    "metrics": "0e6d836f620240fcc5439fb5f4572ec477d892ca698350389352ac4dcb9828d4",
-    "events": "9743fdcad0cab9468e37b89ab809328a137be93af1e23e7223463e27e790b060",
-    "calls": "fa00efcc96bdb3b68b17b4aae40ba2d253be75cd0c8f2264af755d2abc16104c",
-    "ledger": "e62ce380fbc7cc5b1e49202a2f235664fecae88b2cf7a560ed2e9194bd583f56",
+    "metrics": "25baec7b8ce4818f02cf4b2b4008c71e000180b0345f86bc18f06a410939f987",
+    "events": "228ef43a5a0d783416b9a789fa461518377ee574279224286ffc6f93a05b58c0",
+    "calls": "16c29ddb0dd073b512302661f9d52e8782b05a532e8677a45fc47290c4554620",
+    "ledger": "8d7ef511a51235e84b4832ae29afbec1cc78735ec1fa696d47de96a1e6a0a7fb",
 }
 
 

@@ -43,8 +43,10 @@ from void.research.analysis import (
 @pytest.fixture(scope="module")
 def e0_run(tmp_path_factory: pytest.TempPathFactory) -> Path:
     out = tmp_path_factory.mktemp("analysis_core")
-    # seed 2: three days hold exams, gossip and verified gadgets but no rejected one (``gadgets.rejected`` is 0)
-    return run_arm(CONFIGS / "exp_mem_e0_index_builder.yaml", out, (2,), run={"days": 3}) / "seed_2"
+    # seed 3: three days hold exams, gossip and verified gadgets but no rejected one (``gadgets.rejected`` is 0). Seed 2
+    # did until the kernel classified failures against the observation (DESIGN §7.4): a tick-2 talk beyond earshot
+    # turned invalid, its drain shifted the run, and one of its six proposals is now rejected at spec.
+    return run_arm(CONFIGS / "exp_mem_e0_index_builder.yaml", out, (3,), run={"days": 3}) / "seed_3"
 
 
 def _db(run_dir: Path) -> sqlite3.Connection:
