@@ -1,7 +1,13 @@
 # exp_gate, arm on: gadget proposals must pass their tests in the sandbox (sandbox.gate_enabled true).
 # The arms differ only in sandbox.gate_enabled. DESIGN §17: 12 ticks/day x 30 days, no tier mutation, and a
 # high scripted gadget_defect_rate (0.6) so the gate has something to catch. Primary
-# `gadget_use_failure_rate` (cumulative, from the last day row); secondary `mean_balance`.
+# `gadget_use_failure_rate` (failed / all gadget uses over the run, from the last tick row; None until the first use).
+# Secondaries: `mean_balance` (living agents), `balance_gen_ge.4` (DESIGN §17's balance at generation G >= 4: the mean
+# balance of the living agents of generation 4 or deeper, so the gate's effect is read on lineages that went through
+# several rounds of selection; None when no living agent is that deep, as in any run of a few days, and compare then
+# drops that seed pair; a number in all 8 runs of seeds 1-4 x both arms at 30 days), `max_generation` (the deepest
+# generation the run reached, which says whether G = 4 was in reach at all), `gadgets.verified`, `gadgets.rejected`.
+# See void/research/outcomes/spread.py.
 # The world is leaner than base.yaml, the same in both arms, so that selection happens within the 30 days
 # (PLAN §5; DESIGN §17 asks for balance at generation G >= 4):
 #  - population.min_reserve_usd 0.10 (base 0.50): the scripted offspring rule (DESIGN §7.2, 2 x min_reserve +
@@ -43,4 +49,4 @@ experiment:
   arm: "on"
   independent_variables: [sandbox.gate_enabled]
   primary_outcome: gadget_use_failure_rate
-  secondary_outcomes: [mean_balance, gadgets.verified, gadgets.rejected]
+  secondary_outcomes: [mean_balance, balance_gen_ge.4, max_generation, gadgets.verified, gadgets.rejected]
