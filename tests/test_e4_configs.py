@@ -1,5 +1,5 @@
 """E4, who benefits (MEMORY_EVOLUTION §6.6): the capability ladder crossed with default versus self-edit, plus self-edit
-with the size-dependent tariff removed. The live configs (``exp_mem_e4_*``) are only loaded here, never run; their
+with the size-dependent tariff removed. The live configs (``live_mem_e4_*``) are only loaded here, never run; their
 scripted mirrors (``exp_mem_e4s_*``) run one seed for one day and ``compare`` must accept them.
 
 Checks: every config loads without warnings; the live arms roster base.yaml's provider rungs by name, set a total cap,
@@ -44,8 +44,13 @@ PRICE_IVS = ("economy.equalized_price_in_per_mtok", "economy.equalized_price_out
              "economy.equalized_price_cache_read_per_mtok", "economy.equalized_price_cache_write_per_mtok")
 
 
+# the live arms roster paid tiers, so their files carry the live_ prefix (only live_* configs may); the experiment is
+# still exp_mem_e4
+FILE_PREFIX = {LIVE: "live_mem_e4", MIRROR: MIRROR}
+
+
 def path(family: str, arm: str) -> Path:
-    return CONFIGS / f"{family}_{arm}.yaml"
+    return CONFIGS / f"{FILE_PREFIX[family]}_{arm}.yaml"
 
 
 def cfg(family: str, arm: str, overrides: dict[str, Any] | None = None) -> VoidConfig:

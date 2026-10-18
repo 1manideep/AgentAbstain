@@ -1,4 +1,4 @@
-# exp_mem_e4s, arm flat_tariff: the scripted mirror of exp_mem_e4_flat_tariff.yaml (arm selfedit with output free
+# exp_mem_e4s, arm flat_tariff: the scripted mirror of live_mem_e4_flat_tariff.yaml (arm selfedit with output free
 # in-world and fresh input, cache reads and cache writes at one price; why is in that file). See
 # exp_mem_e4s_base.yaml.
 # The price is the mirror's own. The live arm's rule (the total world_cost of arm selfedit's decide calls divided by

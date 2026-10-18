@@ -1,4 +1,4 @@
-# exp_mem_e4s: the scripted mirror of E4 (exp_mem_e4_base.yaml), so the whole design runs end to end for $0. The same
+# exp_mem_e4s: the scripted mirror of E4 (live_mem_e4_base.yaml), so the whole design runs end to end for $0. The same
 # world, roster, ladder, exam, outcomes, arms and independent variables; what differs is the caps, the flat arm's
 # price (set for this mirror, see exp_mem_e4s_flat_tariff.yaml) and the five rungs, which are scripted tiers defined
 # here (they replace base.yaml's live rungs of the same names), so no provider is ever called. As in exp_ladder the
@@ -11,7 +11,7 @@
 # 10.4: G0 is not passed on scripted brains), so no memory effect is expected either.
 # The caps are base.yaml's: a scripted call is metered like a live one at the tier prices below, but nothing is spent.
 # A full-length run of one arm takes about a minute. Not an arm itself: the three exp_mem_e4s_*.yaml arms extend it.
-extends: exp_mem_e4_base.yaml
+extends: live_mem_e4_base.yaml
 run:
   name: exp_mem_e4s
 economy:

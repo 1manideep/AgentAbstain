@@ -1,7 +1,7 @@
 # exp_mem_e4, arm selfedit: the policy file (seed default) plus the nightly maintenance call at C2 (notes, policy,
 # structure), paid by the agent, on the capability ladder at E1's equalized prices, where a rung that thinks or
-# writes more pays more per call. See exp_mem_e4_base.yaml. Live: never run it outside a funded stage.
-extends: exp_mem_e4_base.yaml
+# writes more pays more per call. See live_mem_e4_base.yaml. Live: never run it outside a funded stage.
+extends: live_mem_e4_base.yaml
 run:
   name: exp_mem_e4_selfedit
 memory:

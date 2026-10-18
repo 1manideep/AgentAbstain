@@ -1,7 +1,7 @@
 # exp_mem_e4, arm default: the default scaffold on the capability ladder (per-tick notes and kernel retrieval, no
-# policy file, no maintenance) at E1's equalized prices. See exp_mem_e4_base.yaml. Live: never run it outside a
+# policy file, no maintenance) at E1's equalized prices. See live_mem_e4_base.yaml. Live: never run it outside a
 # funded stage.
-extends: exp_mem_e4_base.yaml
+extends: live_mem_e4_base.yaml
 run:
   name: exp_mem_e4_default
 memory:

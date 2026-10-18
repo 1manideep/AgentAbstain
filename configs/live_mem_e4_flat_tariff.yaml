@@ -10,7 +10,7 @@
 # the live budget) is metered at each tier's own prices, as in every arm.
 #
 # The input price, $6 per million tokens, keeps the money that leaves the world about the same as in arm selfedit
-# `[estimate]`. Under the assumptions of exp_mem_e4_base.yaml (a 2.5k-token prompt with a 1.2k-token cached system
+# `[estimate]`. Under the assumptions of live_mem_e4_base.yaml (a 2.5k-token prompt with a 1.2k-token cached system
 # prompt, 250 visible output tokens, half the thinking budget) E1's prices charge a genius decision about $0.031, a
 # sharp one $0.021 and the others $0.010, a roster mean of $0.0145, and $0.0145 / 2.5k tokens is about $5.8 per
 # million, rounded to 6. Recalibrate it before the paid run from a pilot of arm selfedit: the total
@@ -20,7 +20,7 @@
 # What an agent writes still costs it later, when the note or the policy is retrieved into a prompt. A maintenance
 # batch is output too, so in this arm the nightly call costs only its prompt (on the mirror about 60% of what it costs
 # in arm selfedit).
-extends: exp_mem_e4_selfedit.yaml
+extends: live_mem_e4_selfedit.yaml
 run:
   name: exp_mem_e4_flat_tariff
 economy:

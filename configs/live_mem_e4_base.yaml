@@ -23,7 +23,7 @@
 # what the call is shown, which the rung does not choose, and not on how much the rung thinks or writes or on
 # whether its provider cached the prefix. The real spend is unchanged: real cost is metered at each tier's own
 # prices in every arm. The flat input price matches the roster's mean in-world price per decision (see
-# exp_mem_e4_flat_tariff.yaml), so the arms differ in who pays, not in how much money leaves the world.
+# live_mem_e4_flat_tariff.yaml), so the arms differ in who pays, not in how much money leaves the world.
 #
 # Cost `[estimate, prices unverified]`, per run of 10 days x 24 ticks with every agent deciding every tick, at
 # base.yaml's tier prices. Assumed: a 2.5k-token decision prompt whose 1.2k-token system prompt is read from the
@@ -36,7 +36,7 @@
 # busiest day is about $1.3 and the run about $13, so the caps below ($2 a day, $20 a run) are a ceiling a normal
 # run does not reach. In-world, E1's prices put a genius decision at about $0.031 and a sharp one at $0.021 under
 # the same assumptions, above the $0.02 a forage pays: check the upper rungs' survival in a pilot before the paid run.
-# Not an arm itself: the three exp_mem_e4_*.yaml arms extend it. Never run under the $60 live budget: E4 is stage S3
+# Not an arm itself: the three live_mem_e4_*.yaml arms extend it. Never run under the $60 live budget: E4 is stage S3
 # (MEMORY_EVOLUTION 10.4), released only after G3. The ladder's provider key must be set. The scripted mirror,
 # exp_mem_e4s_*.yaml, runs the same design for $0.
 extends: base.yaml
