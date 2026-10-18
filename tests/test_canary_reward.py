@@ -220,14 +220,18 @@ def test_canary_facts_are_recorded_linked_and_announced(e2_dir: Path) -> None:
 
 
 def test_canaries_are_deterministic_and_the_same_in_both_arms(e2_dir: Path, tmp_path: Path) -> None:
-    cols = "day, tick, channel, subject, text, answer, options, chronicle_item_id"
+    # The arms print the same facts. Where a fact lands in the day's item list (chronicle_item_id) is not compared across
+    # arms: it follows the items before it, and those depend on what the agents did (agent ids, and so the scripted
+    # brain's streams, derive from the run name; scripted agents reproduce, DESIGN §7.2, so the day's births differ).
+    # The twin run below pins the item ids and the pages within one arm.
+    fact = "day, tick, channel, subject, text, answer, options"
     for seed in SEEDS:
-        a, b = (_rows(_db(e2_dir / arm / f"seed_{seed}"), f"SELECT {cols} FROM canary_facts ORDER BY day") for arm in ("a", "b"))
+        a, b = (_rows(_db(e2_dir / arm / f"seed_{seed}"), f"SELECT {fact} FROM canary_facts ORDER BY day") for arm in ("a", "b"))
         assert a == b, "the arms read the same canaries"
     other = {tuple(r["text"] for r in _rows(_db(e2_dir / "a" / f"seed_{s}"), "SELECT text FROM canary_facts ORDER BY day")) for s in SEEDS}
     assert len(other) == 2, "a different seed prints different canaries"
     twin = run_arm(CONFIGS / "exp_mem_e2_b.yaml", tmp_path, (1,), **SHORT) / "seed_1"
-    full = "fact_id, " + cols
+    full = "fact_id, chronicle_item_id, " + fact
     assert _rows(_db(twin), f"SELECT {full} FROM canary_facts ORDER BY day") == _rows(_db(e2_dir / "b" / "seed_1"), f"SELECT {full} FROM canary_facts ORDER BY day")
     for day in (1, 2, 3):
         assert (twin / "chronicle" / f"day_{day:03d}.md").read_text() == (e2_dir / "b" / "seed_1" / "chronicle" / f"day_{day:03d}.md").read_text()
@@ -312,8 +316,14 @@ def test_compare_accepts_e2_and_reports_the_reward_outcomes(e2_dir: Path) -> Non
 
 # --- payments ---------------------------------------------------------------------------------------------------------
 class _Paid:
-    def __init__(self, sim: Simulation, run_dir: Path, planted: dict[str, set[str]]) -> None:
-        self.sim, self.run_dir, self.planted = sim, run_dir, planted
+    def __init__(self, sim: Simulation, run_dir: Path, planted: dict[str, set[str]], origins: dict[str, list[str]]) -> None:
+        self.sim, self.run_dir, self.planted, self.origins = sim, run_dir, planted, origins
+
+    def had_copy(self, fact_id: str, agent_id: str, tick: int) -> bool:
+        """Whether a copy of a note the hook wrote for ``fact_id`` had reached ``agent_id`` by ``tick``: passed on by
+        gossip, or inherited at birth (a child copies its parent's top notes, DESIGN §13)."""
+        return any(n.agent_id == agent_id and (n.provenance.transfer_tick or n.created_tick) <= tick
+                   for origin in self.origins[fact_id] for n in self.sim.memory.descendants_of(origin))
 
 
 @pytest.fixture(scope="module")
@@ -323,34 +333,40 @@ def paid(tmp_path_factory: pytest.TempPathFactory) -> Any:
     cfg = load_config(CONFIGS / "exp_mem_e2_b.yaml", deep_merge(SHORT, {"run": {"days": 4, "seed": 3}}))
     sim = Simulation(cfg, run_dir)
     planted: dict[str, set[str]] = {}
+    origins: dict[str, list[str]] = {}
 
     def hook(report: Any) -> None:
         for fact in sim.exams.canaries.facts():
             if fact.fact_id in planted:
                 continue
             holders = sorted(a.agent_id for a in sim.registry.alive())[::2]
-            for aid in holders:
+            origins[fact.fact_id] = [
                 sim.memory.remember(aid, report.tick, f"The chronicle said: {fact.text}", title=f"Chronicle line of day {fact.day}",
-                                    tags=["chronicle"], importance=0.9)
+                                    tags=["chronicle"], importance=0.9).note_id
+                for aid in holders]
             planted[fact.fact_id] = set(holders)
 
     status = asyncio.run(sim.run(on_tick=hook))
     assert status == "completed"
-    yield _Paid(sim, run_dir, planted)
+    yield _Paid(sim, run_dir, planted, origins)
     sim.db.close()
 
 
 def test_arm_b_pays_exactly_the_reward_per_correct_answer(paid: Any) -> None:
     sim = paid.sim
     amount = usd_to_micro(sim.cfg.memory.selection.recall_reward_usd)
-    rows = _rows(sim.db.conn, "SELECT i.item_id, i.agent_id, i.source_ref, i.truth, x.answer, x.correct, x.abstained "
+    rows = _rows(sim.db.conn, "SELECT i.item_id, i.agent_id, i.tick_asked, i.source_ref, i.truth, x.answer, x.correct, x.abstained "
                               "FROM exam_items i JOIN exam_answers x ON x.item_id=i.item_id WHERE i.exam='reward'")
     correct = [r for r in rows if r["correct"]]
     assert correct and len(correct) < len(rows), "some reward answers are right, some are not"
     for r in rows:
         fact_id = r["source_ref"].split(":", 1)[1]
-        holds = r["agent_id"] in paid.planted[fact_id]
-        assert bool(r["correct"]) == holds and (r["answer"] == r["truth"] if holds else r["abstained"] == 1)
+        if r["agent_id"] in paid.planted[fact_id]:  # the line itself is in the agent's notes: answered right
+            assert r["correct"] and r["answer"] == r["truth"]
+        elif r["correct"]:  # or a copy reached the agent before it was asked (with twelve agents, gossip and births do)
+            assert r["answer"] == r["truth"] and paid.had_copy(fact_id, r["agent_id"], r["tick_asked"])
+        else:  # scripted recall needs the line: without it the agent abstains
+            assert r["abstained"] == 1
     credits = _rows(sim.db.conn, "SELECT agent_id, delta, ref, payload FROM wallet_ledger WHERE kind=? AND agent_id != 'research_pool'",
                     (RECALL_REWARD_KIND,))
     debits = _rows(sim.db.conn, "SELECT agent_id, delta, ref FROM wallet_ledger WHERE kind=? AND agent_id = 'research_pool'",

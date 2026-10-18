@@ -1,16 +1,35 @@
 # exp_gate, arm off: gadgets are verified without running their tests (sandbox.gate_enabled false).
-# The arms differ only in sandbox.gate_enabled. 12 ticks/day x 8 days, no tier mutation, and a high
-# scripted gadget_defect_rate (0.6) so the gate has something to catch. Primary
+# The arms differ only in sandbox.gate_enabled. DESIGN §17: 12 ticks/day x 30 days, no tier mutation, and a
+# high scripted gadget_defect_rate (0.6) so the gate has something to catch. Primary
 # `gadget_use_failure_rate` (cumulative, from the last day row); secondary `mean_balance`.
-# DESIGN §17 asks for 30 days; 8 keeps a scripted run short (total_cap 30 >= 8 * 3 daily cap).
-# VoidConfig.warnings() is empty for this config.
+# The world is leaner than base.yaml, the same in both arms, so that selection happens within the 30 days
+# (PLAN §5; DESIGN §17 asks for balance at generation G >= 4):
+#  - population.min_reserve_usd 0.10 (base 0.50): the scripted offspring rule (DESIGN §7.2, 2 x min_reserve +
+#    endowment) then asks $0.40 rather than $1.20, so a newborn ($0.20) can become a parent after earning $0.20;
+#  - population.starting_balance_usd 0.60 (base 1.50): each founder can afford a child at once (and a second one
+#    right after), so the cap of 12 fills in the first days and the founders are left no richer than their children;
+#  - world.scarcity 0.3 (base 1.0): a forage pays $0.006, so the crowded world loses money and the poorest go
+#    bankrupt from about day 10;
+#  - population.spawn_pool_usd 10 (base 5): the pool pays about thirteen $0.75 replacements instead of six. A
+#    replacement is a child of an agent drawn by balance, most often the last replacement, so each death tends to
+#    deepen one lineage; once the pool is spent, the vacancies go to offspring of whoever can afford one.
+# With base economics the founders never die and the cap stays full, so a 30-day run ends at generation 1-2.
+# Measured on seeds 1-4: generation 4-6 in both arms, with 12-16 deaths per run and 11-12 alive at the end.
+# economy.total_cap_usd 90 >= 30 days x 3 daily cap, so VoidConfig.warnings() is empty.
 extends: base.yaml
 run:
   name: exp_gate_off
-  days: 8
+  days: 30
   ticks_per_day: 12
+world:
+  scarcity: 0.3
 population:
   tier_mutation_prob: 0.0
+  starting_balance_usd: 0.60
+  min_reserve_usd: 0.10
+  spawn_pool_usd: 10.0
+economy:
+  total_cap_usd: 90.0
 entropy:
   degeneration:
     mode: observe

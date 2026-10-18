@@ -13,6 +13,14 @@ run:
 world:
   view_radius: 12.0
   claim_feedback_p: 0.5
+population:
+  # G0's recorded worlds (MEMORY_EVOLUTION §10.4; this file and exp_mem_dep_base.yaml, which extends it) keep the
+  # scripted argument rules they were recorded under. Under DESIGN §7.2's rules a founder's $1.50 would buy a child
+  # on day 1 (2 x min_reserve + endowment = $1.20), mixing newborns into mean_balance, and the random gadget parameter
+  # alone moves C1. pre_7_2 is the old code path: offspring only above 1.6 x the starting balance (never reached
+  # here), gadget x = 1.0, the fixed transfer, nudge and sleep rules. Reproduction stays enabled as recorded (turning
+  # it off would drop create_offspring from every prompt and so change what each decision costs).
+  scripted_rules: pre_7_2
 economy:
   world_pricing: equalized
   research_pool_usd: 1.00

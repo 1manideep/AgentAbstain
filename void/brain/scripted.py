@@ -10,6 +10,7 @@ rendered prompt so the wallet meters it like a real call.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import random
@@ -19,10 +20,11 @@ from typing import Any
 
 from void.agents.models import PersonalitySeed
 from void.brain.base import BrainResult, Sampling, Usage
-from void.brain.decision import Action, Claim, Decision, MemoryOp
+from void.brain.decision import MAX_NAME_CHARS, Action, Claim, Decision, MemoryOp
 from void.brain.gadget_templates import choose_template
 from void.brain.prompt import estimate_tokens, render_observation, system_prompt
-from void.config import VoidConfig
+from void.config import VoidConfig, micro_to_usd
+from void.economy.pricing import hold_parts
 from void.rng import RNG
 from void.types import Observation, RetrievedNote
 
@@ -45,8 +47,49 @@ _VEIN_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-__all__ = ["ScriptedBrain", "NodeMemory", "VeinMemory", "node_memory", "vein_memory", "BEACON_GADGET", "BEACON_TESTS",
-           "BROKEN_GADGET"]
+__all__ = ["ScriptedBrain", "NodeMemory", "VeinMemory", "node_memory", "vein_memory", "child_name", "BEACON_GADGET",
+           "BEACON_TESTS", "BROKEN_GADGET"]
+
+# The prompt size the simulation prices the kernel's minimum hold at (Simulation.hold_min_for): the endowment floor
+# lifecycle.create_offspring enforces is that hold times population.min_endowment_calls.
+_HOLD_PROMPT_TOKENS = 400
+
+# A representative scarcity per observed label, used only when an epoch has moved the world off its configured
+# scarcity (the label thresholds are Kernel.scarcity_label's).
+_SCARCITY_OF_LABEL = {"famine": 0.35, "lean": 0.7, "normal": 1.0, "bountiful": 1.25}
+
+# The yield deficit at weather -0.15 under the default sensitivity 0.5: where the old fixed nudge rule started.
+_NUDGE_DEFICIT_UNIT = 0.075
+
+
+def _scarcity_label(s: float) -> str:
+    return "famine" if s < 0.5 else ("lean" if s < 0.9 else ("normal" if s <= 1.1 else "bountiful"))
+
+
+def _sibling_suffix(k: int) -> str:
+    """``''`` for a parent's first child, then ``b``..``z``, then ``z27``, ``z28``, ...: distinct for every ``k``."""
+    if k <= 0:
+        return ""
+    if k < 26:
+        return chr(ord("a") + k)
+    return f"z{k + 1}"
+
+
+def child_name(parent: str, generation: int, k: int) -> str:
+    """The name of a parent's ``k``-th child (DESIGN §7.2: parent name + generation): ``Ada-1``, ``Ada-1b``, ``Ada-1c``.
+
+    ``generation`` is the parent's. A name that would pass the 20-character limit keeps the parent's root name and
+    the tail and adds four hex digits of a digest of the full name, so deep lineages stay distinct and every name
+    matches NAME_RE (the parent's name starts with a letter, so its root does too). Pure.
+    """
+    tail = f"-{generation + 1}{_sibling_suffix(k)}"
+    full = f"{parent}{tail}"
+    if len(full) <= MAX_NAME_CHARS:
+        return full
+    digest = hashlib.blake2b(full.encode(), digest_size=2).hexdigest()
+    root = parent.split("-", 1)[0] or parent
+    keep = max(1, MAX_NAME_CHARS - len(tail) - 1 - len(digest))
+    return f"{root[:keep]}{tail}-{digest}"[:MAX_NAME_CHARS]
 
 
 @dataclass(frozen=True)
@@ -173,17 +216,95 @@ class ScriptedBrain:
         self._gadget_tried: set[str] = set()
         self._first_call_done: set[str] = set()
         self._last_claims: dict[str, list[Claim]] = {}
+        self._children_named: dict[str, int] = {}  # agent_id -> child names used (the per-parent sibling counter)
+        # DESIGN §7.2's argument rules, or the ones before them (population.scripted_rules: pre_7_2) in worlds recorded
+        # under those: the pre-7.2 branches below are the old code verbatim and draw nothing from the rng
+        self._design = cfg.population.scripted_rules == "design_7_2"
+        self._hold_min: dict[str, int] = {}  # tier -> the kernel's minimum hold (micro), computed once
 
     def export_state(self) -> dict[str, Any]:
         return {"last_chronicle_day": dict(sorted(self._last_chronicle_day.items())),
                 "last_self_day": dict(sorted(self._last_self_day.items())),
-                "gadget_tried": sorted(self._gadget_tried), "first_call_done": sorted(self._first_call_done)}
+                "gadget_tried": sorted(self._gadget_tried), "first_call_done": sorted(self._first_call_done),
+                "children_named": dict(sorted(self._children_named.items()))}
 
     def import_state(self, state: dict[str, Any]) -> None:
         self._last_chronicle_day = {k: int(v) for k, v in state.get("last_chronicle_day", {}).items()}
         self._last_self_day = {k: int(v) for k, v in state.get("last_self_day", {}).items()}
         self._gadget_tried = set(state.get("gadget_tried", []))
         self._first_call_done = set(state.get("first_call_done", []))
+        self._children_named = {k: int(v) for k, v in state.get("children_named", {}).items()}
+
+    # ------------------------------------------------------------------ economics the policy reasons with
+    def _kernel_hold_min(self, tier: str) -> int:
+        """The minimum hold (micro) the kernel prices a call on ``tier`` at, as Simulation.hold_min_for does."""
+        if tier not in self._hold_min:
+            tcfg = self.cfg.tiers[tier]
+            system = self._system if tier == self.tier else system_prompt(self.cfg, tier)
+            self._hold_min[tier] = hold_parts(tcfg, self.cfg.economy, _HOLD_PROMPT_TOKENS, estimate_tokens(system))[0]
+        return self._hold_min[tier]
+
+    def endowment_usd(self, tier: str) -> float:
+        """DESIGN §7.2: ``min_call_reserve × min_endowment_calls``, raised to the kernel's floor (``hold_min ×
+        min_endowment_calls``, lifecycle.create_offspring) when a call's hold is dearer; rounded up to the cent, and
+        at least a cent (the decision schema takes no zero amount)."""
+        p = self.cfg.population
+        tier = tier if tier in self.cfg.tiers else self.tier
+        floor = self.cfg.economy.min_call_reserve_usd * p.min_endowment_calls
+        kernel_min = micro_to_usd(self._kernel_hold_min(tier) * p.min_endowment_calls)
+        return max(0.01, math.ceil(max(floor, kernel_min) * 100 - 1e-9) / 100)
+
+    def offspring_threshold_usd(self, tier: str) -> float:
+        """DESIGN §7.2: an agent offers ``create_offspring`` once its balance reaches ``2 × min_reserve + endowment``."""
+        return 2.0 * self.cfg.population.min_reserve_usd + self.endowment_usd(tier)
+
+    def _child_name(self, obs: Observation) -> tuple[str, int]:
+        """The next unused child name for this parent and its counter value: names a neighbour (or the parent) holds
+        are skipped, so the kernel's living-name check rarely refuses it."""
+        taken = {n.name.lower() for n in obs.neighbours} | {obs.name.lower()}
+        k = self._children_named.get(obs.agent_id, 0)
+        name = child_name(obs.name, obs.generation, k)
+        while name.lower() in taken:
+            k += 1
+            name = child_name(obs.name, obs.generation, k)
+        return name, k
+
+    def _offspring(self, obs: Observation, bal_ratio: float) -> Action | None:
+        """The ``create_offspring`` this agent would offer now, or None when its balance is short."""
+        if self._design:
+            # DESIGN §7.2: once the balance covers two reserves and the endowment; a fresh name per child
+            if obs.balance_usd < self.offspring_threshold_usd(obs.tier):
+                return None
+            child, _ = self._child_name(obs)
+            return Action(type="create_offspring", name=child, amount_usd=self.endowment_usd(obs.tier))
+        if bal_ratio <= 1.6:  # pre-7.2: above 1.6 x the starting balance, a quarter of the purse, a reused name
+            return None
+        endow = round(max(self.cfg.economy.min_call_reserve_usd * self.cfg.population.min_endowment_calls, 0.25 * obs.balance_usd), 2)
+        return Action(type="create_offspring", name=f"{obs.name[:5]}-{obs.generation + 1}", amount_usd=endow)
+
+    def _nudge(self, obs: Observation, seed: PersonalitySeed) -> tuple[float, Action] | None:
+        """The ``nudge_weather`` this agent would offer now with its utility, or None when the weather does not cost
+        yield."""
+        if not self._design:  # pre-7.2: a fixed nudge up once the weather is below -0.15
+            return (0.3 + 1.0 * seed.industriousness, Action(type="nudge_weather", delta=0.1)) if obs.weather < -0.15 else None
+        sens = self.cfg.world.weather.yield_sensitivity
+        if obs.weather * sens >= 0:
+            return None
+        # DESIGN §7.2: push toward yield-positive weather by the remaining allowance; the observation does not show how
+        # much is left, so ask for the whole daily cap and let the kernel apply what remains (Weather.nudge)
+        deficit = -sens * obs.weather
+        delta = math.copysign(min(1.0, self.cfg.world.weather.nudge_cap_per_agent_day), sens)
+        return 0.3 + seed.industriousness * min(2.0, deficit / _NUDGE_DEFICIT_UNIT), Action(type="nudge_weather", delta=delta)
+
+    def expected_forage_usd(self, obs: Observation) -> float:
+        """One forage's expected value now: ``forage_yield × units_per_tick × scarcity × weather multiplier`` (the
+        kernel's formula without a vein or a gadget bonus). Scarcity is the configured one unless the observed label
+        says an epoch has moved it, in which case the label's representative value is used."""
+        w = self.cfg.world
+        scarcity = w.scarcity if _scarcity_label(w.scarcity) == obs.scarcity_label else _SCARCITY_OF_LABEL.get(obs.scarcity_label, w.scarcity)
+        lo, hi = w.weather.yield_mult_bounds
+        wmult = max(lo, min(hi, max(0.0, 1.0 + w.weather.yield_sensitivity * obs.weather)))
+        return w.forage_yield_usd * w.forage_units_per_tick * max(0.0, scarcity) * wmult
 
     @staticmethod
     def _strategy_node(obs: Observation) -> str | None:
@@ -349,18 +470,29 @@ class ScriptedBrain:
             out["share_note"] = (0.2 + 1.2 * seed.sociability, Action(type="share_note", target=nb.agent_id))
         if "transfer" in avail and awake_neighbours and bal_ratio > 1.2:
             needy = [n for n in awake_neighbours if n.stress_bucket in ("frantic", "strained")]
-            if needy:
+            if self._design:  # DESIGN §7.2: to the most stressed neighbour, a greed-scaled fraction of the surplus above min_reserve
+                amount = round((1.0 - seed.greed) * 0.5 * (obs.balance_usd - self.cfg.population.min_reserve_usd), 2)
+            else:  # pre-7.2: a fixed gift (always at least $0.05)
+                amount = round(0.05 + 0.10 * seed.sociability, 2)
+            if needy and amount >= 0.01:
                 nb = min(needy, key=lambda n: (0 if n.stress_bucket == "frantic" else 1, n.distance, n.agent_id))
                 urgency = 1.0 if nb.stress_bucket == "frantic" else 0.55
-                out["transfer"] = (0.3 + 1.5 * urgency * seed.sociability * (1.0 - seed.greed), Action(type="transfer", target=nb.agent_id, amount_usd=round(0.05 + 0.10 * seed.sociability, 2)))
+                out["transfer"] = (0.3 + 1.5 * urgency * seed.sociability * (1.0 - seed.greed), Action(type="transfer", target=nb.agent_id, amount_usd=amount))
         if "sleep" in avail:
             late = obs.ticks_left_today <= 3
             u = 0.1 + 1.5 * seed.caution * (1.0 if late else 0.3) + (1.2 if bal_ratio < 0.35 else 0.0) + (0.8 if obs.stress > 0.8 else 0.0)
+            if self._design:  # DESIGN §7.2: sleep when the calls burn more than a forage can earn back (the shortfall, capped at 150%)
+                expected = self.expected_forage_usd(obs)
+                if obs.burn_rate_usd_per_tick > expected:
+                    shortfall = 1.5 if expected <= 0 else min(1.5, obs.burn_rate_usd_per_tick / expected - 1.0)
+                    u += (0.5 + seed.caution) * shortfall
             out["sleep"] = (u, Action(type="sleep"))
         if "read_chronicle" in avail and self._last_chronicle_day.get(obs.agent_id) != obs.day and obs.chronicle_headline:
             out["read_chronicle"] = (0.4 + 1.2 * seed.curiosity, Action(type="read_chronicle"))
-        if "nudge_weather" in avail and obs.weather < -0.15:
-            out["nudge_weather"] = (0.3 + 1.0 * seed.industriousness, Action(type="nudge_weather", delta=0.1))
+        if "nudge_weather" in avail:
+            nudge = self._nudge(obs, seed)
+            if nudge is not None:
+                out["nudge_weather"] = nudge
         open_tasks = [t for t in obs.tasks if t.status == "open" and t.my_application_status is None]
         if "apply_task" in avail and open_tasks:
             t = max(open_tasks, key=lambda t: t.reward_usd)
@@ -372,12 +504,13 @@ class ScriptedBrain:
             object.__setattr__(action, "_template_label", tpl.label)
             out["propose_gadget"] = (0.2 + 1.4 * seed.curiosity, action)
         if "use_gadget" in avail and obs.gadgets:
-            g = min(obs.gadgets, key=lambda g: g.distance)
-            out["use_gadget"] = (0.3 + 0.8 * seed.curiosity, Action(type="use_gadget", target=g.gadget_id, params={"x": 1.0}))
-        if "create_offspring" in avail and bal_ratio > 1.6:
-            endow = round(max(self.cfg.economy.min_call_reserve_usd * self.cfg.population.min_endowment_calls, 0.25 * obs.balance_usd), 2)
-            child = f"{obs.name[:5]}-{obs.generation + 1}"
-            out["create_offspring"] = (0.2 + 1.0 * (1.0 - seed.caution) + 0.5 * seed.sociability, Action(type="create_offspring", name=child, amount_usd=endow))
+            g = min(obs.gadgets, key=lambda g: g.distance)  # DESIGN §7.2: the nearest gadget, params {"x": rng}
+            x = round(rng.uniform(-1.0, 1.0), 4) if self._design else 1.0  # pre-7.2: always 1.0, no draw
+            out["use_gadget"] = (0.3 + 0.8 * seed.curiosity, Action(type="use_gadget", target=g.gadget_id, params={"x": x}))
+        if "create_offspring" in avail:
+            offspring = self._offspring(obs, bal_ratio)
+            if offspring is not None:
+                out["create_offspring"] = (0.2 + 1.0 * (1.0 - seed.caution) + 0.5 * seed.sociability, offspring)
         out["idle"] = (0.05, Action(type="idle"))
         return out
 
@@ -478,6 +611,8 @@ class ScriptedBrain:
             self._last_chronicle_day[obs.agent_id] = obs.day
         if choice == "propose_gadget":
             self._gadget_tried.add(obs.agent_id)
+        if choice == "create_offspring" and self._design:  # this name is spent whether or not the kernel accepts the birth
+            self._children_named[obs.agent_id] = self._child_name(obs)[1] + 1
         ops = self._memory_ops(obs, seed, action, rng)
         thought = f"{choice} looks best right now ({obs.stress_label}, {obs.weather_label})."
         decision = Decision(thought=thought, memory_ops=ops, action=action)
