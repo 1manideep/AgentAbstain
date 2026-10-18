@@ -314,15 +314,18 @@ def test_pre_7_2_rules_are_the_old_generators() -> None:
 # and with the loop's observation dropped both worlds give the digests recorded before exactly (base metrics
 # c2be52a5..., events 3f9ddd52..., calls 8e3f8834..., ledger 69cc1acf...; amnesic fog metrics e26476ce..., events
 # 75e82ce6..., calls b1a777de..., ledger 61b2acd0...).
+# The events digests (only) were re-recorded when the gadget gate began emitting propose_gadget as a proposal is
+# submitted (tests/test_world_goldens.py has the same note): dropping those events (base 6, amnesic fog 4) gives the
+# previous digests exactly (base 2f211f01..., amnesic fog 2b2721a8...); metrics, calls and ledger did not move.
 BEFORE_7_2 = {
     "base": {"config_hash": "f589277f12656996537c99ed2f9968389a7d067d6bb94a5b6683ba201fbc1b51",
              "metrics": "62012f275bcb693b633f7a59cb556f6655ed32acc3ead77ddf07a421e8e7a801",
-             "events": "2f211f014a43ad1052d3cde95f78f432eb3d2b80d0c73738183940c6748480b1",
+             "events": "d0cf3d8f824ab0f478601282582182c2fed509447302c713ba945cd1708f6f87",
              "calls": "bf6e449237c81f80b295c49141067355eb517c732c8bf2f5bbee57348cea0d0a",
              "ledger": "c6708a83be68ce4fe697fac24249b70cd0ecdfe7bdf00535754ad9ab8002dc86"},
     "amnesic_fog": {"config_hash": "fb105920e6b0993e29971b43cf9f1c984343500dcb33fa8178b837499498c47d",
                     "metrics": "1218d2415794c998097dc3ad686e43f135e4b662846908232f9c7d6ae73fc7b4",
-                    "events": "2b2721a88789099da945adb5b9650ff5672e9ebb01d0585334337828204c624c",
+                    "events": "30deb4dd059b745247341fdf184b59b13025f304eb8030573b77bdd5d5c395ec",
                     # full response text under run.log_prompts (the memory-audit item): a 25953-character scripted
                     # gadget proposal is stored whole (before the kernel item, cut back to 4000 characters, the old
                     # world's calls gave f266313e... as before that item)

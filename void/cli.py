@@ -2,6 +2,9 @@
 plus the lazy subcommands ``report | transplant | generations | mcp``.
 
 * ``run``         headless simulation (one seed or a ``--seeds A-B`` sweep); exit 0 when completed, 2 otherwise.
+                  ``--replay-commands RUN_DIR`` applies the operator commands RUN_DIR's run applied (its
+                  ``control_commands`` rows) at the ticks it applied them, through the same handler; pause, resume
+                  and speed are skipped headless (``void.sim.control.CommandReplay``).
                   A config that puts agents on a paid Anthropic tier needs a live budget (``--budget-usd`` or
                   ``VOID_BUDGET_USD``): each run is refused when the real spend already recorded (the repository's
                   ``data/live``, any ``--spend-root``, ``--out`` and the committed spend ledger) plus the run's
@@ -250,10 +253,10 @@ def _summary(sim: Any, status: str, t0: float) -> str:
             f"elapsed={time.perf_counter() - t0:.1f}s dir={sim.run_dir}")
 
 
-async def _run_headless(cfg: VoidConfig, run_dir: Path, *, resume: bool) -> str:
+async def _run_headless(cfg: VoidConfig, run_dir: Path, *, resume: bool, replay: Any = None) -> str:
     from void.sim.loop import Simulation
 
-    sim = Simulation(cfg, run_dir, resume=resume)
+    sim = Simulation(cfg, run_dir, resume=resume, replay_commands=replay)
     t0 = time.perf_counter()
     print(f"run {sim.run_id}: seed={cfg.run.seed} days={cfg.run.days} ticks_per_day={cfg.run.ticks_per_day} dir={run_dir}", flush=True)
 
@@ -264,16 +267,47 @@ async def _run_headless(cfg: VoidConfig, run_dir: Path, *, resume: bool) -> str:
     status = await sim.run(on_tick=on_tick)
     if sim.clock.day >= 1:
         print(_day_line(sim, sim.clock.day, t0), flush=True)
+    if sim.replay is not None and sim.replay.remaining():
+        print(f"warning: {sim.replay.remaining()} replayed command(s) were due after the run ended", file=sys.stderr)
     print(_summary(sim, status, t0), flush=True)
     sim.db.close()
     gc.collect()  # release the sandbox's subprocess transports while the loop is still open
     return status
 
 
+def _load_replay(source: str, run_dir: Path, cfg: VoidConfig) -> tuple[Any, str | None]:
+    """``--replay-commands``: the source run's commands, or why they cannot be replayed into ``run_dir``."""
+    from void.sim.control import CommandReplay
+
+    src = Path(source)
+    if not (src / "world.db").is_file():
+        return None, f"--replay-commands: {src / 'world.db'} not found"
+    try:
+        if src.resolve() == run_dir.resolve():
+            return None, f"--replay-commands names the run directory itself ({run_dir}); pass --out DIR for the replay"
+    except OSError:
+        pass
+    try:
+        replay = CommandReplay.load(src)
+    except (OSError, ValueError, sqlite3.Error) as e:
+        return None, f"--replay-commands: {e}"
+    kinds = sorted({c.kind for c in replay.skipped})
+    skipped = f" ({len(replay.skipped)} skipped headless: {', '.join(kinds)})" if kinds else ""
+    print(f"replaying {len(replay.commands)} operator command(s) from {src}{skipped}", file=sys.stderr)
+    src_hash, src_seed = replay.source.get("config_hash"), replay.source.get("seed")
+    if src_hash is not None and (src_hash != cfg.hash() or (src_seed is not None and int(src_seed) != cfg.run.seed)):
+        print(f"warning: {src} ran another config or seed (config_hash {str(src_hash)[:12]}, seed {src_seed}); the "
+              f"commands are applied at the same ticks, but the world they meet differs", file=sys.stderr)
+    return replay, None
+
+
 # --- subcommands --------------------------------------------------------------------------------------------
 def cmd_run(args: argparse.Namespace) -> int:
     config = _resolve(args.config)
     sweep = args.seeds is not None
+    if sweep and args.replay_commands:
+        print("error: --replay-commands replays one run; it cannot be combined with --seeds", file=sys.stderr)
+        return 2
     seeds: list[int | None] = list(_parse_seeds(args.seeds)) if sweep else [args.seed]
     statuses: list[str] = []
     for seed in seeds:
@@ -293,10 +327,17 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"refused: {refusal}", file=sys.stderr)
             statuses.append("refused")
             break  # later seeds would need at least as much
+        replay = None
+        if args.replay_commands:  # read before --fresh archives anything
+            replay, why = _load_replay(args.replay_commands, run_dir, cfg)
+            if why is not None:
+                print(f"error: {why}", file=sys.stderr)
+                statuses.append("error")
+                continue
         if args.fresh:
             _archive_run_dir(run_dir)
         try:
-            statuses.append(asyncio.run(_run_headless(cfg, run_dir, resume=args.resume)))
+            statuses.append(asyncio.run(_run_headless(cfg, run_dir, resume=args.resume, replay=replay)))
         except RuntimeError as e:
             print(_existing_run_line(run_dir) if _is_existing_run_error(e) else f"error: {e}", file=sys.stderr)
             statuses.append("error")
@@ -754,6 +795,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--seeds", help="A-B (inclusive) or A,B,C: run each seed into <out>/<experiment|name>/<arm|default>/seed_<n>/")
     r.add_argument("--days", type=int)
     r.add_argument("--tick-seconds", type=float, dest="tick_seconds")
+    r.add_argument("--replay-commands", dest="replay_commands", metavar="RUN_DIR", default=None,
+                   help="apply the operator commands RUN_DIR's run applied, each at the tick it was applied there "
+                        "(pause, resume and speed are skipped headless); not with --seeds")
     _run_dir_args(r)
     _budget_args(r)
     r.set_defaults(func=cmd_run)

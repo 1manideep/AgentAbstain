@@ -13,10 +13,10 @@ from dataclasses import dataclass
 
 from void.agents.registry import AgentRegistry
 from void.brain.decision import sanitize_text
-from void.config import VoidConfig, usd_to_micro
+from void.config import VoidConfig, micro_to_usd, usd_to_micro
 from void.db import Database
 from void.economy.wallet import Wallet
-from void.events import Event, EventBus, Kind
+from void.events import OPERATOR, Event, EventBus, Kind
 from void.ids import IdFactory
 from void.rng import RNG
 from void.sandbox.registry import GadgetRecord, GadgetRegistry, TamperedGadget, sha256, validate_describe
@@ -123,6 +123,9 @@ class GadgetGate:
         gid = self.ids.new("gd")
         name = sanitize_text(name, single_line=True, max_len=20)
         purpose = sanitize_text(purpose, single_line=True, max_len=120)
+        # the proposal is submitted (fee paid): exactly one gadget_verified or gadget_rejected with this gadget_id follows
+        self.bus.emit(Event(tick, day, Kind.PROPOSE_GADGET, {"gadget_id": gid, "agent_id": agent_id, "name": name,
+                                                             "fee_usd": micro_to_usd(fee)}, agent_id))
         verification: dict[str, object] = {"template_label": template_label, "isolated": getattr(self.sandbox, "isolated", False)}
 
         def reject(stage: str, reason: str) -> GateOutcome:
@@ -188,7 +191,7 @@ class GadgetGate:
             # quarantine before any fee: a tampered gadget is never used or charged for again
             self.registry.record_use(gadget_id, agent_id, tick, False, None, rec.effect.get("value"), "tampered")
             self.db.execute("UPDATE gadgets SET status='tampered' WHERE gadget_id=?", (gadget_id,))
-            self.bus.emit(Event(tick, day, "gadget_tampered", {"gadget_id": gadget_id, "agent_id": agent_id}, agent_id, visibility="operator"))
+            self.bus.emit(Event(tick, day, Kind.GADGET_TAMPERED, {"gadget_id": gadget_id, "agent_id": agent_id}, agent_id, visibility=OPERATOR))
             return UseOutcome(False, "gadget_tampered")
         fee = usd_to_micro(self.cfg.sandbox.use_fee_usd)
         if fee and not self.wallet.transfer(agent_id, "house", tick, fee, "gadget_use_fee", "gadget_use_fee", ref=f"use:{gadget_id}"):
@@ -201,8 +204,8 @@ class GadgetGate:
         cap = self.cfg.world.effect_caps.get(kind, 0.0)
         if not result.ok or not isinstance(result.run_value, dict) or "value" not in result.run_value:
             self.registry.record_use(gadget_id, agent_id, tick, False, None, expected, result.error or result.stage)
-            self.bus.emit(Event(tick, day, "gadget_use_failed", {"gadget_id": gadget_id, "agent_id": agent_id,
-                                                                  "stage": result.stage, "reason": (result.error or "")[:200]}, agent_id))
+            self.bus.emit(Event(tick, day, Kind.GADGET_USE_FAILED, {"gadget_id": gadget_id, "agent_id": agent_id,
+                                                                     "stage": result.stage, "reason": (result.error or "")[:200]}, agent_id))
             return UseOutcome(False, f"run_failed:{result.stage}")
         try:
             raw = float(result.run_value["value"])

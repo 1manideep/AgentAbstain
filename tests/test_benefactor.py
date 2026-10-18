@@ -55,7 +55,7 @@ def test_opaque_windfalls_have_ledger_rows_and_no_source(opaque: SimRun):
         assert set(ev["payload"]) == {"agent_id", "amount_usd"}  # no source, no reason, no disclosure
         assert ev["payload"]["amount_usd"] == int(row["delta"]) / 1e6
         assert "benefactor" not in json.dumps(ev["payload"]).lower()
-    assert opaque.db.fetchone("SELECT windfall_string FROM run")["windfall_string"] == "opaque"
+    assert opaque.db.fetchone("SELECT windfall_string FROM run")["windfall_string"] == OPAQUE_STRING  # the exact delivered text
     assert "No source is recorded" in OPAQUE_STRING
 
 
@@ -104,7 +104,7 @@ def test_legible_arm_uses_task_reward_and_task_completed(legible: SimRun):
     assert len(public) == len(rows) == len(_grants(legible))
     for ev in public:
         assert ev["visibility"] == "public" and set(ev["payload"]) == {"task_id", "title", "agent_id", "reward_usd"} and "benefactor" not in json.dumps(ev["payload"]).lower()
-    assert legible.db.fetchone("SELECT windfall_string FROM run")["windfall_string"] == "legible"
+    assert legible.db.fetchone("SELECT windfall_string FROM run")["windfall_string"] == LEGIBLE_STRING  # the exact delivered text
     assert LEGIBLE_STRING.startswith("Reward for services rendered")
 
 
