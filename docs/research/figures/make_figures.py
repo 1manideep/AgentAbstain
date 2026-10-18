@@ -1,8 +1,16 @@
 #!/usr/bin/env python
-"""Regenerate every figure in docs/research/MEMORY_EVOLUTION.md.
+"""Regenerate every figure in docs/research/MEMORY_EVOLUTION.md, and facts.json with the numbers it quotes.
+
+    .venv/bin/python docs/research/figures/make_figures.py [--only power,cost]
+
+With no ``--runs``, the REAL run figures (6 and 7) and the section 2.4 facts come from the scripted demo runs of
+Appendix G, which this script makes itself in a temporary directory (``void run --config configs/demo.yaml --seeds
+1-4,42 --days 14 --tick-seconds 0``; scripted brains only, $0, a few minutes). To reuse runs made beforehand:
 
     .venv/bin/void run --config configs/demo.yaml --seeds 1-4,42 --days 14 --tick-seconds 0 --out runs/figs
-    .venv/bin/python docs/research/figures/make_figures.py --runs runs/figs/demo/default [--only power,cost]
+    .venv/bin/python docs/research/figures/make_figures.py --runs runs/figs/demo/default
+
+``--no-runs`` skips the run figures and keeps the run facts already in facts.json.
 
 Requires matplotlib, numpy, scipy and networkx (``uv pip install -e '.[figures]'``).
 
@@ -10,7 +18,7 @@ Figure kinds, stated on every image so nobody mistakes one for the other:
 
 * REAL     computed from run databases or from the repo's own price table and prompt sizes
 * COMPUTED analytic (statistical power); exact given its stated assumptions
-* SCHEMATIC design diagrams of a proposal; nothing here is built yet unless a box says "exists"
+* SCHEMATIC design diagrams; the corner note says which parts are built
 * HYPOTHETICAL curves drawn to show what each hypothesis predicts; NOT data
 
 Colours are the dataviz reference palette (first slots validated adjacent, light surface);
@@ -20,10 +28,12 @@ lines are direct-labelled because aqua and yellow sit below 3:1 contrast on the 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 
 import matplotlib
@@ -38,6 +48,11 @@ from matplotlib.patches import FancyBboxPatch  # noqa: E402
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 sys.path.insert(0, str(REPO))
+
+# The scripted demo runs behind Figures 6 and 7 and the section 2.4 facts (Appendix G).
+DEMO_CONFIG = REPO / "configs" / "demo.yaml"
+DEMO_SEEDS = "1-4,42"
+DEMO_DAYS = 14
 
 SURFACE = "#fcfcfb"
 INK = "#0b0b0b"
@@ -144,8 +159,8 @@ def fig_architecture():
     arrow(ax, (xs[2] + cw, 55), (110, 52), "", lw=1.4)                     # metrics -> observability
     arrow(ax, (26, 17), (xs[0] + 4, rows[1]), "", lw=1.4, rad=-0.2)        # MCP wraps commands
     ax.text(28.4, 22.2, "wraps", fontsize=7.6, color=INK2, ha="center", bbox=dict(fc="#f7f6f3", ec="none", pad=1))
-    legend_boxes(ax, 2, 3.6, [("exists in the repo today", NEUTRAL_FILL, NEUTRAL_EDGE), ("proposed", BLUE_TINT, BLUE)])
-    tag(fig, "SCHEMATIC", "proposal diagram; blue boxes are not built yet")
+    legend_boxes(ax, 2, 3.6, [("existed before the memory layer", NEUTRAL_FILL, NEUTRAL_EDGE), ("memory layer, now built", BLUE_TINT, BLUE)])
+    tag(fig, "SCHEMATIC", "design diagram; every box is built")
     save(fig, "fig1_architecture.png")
 
 
@@ -170,9 +185,9 @@ def fig_trust():
     ax.add_patch(FancyBboxPatch((2, 3.4), 126, 9.4, boxstyle="round,pad=0,rounding_size=1.4", fc=NEUTRAL_FILL, ec=NEUTRAL_EDGE, lw=1.2))
     ax.text(4, 11.8, "Reindex rule", fontsize=10.5, fontweight="bold", va="top")
     ax.text(4, 8.6, "Metadata found in a file is untrusted. The database row is authoritative, and a file that disagrees with it is flagged, not believed.\n"
-            "Today reindex rebuilds the index from file frontmatter. That must change before agents can write files, or an agent could forge where a note came from.",
+            "Built: reindex believes a file only when its content hash matches the kernel's manifest; any other file is admitted as an operator edit and flagged.",
             fontsize=8.8, color=INK2, va="top", linespacing=1.4)
-    tag(fig, "SCHEMATIC", "proposal diagram")
+    tag(fig, "SCHEMATIC", "design diagram; built")
     save(fig, "fig2_trust_boundary.png")
 
 
@@ -193,7 +208,7 @@ def fig_loop():
     arrow(ax, (44, cy), (50.5, cy), "", color=INK2, lw=1.6, style="<|-|>")
     box(ax, 2, 6, 34, 14, "Fitness signals to compare", "A  survival only\nB  measured recall on planted facts\nC  adoption of your practice by others", fc=NEUTRAL_FILL, ec=NEUTRAL_EDGE, bsize=8.6)
     arrow(ax, (19, 20), (19, 31.5), "", color=INK2)
-    tag(fig, "SCHEMATIC", "proposal diagram")
+    tag(fig, "SCHEMATIC", "design diagram; all three operators and all three signals are built")
     save(fig, "fig3_evolution_operators.png")
 
 
@@ -280,7 +295,8 @@ def tier_cost(cfg, tier: str, maint_per_day: float, days=14, agents=10, ticks=24
 def fig_cost():
     from void.config import load_config
     cfg = load_config(REPO / "configs" / "base.yaml")
-    tiers = [("average", "Gemini 3.1 Flash-Lite", BLUE), ("sharp", "Gemini 3.7 Flash", ORANGE), ("budget", "Claude Haiku 4.5", AQUA), ("frontier", "Claude Opus 5.5", YELLOW)]
+    # labelled by tier name and provider; the models behind them are configs/base.yaml's to name
+    tiers = [(t, f"{t} ({cfg.tiers[t].provider})", col) for t, col in (("average", BLUE), ("sharp", ORANGE), ("budget", AQUA), ("frontier", YELLOW))]
     xs = [0, 1, 2, 4]
     fig, ax = plt.subplots(figsize=(11.5, 6.2), dpi=DPI)
     fig.subplots_adjust(left=0.085, right=0.79, top=0.80, bottom=0.20)
@@ -417,6 +433,55 @@ def fig_vault(run: Path):
     return {"agent": names.get(best, best), "notes": total_notes, "edges": total_edges, "unlinked": len(isolated), "channels": sorted({d['channel'] for _, d in G.nodes(data=True)})}
 
 
+def vault_notes(runs: Path, day: int = DEMO_DAYS) -> dict[str, object]:
+    """Section 2.4: notes held per living agent at the end of ``day``. Each run's day row lists one ``vault_by_agent``
+    entry per agent alive at the end of that day with its notes (archived notes excluded); a run's value is their
+    mean, and ``mean_of_runs`` averages the runs."""
+    per_run: dict[str, float] = {}
+    agents = notes = 0
+    for sd in sorted(p for p in runs.glob("seed_*") if (p / "metrics.jsonl").exists()):
+        row = next((r for r in load_days(sd) if int(r["day"]) == day), None)
+        by_agent = (row or {}).get("vault_by_agent") or {}
+        if not by_agent:
+            continue
+        n = sum(int(v.get("notes", 0)) for v in by_agent.values())
+        per_run[sd.name] = round(n / len(by_agent), 2)
+        agents += len(by_agent)
+        notes += n
+    if not per_run:
+        print(f"skip vault notes: no day-{day} vault rows under", runs)
+        return {}
+    vals = list(per_run.values())
+    return {"day": day, "runs": len(vals), "per_run": per_run, "mean_of_runs": round(float(np.mean(vals)), 1),
+            "min_run": min(vals), "max_run": max(vals), "pooled": round(notes / agents, 1), "agents": agents, "notes": notes}
+
+
+def scripted_demo_runs(out: Path) -> Path:
+    """Make the scripted demo runs of Appendix G under ``out`` and return the directory holding their ``seed_*`` runs.
+    Refuses (SystemExit) a config that can reach a paid provider, so this never spends money."""
+    from void.brain.factory import reachable_tiers
+    from void.cli import main as cli_main
+    from void.config import load_config
+
+    cfg = load_config(DEMO_CONFIG)
+    tiers = reachable_tiers(cfg) | set(cfg.intelligence.ladder)
+    paid = sorted(t for t in tiers if t in cfg.tiers and cfg.tiers[t].provider != "scripted")
+    if paid or cfg.chronicle.writer == "llm" or cfg.gossip.paraphrase == "llm":
+        raise SystemExit(f"refused: {DEMO_CONFIG.name} can reach a paid provider ({', '.join(paid) or 'an LLM writer'}); "
+                         "the run figures use scripted brains only")
+    log = out / "runs.log"
+    args = ["run", "--config", str(DEMO_CONFIG), "--seeds", DEMO_SEEDS, "--days", str(DEMO_DAYS), "--tick-seconds", "0",
+            "--out", str(out)]
+    print(f"making the scripted demo runs: void {' '.join(args)}")
+    with open(log, "w", encoding="utf-8") as fh, contextlib.redirect_stdout(fh), contextlib.redirect_stderr(fh):
+        code = cli_main(args)
+    dirs = sorted({p.parent for p in out.glob("*/*/seed_*")})
+    if code != 0 or len(dirs) != 1:  # the temporary directory goes away on exit, so show the end of its log here
+        tail = "\n".join(log.read_text(encoding="utf-8").splitlines()[-20:])
+        raise SystemExit(f"the scripted demo runs failed (exit {code}); the end of their log:\n{tail}")
+    return dirs[0]
+
+
 def fig_hypotheses():
     fig, axes = plt.subplots(1, 3, figsize=(14.5, 5.3), dpi=DPI)
     fig.subplots_adjust(left=0.05, right=0.985, top=0.79, bottom=0.17, wspace=0.16)
@@ -484,7 +549,7 @@ def fig_roadmap():
     tasks = [
         ("Prompt logging + Parquet export", 0, 2, BLUE), ("Trust model: DB-authoritative provenance", 1, 3, BLUE),
         ("Memory commands, quotas, audit log", 2, 5, BLUE), ("Policy file + nightly maintenance", 3, 6, BLUE),
-        ("Metrics, probes, transplant harness", 5, 8, BLUE), ("Pilots on live models (Flash-Lite)", 8, 11, ORANGE),
+        ("Metrics, probes, transplant harness", 5, 8, BLUE), ("Pilots on live models (cheapest tier)", 8, 11, ORANGE),
         ("Main experiments E1 to E5", 11, 19, ORANGE), ("Transfer: external benchmarks + open weights", 17, 22, AQUA),
         ("Analysis, write-up, release", 20, 26, VIOLET),
     ]
@@ -609,8 +674,11 @@ def fig_literature(papers_path: Path) -> dict[str, object]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--runs", type=Path, default=None, help="directory holding seed_*/ run directories (for the REAL figures)")
-    ap.add_argument("--only", default="", help="comma list: arch,trust,loop,power,cost,gens,vault,hyp,road,lit")
+    runs_from = ap.add_mutually_exclusive_group()
+    runs_from.add_argument("--runs", type=Path, default=None,
+                           help="directory holding seed_*/ run directories (default: make the scripted demo runs in a temp dir)")
+    runs_from.add_argument("--no-runs", action="store_true", help="skip the run figures; keep the run facts in facts.json")
+    ap.add_argument("--only", default="", help="comma list: arch,trust,loop,power,cost,gens,vault,notes,hyp,road,lit")
     ap.add_argument("--papers", type=Path, default=REPO / "docs" / "research" / "literature" / "papers.json",
                     help="the literature sweep (for the lit figure)")
     args = ap.parse_args()
@@ -619,7 +687,8 @@ def main() -> None:
         return not only or key in only
 
     facts_path = HERE / "facts.json"
-    facts: dict[str, object] = json.loads(facts_path.read_text()) if only and facts_path.exists() else {}
+    keep = (only or args.no_runs) and facts_path.exists()
+    facts: dict[str, object] = json.loads(facts_path.read_text()) if keep else {}
     steps = (
         ("arch", fig_architecture), ("trust", fig_trust), ("loop", fig_loop), ("hyp", fig_hypotheses), ("road", fig_roadmap),
     )
@@ -632,11 +701,15 @@ def main() -> None:
         facts["cost_table_usd"] = {k: [round(v, 3) for v in vs] for k, vs in fig_cost().items()}
     if want("lit") and args.papers.exists():
         facts["literature"] = fig_literature(args.papers)
-    if args.runs is not None:
-        if want("gens"):
-            facts["generations"] = fig_generations(args.runs)
-        if want("vault"):
-            facts["vault"] = fig_vault(args.runs / "seed_42")
+    if not args.no_runs and (want("gens") or want("vault") or want("notes")):
+        with tempfile.TemporaryDirectory(prefix="void_figs_") as tmp:
+            runs = args.runs if args.runs is not None else scripted_demo_runs(Path(tmp))
+            if want("gens"):
+                facts["generations"] = fig_generations(runs)
+            if want("vault"):
+                facts["vault"] = fig_vault(runs / "seed_42")
+            if want("notes"):
+                facts["vault_notes_day14"] = vault_notes(runs)
     facts_path.write_text(json.dumps(facts, indent=2, sort_keys=True) + "\n")
     print(json.dumps(facts, indent=2, sort_keys=True))
 

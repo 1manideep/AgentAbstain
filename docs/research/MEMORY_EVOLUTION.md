@@ -4,13 +4,13 @@
 
 | | |
 |---|---|
-| **Status** | Proposal v0.2, for review. v0.2 folds in the systematic review ([LITERATURE_REVIEW.md](LITERATURE_REVIEW.md)): softer claims, added baselines (6.13), a new hypothesis (H9) and the transplant test moved forward. Nothing in sections 5 to 10 is built unless it is marked `[built]`; 10.4 lists what the thin slice built. |
-| **Date** | 2026-09-30 (v0.1); 2026-10-13 (v0.2) |
+| **Status** | Proposal v0.2, for review, with the build status of 2026-10-18. v0.2 folds in the systematic review ([LITERATURE_REVIEW.md](LITERATURE_REVIEW.md)): softer claims, added baselines (6.13), a new hypothesis (H9) and the transplant test moved forward. Sections 5 to 10 mark each piece `[built]` or `[proposed]`; 10.4 gives the status of S0 and 10.5 lists what the $60 programme does not build. |
+| **Date** | 2026-09-30 (v0.1); 2026-10-13 (v0.2); build status 2026-10-18 |
 | **Branch** | `claude/trusting-goodall-ew0p38` |
-| **Authorship** | Drafted by Claude for the project owner. Every number is either computed by `docs/research/figures/make_figures.py` from this repo, or marked `[assumption]`. |
+| **Authorship** | Drafted by Claude for the project owner. Every number is either computed by a committed script named beside it (`docs/research/figures/make_figures.py` for the figures and `figures/facts.json`; `scripts/gates.py`, `scripts/mem_diagnosis.py` and `scripts/compare.py` for the runs in 10.4), or marked `[assumption]`. The dollar costs of sections 0, 6.1, 6.12 and 10.4 are planning estimates and carry that tag. |
 | **How to give feedback** | Section 12 lists the decisions I need from you, each with my default. Edit anything else inline. |
 
-**Tags used below.** `[built]` exists in the repo today. `[proposed]` does not exist yet. `[assumption]` is a number I chose, not measured. Figures carry a tag in their corner: **REAL** (computed from run databases or the repo's price table), **COMPUTED** (analytic, exact given stated assumptions), **SCHEMATIC** (a design diagram), **HYPOTHETICAL** (a curve drawn to show what a hypothesis predicts; not data).
+**Tags used below.** `[built]` exists in the repo today. `[proposed]` does not exist yet (10.5 collects what the $60 programme leaves unbuilt). `[assumption]` is a number I chose, not measured. Figures carry a tag in their corner: **REAL** (computed from run databases or the repo's price table), **COMPUTED** (analytic, exact given stated assumptions), **SCHEMATIC** (a design diagram), **HYPOTHETICAL** (a curve drawn to show what a hypothesis predicts; not data).
 
 ---
 
@@ -29,7 +29,7 @@
 10. [Implementation plan and roadmap](#10-implementation-plan-and-roadmap)
 11. [The industry framing](#11-the-industry-framing)
 12. [Decisions needed from you](#12-decisions-needed-from-you)
-- [Appendices A to G](#appendix-a-default-seed-policy-proposed) and [References](#references-and-read-status)
+- [Appendices A to G](#appendix-a-default-seed-policy-built) and [References](#references-and-read-status)
 
 ---
 
@@ -39,20 +39,20 @@
 
 **What is new, after the review.** The systematic review (section 3 and [LITERATURE_REVIEW.md](LITERATURE_REVIEW.md)) found the idea **partially scooped**. No paper in a sweep of 158 combines all four elements: memory practice as the heritable unit, an economy with death as the selector, transmission between agents, and capability as a manipulated factor. But each element is published, and so are several pairs. The honest framing is now: *the Vallinder-Hughes generational protocol, transplanted from cooperation strategies to memory practices, with cognition itself made the thing that costs money, on an Energy-Society-like economy, with FORGE and MemSkill as the memory-side baselines.* What remains ours is narrower, and section 3.4 states it. Each agent's own policy file is the heritable unit. A per-call cost, with bankruptcy as death, selects on that unit. The kernel records provenance that survives rewriting. Vertical and horizontal transmission run in one design, crossed with capability tier.
 
-**What we would build** (sections 5 and 10; `[proposed]` unless marked):
+**What the design adds** (sections 5 and 10; all five are built, and 10.4 says what they have shown so far):
 1. A confined memory command API that mirrors Anthropic's memory tool (six commands), with kernel-owned provenance `[built]`.
 2. A per-agent memory policy file with versioning `[built]`.
 3. A paid nightly maintenance step `[built]`.
-4. Inheritance with variation, and a `share_practice` action for horizontal transmission.
-5. Memory metrics, exams with ground truth from the event log (the audit exam is `[built]`), and a transplant harness for causal tests.
+4. Inheritance with variation, and a `share_practice` action for horizontal transmission with kernel-measured adoption `[built]`.
+5. Memory metrics, exams with ground truth from the event log (the audit exam and the arm-B reward exam), and a transplant harness for causal tests `[built]`.
 
 **What we would test** (section 4): nine hypotheses, from "does self-directed memory help at equal compute" to "do policy files become a persistence channel for injected instructions". New in v0.2: whether selection corrects the drift that unselected self-editing causes (H9).
 
-**Cost and time.** Do not commit the full budget up front. Nothing is paid before the first gate except a small live smoke test (about $20). The pilot that decides whether to continue costs about **$70**. The **minimum credible paper** (E1, a two-arm E2, the transplant test E5 with its faithfulness controls, and a second-family replication) costs about **$710**. With the baselines the review asks for, the full programme is about **$2.0k** on cheap tiers, **$2.9k** with a second-family replication and **$3.8k** with contingency. It is released only if the earlier results justify it (section 10.4). v0.1 quoted $650, $1.6k, $2.5k and $3.2k; the difference is the added baselines (6.13). Elapsed time: about 26 weeks for the full plan, assuming Claude implements and you spend 15 to 20 hours a week on decisions, review, practice coding and analysis `[assumption]`. The *thin slice* cut the time to the first decision from 8 weeks to about 4, and it is now built (10.4).
+**Cost and time** (every dollar figure in this paragraph is a planning estimate, `[assumption]`). Do not commit the full budget up front. Nothing is paid before the first gate except a small live smoke test (about $20). The pilot that decides whether to continue costs about **$70**. The **minimum credible paper** (E1, a two-arm E2, the transplant test E5 with its faithfulness controls, and a second-family replication) costs about **$710**. With the baselines the review asks for, the full programme is about **$2.0k** on cheap tiers, **$2.9k** with a second-family replication and **$3.8k** with contingency. It is released only if the earlier results justify it (section 10.4). v0.1 quoted $650, $1.6k, $2.5k and $3.2k; the difference is the added baselines (6.13). Elapsed time: about 26 weeks for the full plan, assuming Claude implements and you spend 15 to 20 hours a week on decisions, review, practice coding and analysis `[assumption]`. The *thin slice* cut the time to the first decision from 8 weeks to about 4, and it is now built (10.4). What actually runs now is a live test capped at $60 in total; the only real spend so far is the live smoke run, $0.1568 (`scripts/live_budget.py spent` over the ledger `docs/research/live_spend.jsonl`).
 
 **The six things that could sink it** (section 8 has all of them):
 1. Prior work. The review found the combination partially scooped, not taken. Two full texts it could not read (TerraLingua's newborn context and DarwinX's cross-generation memory) could still contain a heritable memory practice under selection. Mitigation: read both before any submission, and present the work as a protocol transplant with named baselines (6.13).
-2. Memory does not pay in this world. The free scripted gate has already found this once (10.4): amnesic agents out-earn agents with memory, because retrieved notes more than double the prompt while the world never makes an agent travel to a node it cannot see. It must pass before any paid memory experiment. A live pilot showing no difference between default and self-edited memory is the second form of this risk, and the gate at week 8 exists for it.
+2. Memory does not pay in this world. The free scripted gate has found this every time it ran (10.4): amnesic agents out-earn agents with memory, because retrieved notes nearly double the prompt (465 against 249 input tokens per decision, `scripts/mem_diagnosis.py`) while the world rarely makes a scripted agent need a node it cannot see. It must pass before any paid memory experiment. A live pilot showing no difference between default and self-edited memory is the second form of this risk, and the gate at week 8 exists for it.
 3. Effects appear on one model family and vanish on another.
 4. A proxy reward is gamed in ways that also corrupt the measurement. Mitigation: two exams, one never rewarded.
 5. Ten agents and short lives give too few generations to see a ratchet (Figure 6). Mitigation: the discrete-generation protocol (E3a), which buys generation depth directly, then a long-horizon experiment, both priced in.
@@ -137,35 +137,37 @@ Not a claim about consciousness or human-like minds. Not weight training. Not a 
 | Reading | Kernel builds a query from self summary, 3 heard messages and 2 nearest node labels. Top 4 by cosine are entry points, a 2-hop walk decays 0.6 per hop, score is walk times (0.5 + importance) times recency (half-life 96 ticks). Top 8 enter the prompt | `store.py`, `graph.py`, `sim/observation.py` |
 | Provenance | Every note has channel (observed, gossip, inherited, chronicle, tracer), source agent, hop, origin note, path of agents | `notes.py` |
 | Culture | Gossip copies notes with drift; daily chronicle; graveyard archives dead agents' vaults | `culture/` |
-| Inheritance | A child gets the parent's top 3 notes and a mutated personality seed | `agents/lifecycle.py` |
+| Inheritance | A child gets the parent's top 3 notes and a mutated personality seed, and (with the policy file on) the parent's policy | `agents/lifecycle.py` |
 | Instruments | Probe notes planted two hops from an entry point, tracer notes, `notes_by_channel`, link density | `store.py`, `research/analysis.py` |
+
+This table is the base the proposal started from. The memory layer of section 5 (commands, policy file, maintenance, exams, transmission) is built on top of it; 10.4 lists it.
 
 ### 2.2 What a vault looks like
 
 ![A vault as a graph and notes held by channel](figures/fig7_vault_today.png)
 
-*Figure 7 (REAL). Left: one agent's 56 notes as a graph, 121 wikilinks, entity stubs as hubs. Right: notes held by all agents by how they arrived. Scripted brains, seed 42.*
+*Figure 7 (REAL). Left: one agent's 72 notes as a graph, 169 wikilinks, entity stubs as hubs (`facts.json`, `vault`). Right: notes held by all agents by how they arrived. Scripted brains, seed 42 of the Figure 6 runs.*
 
 ### 2.3 Limits that shape the design
 
-| # | Limit | Consequence for this proposal |
-|---|---|---|
-| L1 | Calls are stateless; the agent's private thought is not fed back | Anything it wants next tick must be written down. This is why memory matters here |
-| L2 | Importance is a constant 0.5 for every agent-written note (0.95 for tracers) | The importance term in retrieval does nothing yet |
-| L3 | No consolidation and no forgetting. Recency floors at 5%, nothing is deleted before death | Vaults only grow. Pruning is a practice the agent could invent |
-| L4 | The retrieval query is fixed by the kernel | The agent cannot shape how it recalls. Control level C3 changes this |
-| L5 | The embedder is feature hashing of words and word pairs into 256 dimensions | Lexical, not semantic. Any claim about retrieval quality needs a real embedder (section 12, decision 7) |
-| L6 | **`reindex` trusts file frontmatter** for id, importance, created tick, tags and provenance | If agents can write files, they can forge where a note came from. Must be fixed first (Figure 2) |
-| L7 | Notes are capped at 600 characters, 2 operations per tick | The maintenance step needs a larger budget |
-| L8 | Scripted brains write template notes | The vault above is structurally real and semantically thin. Live models will write differently |
+| # | Limit | Consequence for this proposal | Status (2026-10-18) |
+|---|---|---|---|
+| L1 | Calls are stateless; the agent's private thought is not fed back | Anything it wants next tick must be written down. This is why memory matters here | holds, by design |
+| L2 | Importance is a constant 0.5 for every agent-written note (0.95 for tracers) | The importance term in retrieval does nothing yet | holds; R1's index boost (5.3) is the retrieval lever an agent has instead |
+| L3 | No consolidation and no forgetting. Recency floors at 5%, nothing is deleted before death | Vaults only grow. Pruning is a practice the agent could invent | lifted for maintenance: with the `structure` right an agent can delete, merge and rename notes (the scripted distill and retire baselines do, 6.13 row 5). The per-tick path and the default scaffold still never delete |
+| L4 | The retrieval query is fixed by the kernel | The agent cannot shape how it recalls. Control level C3 changes this | holds; C3 and C4 are not built (10.5) |
+| L5 | The embedder is feature hashing of words and word pairs into 256 dimensions | Lexical, not semantic. Any claim about retrieval quality needs a real embedder (section 12, decision 7) | holds; the real embedder is not built (10.5) |
+| L6 | **`reindex` trusted file frontmatter** for id, importance, created tick, tags and provenance | If agents can write files, they can forge where a note came from. Must be fixed first (Figure 2) | resolved `[built]`: the database row is authoritative, and `reindex` believes a file only when its content hash matches the manifest; any other file is admitted on channel `operator` and flagged (5.9) |
+| L7 | Notes are capped at 600 characters, 2 operations per tick | The maintenance step needs a larger budget | resolved for maintenance `[built]`: 30 commands a call, 8,000 bytes a file, 200,000 a vault (5.4). The per-tick cap stays |
+| L8 | Scripted brains write template notes | The vault above is structurally real and semantically thin. Live models will write differently | holds |
 
 ### 2.4 Two numbers from real runs that constrain the plan
 
 ![Generation depth of the scripted demo](figures/fig6_generation_depth.png)
 
-*Figure 6 (REAL). Five scripted 14-day runs. The median run reaches generation 3 and the deepest reaches 5.*
+*Figure 6 (REAL). Five scripted 14-day runs of `configs/demo.yaml` (seeds 1 to 4 and 42). The median run reaches generation 2 and the deepest reaches 4 (`facts.json`, `generations`).*
 
-Vaults hold roughly 40 notes per agent by day 14 in these runs `[REAL, scripted]`, so a maintenance step that lists titles and reads the day's notes fits in a few thousand tokens. Generation depth is the harder constraint: a ratchet needs many generations, and 14 days gives a median of three. Experiment E3 is therefore a separate long-horizon design (section 6).
+At the end of day 14 these runs hold about 38 notes per living agent (mean of the five runs' means, 37.6; the runs range from 30.9 to 46.4; `facts.json`, `vault_notes_day14`, written by `make_figures.py` from the same scripted runs), so a maintenance step that lists titles and reads the day's notes fits in a few thousand tokens. Generation depth is the harder constraint: a ratchet needs many generations, and 14 days gives a median of two. Experiment E3 is therefore a separate long-horizon design, and E3a buys generation depth directly (section 6).
 
 ---
 
@@ -307,19 +309,21 @@ Each has a stopping rule in section 10.
 5. **Positive and negative controls are built in** (6.2). A pipeline that cannot recover a planted effect cannot be trusted with an unplanted one.
 6. **Determinism where possible.** Scripted maintenance brains make every mechanism testable offline; live runs are not deterministic (8.1).
 
-### 5.2 The world must need memory `[proposed]`
+### 5.2 The world must need memory
 
-This is the most important finding from reading the code, and it comes before any mechanism. **In today's world, memory has little functional value.** Every tick the agent is shown every resource node with its distance and stock bucket, its neighbours, the task board and what it just heard. Foraging needs no recall. Memory changes what an agent knows about *other agents* and *the past*, and little else. Rewarding better memory in such a world would reward decoration.
+All three features and the amnesic control below are `[built]` (`world.view_radius`, `world.claim_feedback_p`, `world.veins` with `world.fallow_ticks`, `memory.enabled`), each off by default. Whether they make memory pay is a separate question, and on scripted brains the answer so far is no (10.4).
+
+This is the most important finding from reading the code, and it comes before any mechanism. **In the world as it was, memory had little functional value.** Every tick the agent is shown every resource node with its distance and stock bucket, its neighbours, the task board and what it just heard. Foraging needs no recall. Memory changes what an agent knows about *other agents* and *the past*, and little else. Rewarding better memory in such a world would reward decoration.
 
 MERIT, the closest methodology (section 3), makes the same point: it verifies that its tasks depend on earlier-episode facts with an automated check. We need the equivalent, in three parts.
 
-| Feature | What changes | Why memory now matters |
-|---|---|---|
-| **Fog** (`world.view_radius`) | Nodes and agents beyond a radius are not listed. Positions are learned by seeing, by being told, or by remembering | Where the rich nodes are becomes a fact worth storing and sharing |
-| **Claim feedback** | After a false claim, the listener learns with probability `p` that it was false (the kernel already knows: `claims_false`) | Remembering who lied becomes valuable, and gossip trust becomes learnable |
-| **Veins** (optional) | A random node pays several times more for a short window, visible only nearby | Time-limited discoveries reward fast sharing and reward remembering the pattern |
+| Feature | What changes | Why memory now matters | Status |
+|---|---|---|---|
+| **Fog** (`world.view_radius`) | Nodes and agents beyond a radius are not listed. Positions are learned by seeing, by being told, or by remembering | Where the rich nodes are becomes a fact worth storing and sharing | `[built]` |
+| **Claim feedback** (`world.claim_feedback_p`) | After a false claim, the listener learns with probability `p` that it was false (the kernel already knows: `claims_false`) | Remembering who lied becomes valuable, and gossip trust becomes learnable | `[built]` |
+| **Veins** (optional, `world.veins`) | A node pays several times more for a short window, recurring at a seeded few vein-prone nodes, visible only nearby; `world.fallow_ticks` adds real depletion | Time-limited discoveries reward fast sharing and reward remembering the pattern | `[built]` in the second fix attempt (10.4) |
 
-**Amnesic control.** Arm `a0` in E1 runs agents with retrieval disabled and no notes. **Memory-dependence check:** with fog on, `a0` must lose to the default scaffold by a preset margin. If it does not, memory is not functionally used, and no later result about memory quality means anything. This check gates everything else.
+**Amnesic control** `[built]` (`memory.enabled: false`). Arm `a0` in E1 runs agents with retrieval disabled and no notes. **Memory-dependence check** `[built]` (`configs/exp_mem_dep_{mem,amnesic}.yaml`, condition C1 of `scripts/gates.py`): with fog on, `a0` must lose to the default scaffold by a preset margin. If it does not, memory is not functionally used, and no later result about memory quality means anything. This check gates everything else.
 
 ### 5.3 The control ladder
 
@@ -333,13 +337,15 @@ MERIT, the closest methodology (section 3), makes the same point: it verifies th
 
 Retrieval modes: **R0** kernel retrieval as today. **R1** the same, but notes the agent tags `index` get an entry-point boost, so a well-kept index becomes a lever. **R2** the agent calls `recall`. **R3** the policy may declare `entry_k` 2 to 8, `hops` 0 to 3, `hop_decay` 0.3 to 0.9 and `recency_half_life` 24 to 480 ticks, clamped by the kernel.
 
+Status: C0 to C2 are `[built]` (C1 and C2 are the maintenance rights `notes`, `policy` and `structure` in `memory.maintenance.rights`), and so are R0 and R1 (`memory.index_boost`). C3 and C4, with R2 and R3, are `[proposed]` and outside the $60 programme (10.5).
+
 ### 5.4 The memory command API
 
 ![Where the new layer sits](figures/fig1_architecture.png)
 
-*Figure 1 (SCHEMATIC). Blue is proposed. The kernel stays the referee.*
+*Figure 1 (SCHEMATIC). Blue is the memory layer, all of it now built. The kernel stays the referee.*
 
-The six commands deliberately match Anthropic's memory tool, so a policy or a vault developed here is usable behind that product surface, and results are comparable to the default baseline everyone can run.
+The six commands `[built]` (`void/memory/commands.py`) deliberately match Anthropic's memory tool, so a policy or a vault developed here is usable behind that product surface, and results are comparable to the default baseline everyone can run.
 
 | Command | Arguments | Success string | Errors |
 |---|---|---|---|
@@ -352,7 +358,7 @@ The six commands deliberately match Anthropic's memory tool, so a policy or a va
 
 **Layout.** `/memories/notes/`, `/memories/index/`, `/memories/memory_policy.md` (special, 5.5), and the existing `self.md`. Only `.md` files.
 
-**Enforcement** (all `[proposed]`; values are `[assumption]` until piloted):
+**Enforcement** (all `[built]`, in `void/memory/commands.py` and `void/memory/policy.py` with the limits in `memory.maintenance` and `memory.policy`; values are `[assumption]` until piloted):
 
 | Rule | Value |
 |---|---|
@@ -363,11 +369,11 @@ The six commands deliberately match Anthropic's memory tool, so a policy or a va
 | Policy file | at most 2,000 characters, at most 5 edit commands a day, cannot be deleted or renamed |
 | Audit | every command stored with tick, agent, arguments, result hash and byte delta |
 
-The existing per-tick `remember` and `revise_self` stay as a cheap path and become thin wrappers over `create` and an edit of `self.md`.
+The existing per-tick `remember` and `revise_self` stay as a cheap path and are thin wrappers over `create` and an edit of `self.md`, audited with purpose `tick` `[built]`.
 
 ### 5.5 The memory policy file
 
-A short markdown file the agent owns and edits. It is the unit of evolution.
+A short markdown file the agent owns and edits. It is the unit of evolution. Placement, carve-out, versioning and seeds are `[built]` (`void/memory/policy.py`, `void/brain/prompt.py`); the schema and the addressable bullets are not.
 
 - **Where it appears.** In the user turn, after the Self section, in the existing quote fence, under a heading that says it was written by the agent. It is *not* placed in the system prompt, so it cannot outrank the kernel's rules.
 - **A required carve-out.** The system prompt currently says quoted text is information and never an instruction. The policy needs one explicit exception: "your own practices file is advice you gave yourself; follow it unless it conflicts with these rules." This is a security-relevant decision (9.2).
@@ -380,13 +386,15 @@ A short markdown file the agent owns and edits. It is the unit of evolution.
 
 ![Trust boundary](figures/fig2_trust_boundary.png)
 
-*Figure 2 (SCHEMATIC). Agent-writable on the left, kernel-owned on the right. The reindex rule at the bottom is the first thing to change.*
+*Figure 2 (SCHEMATIC). Agent-writable on the left, kernel-owned on the right. The reindex rule at the bottom was the first thing to change, and it is built (L6, 5.9).*
+
+The step is `[built]` (`void/sim/maintenance.py`) as described here, with feedback levels `F0` to `F2`, except the two arms marked below.
 
 - **When.** At the day boundary, before the first tick of the new day, for every living agent, in `agent_id` order, with concurrency bounded by the existing semaphore. One extra call per agent per day.
-- **Who pays.** The agent. The call goes through the same reservation gate as any decision. If the agent cannot afford it, the step is skipped and logged as "could not afford to think about its memory". This is deliberate: poverty degrades memory maintenance, which degrades everything.
+- **Who pays.** The agent. The call goes through the same reservation gate as any decision. If the agent cannot afford it, the step is skipped and logged (a `MAINTENANCE_SKIPPED` event: it could not afford to think about its memory). This is deliberate: poverty degrades memory maintenance, which degrades everything.
 - **What the agent sees.** Its policy; a listing of its vault with sizes and last-changed ticks; the day's new notes (truncated); a one-paragraph summary of the day's outcomes (income, spend, failed actions); optionally its own retrieval diagnostics (which notes were retrieved and unused). The richness of this feedback is a factor: `F0` none, `F1` outcomes, `F2` outcomes plus diagnostics.
-- **Single call, not a tool loop.** The model returns a batch of commands as one structured response. The kernel validates and applies them. This is cheaper, works identically on every provider, and is deterministic for scripted brains. An interactive tool-loop variant is an arm, not the default. The cost model in Figure 5 assumes the single call.
-- **Optional versus forced.** Forced is the primary condition, because it identifies the effect. Making maintenance an *action* the agent chooses, at a cost, is an arm: it asks whether agents discover that maintenance pays.
+- **Single call, not a tool loop.** The model returns a batch of commands as one structured response. The kernel validates and applies them. This is cheaper, works identically on every provider, and is deterministic for scripted brains. An interactive tool-loop variant is an arm, not the default `[proposed]`. The cost model in Figure 5 assumes the single call.
+- **Optional versus forced.** Forced is the primary condition, because it identifies the effect. Making maintenance an *action* the agent chooses, at a cost, is an arm: it asks whether agents discover that maintenance pays `[proposed]` (`memory.maintenance.mode: optional` is refused by the config).
 
 ### 5.7 Variation, inheritance and transmission
 
@@ -399,11 +407,11 @@ A short markdown file the agent owns and edits. It is the unit of evolution.
 | Self-edit | nightly | the agent, at its own cost | `self_edit` |
 | Inherit verbatim | birth | kernel copies the parent's policy | `inherited` |
 | Inherit and adapt | the child's first maintenance | the child, at its own cost | `adapted` |
-| Kernel mutation | birth | one paid kernel call rewrites the policy with a small random change (a research-budget wallet pays) | `mutated` |
+| Kernel mutation | birth | one paid kernel call rewrites the policy with a small random change (a research-budget wallet pays). Built only as a free scripted mutation (drop, duplicate or reorder a line, `memory.policy.mutate_at_birth`, scripted tiers only); the paid call is `[proposed]` | `mutated` |
 | Suggest | any tick, neighbour in range | the agent uses `share_practice` with an excerpt of up to 300 characters, delivered fenced | `practice_events: suggested` |
 | Adopt | maintenance | the receiver edits its policy. The kernel *measures* adoption: an excerpt counts as adopted when the new policy contains it at similarity above a threshold | `adopted` |
 
-Variation source (`inherit`, `adapt`, `mutate`) is a factor in E3. Adoption is measured, not self-reported, because self-report is gameable. The similarity measure is token-set overlap until a real embedder exists `[assumption]`.
+All six operators are `[built]` with the exception just stated (`void/agents/lifecycle.py`, `void/sim/maintenance.py`, `void/culture/practices.py`); the kernel also writes `persisted` and `dropped` practice events. Variation source (`inherit`, `adapt`, `mutate`) is a factor in E3. Adoption is measured, not self-reported, because self-report is gameable. The similarity measure is token-set overlap until a real embedder exists `[assumption]`.
 
 ### 5.8 Selection signals and exams
 
@@ -415,7 +423,7 @@ Three arms decide what the world rewards, beyond survival:
 | **B** | a small payment per correct answer on the *reward exam* | research pool, `recall_reward` | a measured proxy for memory quality |
 | **C** | a payment to the source when an adopted practice persists two or more days | research pool, `practice_royalty` | reward for being imitated |
 
-Reward size is a fraction of the median daily forage income; a dose-response extension varies it `[proposed]`. The research pool is a new kernel wallet funded once at the start, like the house wallet, so money conservation still holds.
+All three arms, the research pool, canary facts and both exams are `[built]` (`memory.selection`, `void/research/canary.py`, `void/research/exams.py`; arm C's royalty in `void/sim/maintenance.py`). Reward size is meant as a fraction of the median daily forage income; the configs fix it at $0.02 per correct answer and per persisting practice (`memory.selection`, `[assumption]`), and a dose-response extension that varies it is `[proposed]`. The research pool is a kernel wallet funded once at the start, like the house wallet, so money conservation still holds.
 
 **Canary facts.** Facts to be recalled are delivered as ordinary observations (a chronicle line or a message), so they cannot be told apart from world events, and are asked about after a delay of two or more days. The existing probe notes stay for plumbing tests only, because a planted probe note is visible in the vault and would teach agents which notes are measured.
 
@@ -427,7 +435,7 @@ The gap between reward-exam and audit-exam scores in arm B is the Goodhart measu
 
 ### 5.9 The trust boundary and provenance
 
-Today `reindex` rebuilds a note's id, importance, created tick, tags and provenance from its file frontmatter (L6). Once agents can write files that is a forgery channel: an agent could relabel a note as `observed` to hide that it came from gossip, and every spread analysis would be wrong. The fix is a set of rules, implemented and tested *before* agent file access is enabled:
+`reindex` used to rebuild a note's id, importance, created tick, tags and provenance from its file frontmatter (L6). Once agents can write files that is a forgery channel: an agent could relabel a note as `observed` to hide that it came from gossip, and every spread analysis would be wrong. The fix is a set of rules, implemented and tested *before* agent file access was enabled; all four are `[built]` (`void/memory/store.py`, `void/memory/commands.py`, the `note_manifest` table):
 
 1. The **database row is authoritative** for provenance, importance, created tick and kernel tags. File frontmatter is written by the kernel and re-derived from the row.
 2. Agent commands touch only the **body region** of a note. Frontmatter in agent-written text is stripped.
@@ -436,15 +444,15 @@ Today `reindex` rebuilds a note's id, importance, created tick, tags and provena
 
 ### 5.10 Observability
 
-Reuses existing parts of the control room. New views: a **policy diff viewer** (the word-diff component that already shows self-history), a **practice lineage tree** (the lineage panel, coloured by source), **adoption curves**, **vault growth and structure charts** (notes, links, index coverage), **exam scores** and **memory spend per agent**. A CLI command prints one agent's policy timeline, and a static HTML report can be exported for a paper's supplement.
+Reuses existing parts of the control room. New views: a **policy diff viewer** (the word-diff component that already shows self-history), a **practice lineage tree** (the lineage panel, coloured by source), **adoption curves**, **vault growth and structure charts** (notes, links, index coverage), **exam scores** and **memory spend per agent**. A CLI command prints one agent's policy timeline, and a static HTML report can be exported for a paper's supplement. All of it is `[built]`: `PolicyHistory`, `Lineage`, `AdoptionCard`, `VaultCard` and `MemoryCard` in `web/src/control/`, `void inspect --policy AGENT`, and `void report`.
 
 ### 5.11 Packaging: the MCP wrapper
 
-The same six commands, served by a thin MCP server over a vault directory, so any harness or model can use the framework without the simulator. What we would commit to as a stable, portable API: the vault layout, the command semantics, the policy conventions, the metrics definitions and the evaluation harness. The server is packaging, not science (section 11).
+The same six commands, served by a thin MCP server over a vault directory, so any harness or model can use the framework without the simulator `[built]` (`void mcp --vault DIR`, `void/server/mcp.py`: JSON-RPC over stdio for one vault directory, with the same quotas). What we would commit to as a stable, portable API: the vault layout, the command semantics, the policy conventions, the metrics definitions and the evaluation harness. The server is packaging, not science (section 11).
 
 ### 5.12 Data model additions
 
-Sketched in Appendix D: `policy_versions`, `memory_commands`, `practice_events`, `exam_items`, `exam_answers`, and a `research_pool` wallet. Full prompt and response text per call, and a Parquet export, are prerequisites for everything (section 10).
+Sketched in Appendix D: `policy_versions`, `memory_commands`, `practice_events`, `exam_items`, `exam_answers`, and a `research_pool` wallet. Full prompt and response text per call, and a Parquet export, are prerequisites for everything (section 10). All are `[built]` (`void/db.py`; `void export`, with an optional Parquet extra and a data card).
 
 ---
 
@@ -452,18 +460,20 @@ Sketched in Appendix D: `policy_versions`, `memory_commands`, `practice_events`,
 
 ### 6.1 Overview
 
-| ID | Tests | Arms and factors | Seeds | Runs | Model tier | Est. cost |
+| ID | Tests | Arms and factors | Seeds | Runs | Model tier | Est. cost `[assumption]` |
 |---|---|---|---|---|---|---|
 | **E0** | Plumbing, and that the pipeline recovers planted effects | scripted strategies with known effects (6.2) | 5 | about 30 | scripted | $0 |
-| **E1** | H1, and the memory-dependence check | `a0` amnesic, `a` default scaffold (also the append-only control), `b` equal-compute nightly summary, `c` policy plus maintenance at C2 | 20 | 80 | Flash-Lite, all agents | $139 |
-| **E2** | H2, H8 | arms A, B, C on condition `c` | 20 | 60 | Flash-Lite | $116 |
-| **E3a** | H3 (precursor) | the Vallinder-Hughes protocol with memory policies in place of strategies; 10 discrete generations of 12 agents | 10 | 100 generation worlds | Flash-Lite | about $50 `[assumption]` |
-| **E3** | H3, H9 | 2 by 2: inheritance on or off, suggestion on or off; plus a no-selection arm; 42 days | 20 | 100 | Flash-Lite | $465 + $116 |
+| **E1** | H1, and the memory-dependence check | `a0` amnesic, `a` default scaffold (also the append-only control), `b` equal-compute nightly summary, `c` policy plus maintenance at C2 | 20 | 80 | `average`, all agents | $139 |
+| **E2** | H2, H8 | arms A, B, C on condition `c` | 20 | 60 | `average` | $116 |
+| **E3a** | H3 (precursor) | the Vallinder-Hughes protocol with memory policies in place of strategies; 10 discrete generations of 12 agents | 10 | 100 generation worlds | `average` | about $50 `[assumption]` |
+| **E3** | H3, H9 | 2 by 2: inheritance on or off, suggestion on or off; plus a no-selection arm; 42 days | 20 | 100 | `average` | $465 + $116 |
 | **E4** | H4 | capability ladder 1/2/4/2/1, default versus self-edit; plus self-edit with the size tariff removed | 20 | 60 | ladder | $284 + $142 |
-| **E5** | H5 | donor policy and vault into fresh agents, 2 by 2, plus shuffled and inverted policies; 3-day evaluation world | 20 donors, 3 recipients each | 360 short | Flash-Lite | $100 + $50 |
+| **E5** | H5 | donor policy and vault into fresh agents, 2 by 2, plus shuffled and inverted policies; 3-day evaluation world | 20 donors, 3 recipients each | 360 short | `average` | $100 + $50 |
 | **E6** | H6 | baselines and evolved policies on external subsets; second model | n/a | n/a | mixed | about $100 `[assumption]` |
-| **E7** | H7 | injected versus benign suggestion, governance off or on | 10 | 40 | Flash-Lite | $78 |
-| **E8** | How much control helps | control levels C0 to C4 | 10 | 50 | Flash-Lite | $94 |
+| **E7** | H7 | injected versus benign suggestion, governance off or on | 10 | 40 | `average` | $78 |
+| **E8** | How much control helps | control levels C0 to C4 | 10 | 50 | `average` | $94 |
+
+Tiers are named as in `configs/base.yaml`, which holds their models and prices: `average` is the cheap Gemini rung E1 runs on, `budget` the cheap Anthropic tier that serves as the second family. What is built to run each experiment (10.4 has the results so far): E0 `[built]` and run; E1 `[built]` as the live configs `live_mem_e1_{a0,a,b,c}.yaml`, not run; E2 arms A and B `[built]` as `exp_mem_e2_{a,b}.yaml` (arm C's royalty is built, its config is not); E3a `[built]` (`void generations`); E3's full design `[proposed]` (10.5); E4 `[built]` as `live_mem_e4_*.yaml` with scripted mirrors `exp_mem_e4s_*.yaml`, not run; E5 `[built]` (`void transplant`) and dry-run on scripted donors; E6, E7 and E8 `[proposed]` (10.5).
 
 ### 6.2 E0: controls before any money is spent
 
@@ -478,55 +488,57 @@ Following the `exp_tiers` precedent (scripted tiers with a hidden sharpness that
 
 Pass conditions, fixed in advance: the pipeline detects index builder over no-op with power at least 0.8 at 20 seeds; it does not separate no-op from decoy on fitness; it ranks hoarder below no-op. Failing E0 means a bug in the measurement, not a finding. Note this needs the fog feature (5.2); without it the scripted agents have nothing to remember.
 
-**First result (2026-10-13): E0 fails, and the dependence check under it fails too.** Details and the diagnosis are in 10.4. Two lessons for the design itself. The no-op must be billed like the others, so scripted maintenance is now billed flat at the output cap (`memory.maintenance.scripted_billing: flat`). And the decoy condition cannot hold as written in a world that prices tokens: a long policy sits in every decision prompt and costs money every tick. The condition that still tests what the decoy is for is "the decoy does not *beat* the no-op on fitness, while a naive text metric ranks it above the no-op". That revision is made after seeing data, to a plumbing check, before any paid run, and it is recorded here as such.
+All four strategies, the cost matching below and the pass conditions (as pre-registered hypotheses in `configs/exp_mem_e0_base.yaml`, evaluated by `scripts/gates.py`) are `[built]`.
+
+**First result (2026-10-13): E0 fails, and the dependence check under it fails too.** It still fails on the current code; the numbers and the diagnosis are in 10.4. Two lessons for the design itself. The no-op must be billed like the others, so scripted maintenance is now billed flat at the output cap (`memory.maintenance.scripted_billing: flat`). And the decoy condition cannot hold as written in a world that prices tokens: a long policy sits in every decision prompt and costs money every tick. The condition that still tests what the decoy is for is "the decoy does not *beat* the no-op on fitness, while a naive text metric ranks it above the no-op". That revision is made after seeing data, to a plumbing check, before any paid run, and it is recorded here as such.
 
 ### 6.3 E1: does self-directed memory help?
 
-**Design.** Four arms on a flat roster of ten Flash-Lite agents, fog on: `a0` amnesic, `a` default scaffold, `b` default plus a generic nightly "summarize your day" call with no rights over structure or policy, `c` policy plus maintenance at C2. `b` is the equal-compute control: it separates "more thinking" from "agent-authored practice". Comparisons: `a` versus `a0` (does memory matter here at all), `c` versus `a` (net of cost), `c` versus `b` (the H1 test). Arm `a` doubles as the append-only control the review calls obligatory: today's scaffold never consolidates or deletes, so it is an episodic-only vault. If `a` matches `c`, the nightly edit is not earning its cost.
+**Design** (`[built]` as `configs/live_mem_e1_{a0,a,b,c}.yaml`; not run). Four arms on a flat roster of ten agents on the `average` tier, fog on: `a0` amnesic, `a` default scaffold, `b` default plus a generic nightly "summarize your day" call with no rights over structure or policy, `c` policy plus maintenance at C2. `b` is the equal-compute control: it separates "more thinking" from "agent-authored practice". Comparisons: `a` versus `a0` (does memory matter here at all), `c` versus `a` (net of cost), `c` versus `b` (the H1 test). Arm `a` doubles as the append-only control the review calls obligatory: today's scaffold never consolidates or deletes, so it is an episodic-only vault. If `a` matches `c`, the nightly edit is not earning its cost.
 **Outcomes.** `F_L` primary; audit exam, net worth, memory spend secondary.
 **Expected.** `a` above `a0` by construction of the fog. `c` versus `b` is the real question and could plausibly be zero. If it is zero here, stop and diagnose before spending more (10.3).
 
 ### 6.4 E2: which selection signal?
 
-Arms A, B, C on condition `c`. Manipulation checks: does the reward exam score move in B, does adoption occur in C. Outcomes: audit exam, `F_L`, monoculture index, reward hacking signs (notes that mention exam-like phrasing, policy text that tries to game payment). A dose-response extension varies the reward size in B and C.
+Arms A, B, C on condition `c` (A and B `[built]` as `configs/exp_mem_e2_{a,b}.yaml` on scripted brains, and run as a plumbing check in 10.4; arm C's royalty is built, its config is not). Manipulation checks: does the reward exam score move in B, does adoption occur in C. Outcomes: audit exam, `F_L`, monoculture index, reward hacking signs (notes that mention exam-like phrasing, policy text that tries to game payment). A dose-response extension varies the reward size in B and C `[proposed]`.
 
 ### 6.5 E3: the ratchet
 
-The expensive and risky one. Figure 6 shows a 14-day run reaches a median of three generations. To test a ratchet we need generation counts in the high single digits or more. Options, in order of preference: longer runs (42 days, priced here); higher mortality through a smaller starting balance (changes the ecology, so it needs its own control); or a fast-turnover variant with shorter lifespans. Factors: inheritance on or off, suggestion on or off, variation source (`inherit`, `adapt`, `mutate`) as a nested contrast, and seed policy `S0`, `S1`, `S2` as a nested contrast. Outcome: cohort `F_L` by generation. Suggestion off is FORGE's isolated-reflection ablation, so the suggestion factor doubles as the horizontal-transmission control.
+The expensive and risky one, and none of its own machinery is built `[proposed]` (10.5). Figure 6 shows a 14-day run reaches a median of two generations. To test a ratchet we need generation counts in the high single digits or more. Options, in order of preference: longer runs (42 days, priced here); higher mortality through a smaller starting balance (changes the ecology, so it needs its own control); or a fast-turnover variant with shorter lifespans. Factors: inheritance on or off, suggestion on or off, variation source (`inherit`, `adapt`, `mutate`) as a nested contrast, and seed policy `S0`, `S1`, `S2` as a nested contrast. Outcome: cohort `F_L` by generation. Suggestion off is FORGE's isolated-reflection ablation, so the suggestion factor doubles as the horizontal-transmission control.
 
-v0.2 adds four things to E3, each from the review:
+v0.2 adds four things to E3, each from the review, all `[proposed]`:
 - **A no-selection arm** (20 seeds, $116 at E3's cost per run `[assumption]`). Calls are still made and logged, but reproduction is by lottery rather than wealth and nobody is charged into bankruptcy. It separates the models' priors from evolutionary dynamics, and it is the comparison H9 needs.
 - **Selection level** as an exploratory nested contrast: children of the richest agent (individual) versus children of the richest neighbourhood (group), after Group Selection Promotes Prosocial Prompts. A hidden-selection-rule ablation checks that agents are not simply anticipating the rule.
 - **Single lineage at the same total budget.** One agent with the whole population's token budget, evolving its policy alone (an ACE playbook, or an EvoTest-style configuration tree). The question is whether the society beats one agent spending the same money.
 - **Episodes before judgment.** A policy is judged on a fixed number of independent episodes, at least five. Constitutional Arms Races found that two episodes per generation collapse while five hold, and that fitness must be relative to others to exert pressure.
 
-**E3a: the protocol transplant first.** Before E3's open-ended world, run the Vallinder-Hughes protocol unchanged except for the heritable text. Twelve agents live in a 3-day evaluation world. The top half by money survive. Each child reads the survivors' memory policies and writes its own before the next generation starts. Ten generations, ten seeds. This buys generation depth directly, so it answers the Figure 6 problem without a 42-day horizon. It also makes each later addition attributable: the per-call economy, then horizontal suggestion, then open-ended mortality. Cost `[assumption]`: E5 pays about $0.42 per 3-day world; assuming that world holds ten agents, twelve cost about $0.50 a generation, so 100 generation worlds cost about $50.
+**E3a: the protocol transplant first** (the driver is `[built]`: `void generations` with `configs/exp_mem_e3a.yaml`, for scripted tiers only; a child takes a survivor's policy, plus in arm `oblique` the survivors' most common bullet it lacks, and a live child writing its own policy is `[proposed]`). Before E3's open-ended world, run the Vallinder-Hughes protocol unchanged except for the heritable text. Twelve agents live in a 3-day evaluation world. The top half by money survive. Each child reads the survivors' memory policies and writes its own before the next generation starts. Ten generations, ten seeds. This buys generation depth directly, so it answers the Figure 6 problem without a 42-day horizon. It also makes each later addition attributable: the per-call economy, then horizontal suggestion, then open-ended mortality. Cost `[assumption]`: E5 pays about $0.42 per 3-day world; assuming that world holds ten agents, twelve cost about $0.50 a generation, so 100 generation worlds cost about $50.
 
 ### 6.6 E4: who benefits?
 
-The capability ladder from the existing `exp_ladder`, crossed with default versus self-edit. Endpoint: the rung by condition interaction. Three shapes are pre-registered before the data (Figure 8, right). This is the experiment that connects the memory story to the "not every agent is equally smart" story. v0.2 adds a third condition from the Energy Society: self-edit with the size-dependent tariff removed, so every rung pays the same in-world price per call while the real spend is unchanged. It separates "smarter" from "pays more to think" (20 seeds, $142 at E4's cost per run `[assumption]`).
+The capability ladder from the existing `exp_ladder`, crossed with default versus self-edit. Endpoint: the rung by condition interaction. Three shapes are pre-registered before the data (Figure 8, right). This is the experiment that connects the memory story to the "not every agent is equally smart" story. v0.2 adds a third condition from the Energy Society: self-edit with the size-dependent tariff removed, so every rung pays the same in-world price per call while the real spend is unchanged. It separates "smarter" from "pays more to think" (20 seeds, $142 at E4's cost per run `[assumption]`). All three conditions are `[built]` as `configs/live_mem_e4_{default,selfedit,flat_tariff}.yaml`, with free scripted mirrors `configs/exp_mem_e4s_*.yaml`; the live arms have not run.
 
 ### 6.7 E5: transplant, the causal test
 
-Take the final policy and vault of 20 donor agents (chosen by a rule fixed in advance, for example the top quartile of `F_L` from E1's arm `c`, plus a random quartile as control). Give each to fresh recipients on the *same model* in a standard 3-day evaluation world with fixed seeds, in four conditions: nothing, policy only, vault only, both. This separates the practice from the agent's prior luck and shows whether the vault or the policy carries the benefit. It is the cheapest experiment to make rigorous and the one most likely to convince a sceptical reviewer.
+Take the final policy and vault of 20 donor agents (chosen by a rule fixed in advance, for example the top quartile of `F_L` from E1's arm `c`, plus a random quartile as control). Give each to fresh recipients on the *same model* in a standard 3-day evaluation world with fixed seeds, in four conditions: nothing, policy only, vault only, both. The harness is `[built]`: `void transplant` with `configs/exp_mem_e5_eval.yaml`, all six conditions including the two below. This separates the practice from the agent's prior luck and shows whether the vault or the policy carries the benefit. It is the cheapest experiment to make rigorous and the one most likely to convince a sceptical reviewer.
 
 **Promoted in v0.2.** E5 now runs straight after E1 and gates every later spend (G3 in 10.2). The reason is a published null: in a town-economy study, swapping the model changed everything and deleting memory changed nothing. If a transplanted policy does nothing for a fresh agent, the rest of the programme is about the agents, not their practices.
 
 **Faithfulness controls.** Two extra conditions per donor: the policy with its lines shuffled (same length and structure, scrambled order), and the policy inverted (each practice replaced by its opposite). They test that the policy's *content* carries the effect rather than its length or presence, following Faithful Self-Evolvers and Discovering Adaptive Transmission Programs. Utility and faithfulness are reported separately. Cost: two more conditions at E5's rate, $50.
 
-**A free dry run.** Before any paid transplant, the harness runs on scripted donors from E0: an `index_builder` vault and policy transplanted into fresh scripted agents must reproduce the index builder's advantage. This tests the harness, not the hypothesis.
+**A free dry run.** Before any paid transplant, the harness runs on scripted donors from E0: an `index_builder` vault and policy transplanted into fresh scripted agents must reproduce the index builder's advantage. This tests the harness, not the hypothesis. It has run, and the scripted transplant does not reproduce an advantage, because on scripted brains there is none to reproduce (10.4).
 
 ### 6.8 E6: transfer and baselines
 
-Evolved policies applied, unchanged, on two external tests: a subset of a conversational long-term memory benchmark (LoCoMo or LongMemEval style) and the audit exam in a *different* model. Baselines run under identical token budgets: no memory; full-context replay; this repo's default scaffold; the Claude memory tool with its default prompt; an ACE-style playbook; a Letta-style sleep-time consolidator; an expert-written policy; and evolved Void policies. Evolved policies are evaluated in tournament finals on held-out task distributions, as MemEvolve does, to pre-empt the in-domain critique levelled at DarwinX. An optional arm, if budget allows: an external optimiser (LLM-guided evolutionary search over policy files with a labelled judge, as in Internal vs External and Constitutional Arms Races). Matching it at peak, and beating it when the world changes, is the hybrid claim those papers leave untested. The learned-policy ceiling (Auto-Dreamer, Memory-R1, Mem-alpha) is cited, not run. The headline number is the ratio of external gain to in-world gain. Costs are dominated by benchmark tokens, so subsets are used.
+`[proposed]`, and outside the $60 programme (10.5). Evolved policies applied, unchanged, on two external tests: a subset of a conversational long-term memory benchmark (LoCoMo or LongMemEval style) and the audit exam in a *different* model. Baselines run under identical token budgets: no memory; full-context replay; this repo's default scaffold; the Claude memory tool with its default prompt; an ACE-style playbook; a Letta-style sleep-time consolidator; an expert-written policy; and evolved Void policies. Evolved policies are evaluated in tournament finals on held-out task distributions, as MemEvolve does, to pre-empt the in-domain critique levelled at DarwinX. An optional arm, if budget allows: an external optimiser (LLM-guided evolutionary search over policy files with a labelled judge, as in Internal vs External and Constitutional Arms Races). Matching it at peak, and beating it when the world changes, is the hybrid claim those papers leave untested. The learned-policy ceiling (Auto-Dreamer, Memory-R1, Mem-alpha) is cited, not run. The headline number is the ratio of external gain to in-world gain. Costs are dominated by benchmark tokens, so subsets are used.
 
 ### 6.9 E7: the persistence channel
 
-A scripted adversary suggests practices to neighbours. Payload classes: benign and useful (control); harmless but measurable (an odd formatting rule); and instruction-like content aimed at money moving inside the sandbox economy. Governance factor: off; size cap plus diff logging; kernel-side anomaly filter; rollback governor. Outcomes: adoption rate against the benign baseline, persistence half-life, money lost, detection rate. This is defensive research in a closed sandbox with play money; release rules are in 9.4.
+`[proposed]`, and outside the $60 programme (10.5): neither the adversary nor the governance factors are built. A scripted adversary suggests practices to neighbours. Payload classes: benign and useful (control); harmless but measurable (an odd formatting rule); and instruction-like content aimed at money moving inside the sandbox economy. Governance factor: off; size cap plus diff logging; kernel-side anomaly filter; rollback governor. Outcomes: adoption rate against the benign baseline, persistence half-life, money lost, detection rate. This is defensive research in a closed sandbox with play money; release rules are in 9.4.
 
 ### 6.10 E8: how much control?
 
-Control levels C0 to C4 on a flat roster. The interesting result may be non-monotone: more control can cost more than it returns, especially for weaker models.
+`[proposed]`, and outside the $60 programme (10.5): C3, C4 and the E8 configs are not built. Control levels C0 to C4 on a flat roster. The interesting result may be non-monotone: more control can cost more than it returns, especially for weaker models.
 
 ### 6.11 Statistics
 
@@ -545,9 +557,9 @@ Control levels C0 to C4 on a flat roster. The interesting result may be non-mono
 
 ![Cost](figures/fig5_cost_model.png)
 
-*Figure 5 (REAL prompt sizes and prices; ASSUMED output lengths and thinking use). One run is 14 days with 10 agents. Maintenance at one call a day adds about 26% on Flash-Lite, 16% on Gemini 3.7 Flash, and 27% on both Haiku 4.5 and Opus 5.5.*
+*Figure 5 (REAL prompt sizes and prices; ASSUMED output lengths and thinking use). One run is 14 days with 10 agents. Maintenance at one call a day adds about 26% on the `average` tier, 16% on `sharp`, and 27% on both `budget` and `frontier` (`facts.json`, `cost_table_usd`; tiers as in `configs/base.yaml`).*
 
-| Item | Cost |
+| Item | Cost `[assumption]` |
 |---|---|
 | E1 to E5, E7, E8 (runs, as in v0.1) | $1,276 |
 | Baselines added by the review (6.13): E3a $50, E3 no-selection $116, E4 tariff-removed $142, E5 faithfulness $50 | $358 |
@@ -555,30 +567,30 @@ Control levels C0 to C4 on a flat roster. The interesting result may be non-mono
 | Subtotal | $1,734 |
 | Exams and measurement, 15% of run costs (`[assumption]`) | $245 |
 | **Cheap-tier programme** | **$1,979** |
-| Replication of E1 and E2 on Claude Haiku 4.5 | $914 |
+| Replication of E1 and E2 on the `budget` tier (a second family) | $914 |
 | **With one replication on a second family** | **$2,893** |
 | **With 30% contingency** | **$3,761** |
 
-v0.1's totals were $1,568, $2,482 and $3,227. The review's baselines add $411 to the cheap-tier programme: $358 of runs plus their 15% measurement share. Each added line is the per-run cost of its parent experiment times its extra runs, so each inherits that experiment's assumptions. The heaviest line is still E3 ($465, plus $116 for its no-selection arm) because of the 42-day horizon. Prices are the tier prices in `configs/base.yaml`, which for Gemini come from secondary sources and must be re-verified before a paid run (the pricing page is not reachable from the build environment).
+Every line is a planning estimate built on the cost model of Figure 5 and the run counts of 6.1 `[assumption]`. v0.1's totals were $1,568, $2,482 and $3,227. The review's baselines add $411 to the cheap-tier programme: $358 of runs plus their 15% measurement share. Each added line is the per-run cost of its parent experiment times its extra runs, so each inherits that experiment's assumptions. The heaviest line is still E3 ($465, plus $116 for its no-selection arm) because of the 42-day horizon. Prices are the tier prices in `configs/base.yaml`, which for Gemini come from secondary sources and must be re-verified before a paid run (the pricing page is not reachable from the build environment).
 
 ### 6.13 Baselines the review added
 
 The review's condition for going ahead is a set of baselines, each mapped to a published mechanism and run under matched token spend. Where each one lives:
 
-| # | Baseline | From | Where it runs | Added cost |
-|---|---|---|---|---|
-| 1 | Horizontal transmission on/off | FORGE's champion broadcast versus isolated reflection | E3's suggestion factor | none, already a factor |
-| 2 | Single-lineage practice evolution without ecology | ACE; EvoTest | E3 (one agent, the population's budget) and E6 (ACE playbook) | inside E3 and E6 |
-| 3 | The oblique-inheritance protocol, transplanted | Vallinder & Hughes | E3a, before E3 | $50 |
-| 4 | Append-only, episodic-only vault | Useful Memories Become Faulty | E1 arm `a` | none, already an arm |
-| 5 | Scripted maintenance strategies | ALTK-Evolve distillation; EvolveMem's revert, perturb and converge guards; Ratchet's retirement plus cap | E0, as further scripted strategies | $0 |
-| 6 | External optimiser with a labelled judge | Internal vs External; Constitutional Arms Races | E6, optional | within E6's range |
-| 7 | Faithfulness: shuffled and inverted policies | Faithful Self-Evolvers; Discovering Adaptive Transmission Programs | E5 | $50 |
-| 8 | No selection | Emergent Culture in Minimal LLM Systems (its critique applies to us) | E3's no-selection arm | $116 |
-| 9 | Tariff removed | Energy Society | E4's third condition | $142 |
-| 10 | Learned-policy ceiling | Auto-Dreamer, Memory-R1, Mem-alpha | cited, not run | none |
+| # | Baseline | From | Where it runs | Added cost `[assumption]` | Status |
+|---|---|---|---|---|---|
+| 1 | Horizontal transmission on/off | FORGE's champion broadcast versus isolated reflection | E3's suggestion factor | none, already a factor | `share_practice` on/off is `[built]` (`memory.practices.enabled`); E3 itself is `[proposed]` |
+| 2 | Single-lineage practice evolution without ecology | ACE; EvoTest | E3 (one agent, the population's budget) and E6 (ACE playbook) | inside E3 and E6 | `[proposed]` |
+| 3 | The oblique-inheritance protocol, transplanted | Vallinder & Hughes | E3a, before E3 | $50 | `[built]` for scripted tiers (`void generations`) |
+| 4 | Append-only, episodic-only vault | Useful Memories Become Faulty | E1 arm `a` | none, already an arm | `[built]` (`live_mem_e1_a.yaml`) |
+| 5 | Scripted maintenance strategies | ALTK-Evolve distillation; EvolveMem's revert, perturb and converge guards; Ratchet's retirement plus cap | E0, as further scripted strategies | $0 | `[built]` (`exp_mem_e0_{distill,revert,retire}.yaml`) |
+| 6 | External optimiser with a labelled judge | Internal vs External; Constitutional Arms Races | E6, optional | within E6's range | `[proposed]` |
+| 7 | Faithfulness: shuffled and inverted policies | Faithful Self-Evolvers; Discovering Adaptive Transmission Programs | E5 | $50 | `[built]` (`void transplant` conditions `shuffled`, `inverted`) |
+| 8 | No selection | Emergent Culture in Minimal LLM Systems (its critique applies to us) | E3's no-selection arm | $116 | `[proposed]` |
+| 9 | Tariff removed | Energy Society | E4's third condition | $142 | `[built]` (`live_mem_e4_flat_tariff.yaml`) |
+| 10 | Learned-policy ceiling | Auto-Dreamer, Memory-R1, Mem-alpha | cited, not run | none | cited only |
 
-Two design rules come with them. Scarcity is swept, not fixed, because extreme pressure collapses behaviour before any practice can be selected (Yerkes-Dodson, GovSim); the `live_scarcity_high` and `live_scarcity_low` configs are the first two points. And every inherited vault gets a per-generation safety audit, because an economy that rewards short-term earnings is expected to amplify reward hacking (Misevolve, Practice Makes Unsafe); H7 already points here.
+Two design rules come with them. Scarcity is swept, not fixed, because extreme pressure collapses behaviour before any practice can be selected (Yerkes-Dodson, GovSim); the `live_scarcity_high` and `live_scarcity_low` configs are the first two points. And every inherited vault gets a per-generation safety audit `[proposed]`, because an economy that rewards short-term earnings is expected to amplify reward hacking (Misevolve, Practice Makes Unsafe); H7 already points here.
 
 ---
 
@@ -601,13 +613,17 @@ Two design rules come with them. Scarcity is swept, not fixed, because extreme p
 | First-adoption source | whether an agent first took a practice by observing, by suggestion or by inheritance, after SwarmWorld | H3, H8 |
 | Replicator-mutator fit | a fitted transmission kernel for policy lineages, after Group Selection Promotes Prosocial Prompts | H3, exploratory |
 
-### 7.2 Memory-structure metrics `[proposed]`
+Every endpoint above is `[built]` as a registered outcome in `void/research/outcomes/` and `void/research/analysis.py`, which `compare` and `gates` resolve by name, with one narrowing and one gap. The first-adoption source is built as the share of first adoptions taken from a richer agent (`first_adoption_source_richer_share`), because practices reach an agent only by suggestion or inheritance in this world, not by observation. The replicator-mutator fit is `[proposed]`.
+
+### 7.2 Memory-structure metrics `[built]`
+
+All of these are registered outcomes (`void/research/outcomes/memory_structure.py`, `retrieval.py`, `practices.py`), with two limits: semantic drift uses token-set similarity, not the real embedder it asks for (L5), and the practice categories come from the keyword coder (7.3).
 
 Vault: note count, bytes, mean note length, link density (links per note), orphan rate (notes with no links), near-duplicate rate (pairs above a cosine threshold), index coverage (share of non-index notes within two hops of an index note), folder depth, tag entropy. Retrieval: empty-retrieval rate, mean retrieved age, hop histogram (exists), and a *retrieved-and-cited* rate (share of retrieved notes whose title appears in the agent's thought or action). The last is a weak proxy: it needs the caveat that an agent can use a note without naming it. Policy: length, normalized edit distance to the previous version, semantic drift from day 0 (needs a real embedder), and coded practice categories (7.3).
 
 ### 7.3 Coding the practices
 
-Structure will emerge that we have not named. Plan: (1) read a random sample of 200 policy versions first, in the manner of a grounded-theory pass, and revise the scheme; (2) code the rest with an LLM under a written codebook; (3) validate against a human-coded 10 to 20% sample and report Cohen's kappa; (4) have the human coder blind to arm. Starting categories, to be revised:
+Structure will emerge that we have not named. Plan: (1) read a random sample of 200 policy versions first, in the manner of a grounded-theory pass, and revise the scheme; (2) code the rest with an LLM under a written codebook; (3) validate against a human-coded 10 to 20% sample and report Cohen's kappa; (4) have the human coder blind to arm. Built `[built]`: the codebook (`docs/research/codebook.md`), the blind sampler, a deterministic keyword coder and Cohen's kappa (`scripts/code_practices.py`). The LLM coder of step (2) is `[proposed]` (10.5). Starting categories, to be revised:
 
 | Code | Practice |
 |---|---|
@@ -630,11 +646,11 @@ Three further axes, from the review, so results can be set beside published ones
 
 ### 7.4 Data products
 
-Every run writes, in addition to today's tables: full prompt and response text per call, the memory command log, policy versions, practice events, exam items and answers, and a note manifest (Appendix D). A `void export parquet` command writes columnar files with a data card (schema, config hash, model version strings, code commit). Prompt text is the single most important missing field today: without it, no result can be re-analysed and no claim about a prompt can be checked.
+Every run writes `[built]`, in addition to the tables the base world had: full prompt and response text per call, the memory command log, policy versions, practice events, exam items and answers, and a note manifest (Appendix D). A `void export parquet` command writes columnar files with a data card (schema, config hash, model version strings, code commit) `[built]` (`void export`, Parquet with the optional `export` extra). Prompt text was the single most important missing field: without it, no result can be re-analysed and no claim about a prompt can be checked.
 
 ### 7.5 Reproducibility
 
-Runs are identified by config hash and seed. Scripted runs are byte-identical across processes and resumes (tested). Live runs are not deterministic; we record the served model per call and prompt hashes, and treat each run as a single draw. All figures in this document regenerate from run directories with one script (Appendix G).
+Runs are identified by config hash and seed. Scripted runs are byte-identical across processes and resumes (tested). Live runs are not deterministic; we record the served model per call and prompt hashes, and treat each run as a single draw. All figures in this document regenerate with one script, which makes its own scripted runs (Appendix G); the 10.4 numbers regenerate with the commands given beside them.
 
 ---
 
@@ -656,7 +672,7 @@ Runs are identified by config hash and seed. Scripted runs are byte-identical ac
 | T12 | Anthropomorphic framing | The paper describes text files and payments; "evolve like a person" stays in the motivation |
 | T13 | Policy bloat or degenerate convergence (filler text, empty file) | Size cap; the decoy control; report length distributions |
 | T14 | Cost overrun | Existing daily and total caps and the reservation gate stay authoritative; the research pool is bounded |
-| T15 | Price and model changes mid-programme | Re-check prices at every gate. The Gemini 3.x Flash promotional rate is reported to end on 31 December 2026, and the plan runs past it |
+| T15 | Price and model changes mid-programme | Re-check prices at every gate. The promotional rate of the `sharp` tier's model (`configs/base.yaml`) is reported to end on 31 December 2026, and the plan runs past it |
 | T16 | Prior work the review could not read | Read the full texts of the works in 3.3 before submission, TerraLingua and DarwinX first; position as a protocol transplant with named baselines (3.2) |
 | T17 | Convergence reflects model priors, not selection | The no-selection arm (6.13, row 8); report what policies converge to with and without selection |
 | T18 | Too few episodes to judge a policy, or fitness that does not depend on others | At least five independent episodes per agent per generation; survival depends on relative resource flow (E3) |
@@ -678,9 +694,11 @@ Agents are untrusted writers to their own persistent state. Other agents can be 
 3. The policy has a size cap, an edit-count cap, a full version history and a mandatory diff log.
 4. Provenance, importance, probes, exams and the ledger are kernel-owned (5.9).
 
+All four limits are `[built]` (5.4, 5.5, 5.9).
+
 ### 9.3 Governance factors (E7)
 
-Each is a switch and each is measured, including its false-positive rate:
+`[proposed]`, and outside the $60 programme (10.5); G1's size cap and diff log exist as the policy limits of 9.2, but none of the four is a switchable factor yet. These G0 to G3 are governance levels, not the gates G0 to G3 of 10.2. Each is a switch and each is measured, including its false-positive rate:
 
 | Factor | What it does |
 |---|---|
@@ -705,22 +723,22 @@ No human subjects and no personal data. The costs are model-call spend and its c
 
 Effort is *human-equivalent focused days* `[assumption]`, to compare packages. With Claude implementing, elapsed time is bounded by your review, by live-model iteration and by run time, not by typing.
 
-| WP | Deliverable | Main files | Tests | Days |
-|---|---|---|---|---|
-| **WP0** | Full prompt and response text per call; `void export parquet` | `void/db.py`, `void/sim/loop.py`, `void/cli.py` | export round trip | 3 to 4 |
-| **WP1** | Trust model: content-hash manifest, DB-authoritative provenance, frontmatter re-derivation, `operator` channel | `void/memory/store.py`, `vault.py`, `notes.py` | property tests, forgery test | 4 to 5 |
-| **WP2** | Memory demand: fog, claim feedback, optional veins; the dependence check | `void/config.py`, `void/sim/observation.py`, `void/world/kernel.py` | dependence check | 3 to 5 |
-| **WP3** | Six memory commands, quotas, audit log | `void/memory/commands.py` | path-confinement properties; parity with the documented return strings | 5 |
-| **WP4** | Policy file, versioning, prompt placement and carve-out | `void/memory/policy.py`, `void/brain/prompt.py`, `void/db.py` | golden-prompt tests | 4 |
-| **WP5** | Maintenance step: single-call batch, gate, scripted maintenance brains for E0 | `void/sim/maintenance.py`, `void/brain/` | determinism, resume, money conservation | 6 to 8 |
-| **WP6** | Inheritance modes, `share_practice`, adoption detection | `void/agents/lifecycle.py`, `void/world/kernel.py`, `void/culture/practices.py` | lineage tests | 5 to 6 |
-| **WP7** | Canary facts, exams, research pool wallet | `void/research/exams.py`, `void/economy/wallet.py` | exact-match grader, ledger conservation | 6 to 8 |
-| **WP8** | Memory metrics, `compare` hooks, coding tooling | `void/research/` | analysis tests | 5 |
-| **WP9** | `void transplant` and the evaluation-world configs | `void/cli.py`, `configs/` | end to end | 3 to 4 |
-| **WP10** | A real local embedder behind the existing `Embedder` protocol | `void/memory/embed.py` | retrieval regression | 2 to 3 |
-| **WP11** | Control-room views: policy diff, lineage by source, adoption, exams | `web/src/control/` | vitest | 5 to 6 |
-| **WP12** | MCP wrapper over the six commands | `void/server/mcp.py` | protocol tests | 2 to 3 |
-| **WP13** | `configs/exp_mem_*.yaml`, `compare` rules for the new experiments | `configs/`, `void/research/compare.py` | experiment tests | 3 |
+| WP | Deliverable | Main files | Tests | Days | Status (2026-10-18) |
+|---|---|---|---|---|---|
+| **WP0** | Full prompt and response text per call; `void export parquet` | `void/db.py`, `void/sim/loop.py`, `void/cli.py` | export round trip | 3 to 4 | `[built]` (`void export`, data card, optional Parquet) |
+| **WP1** | Trust model: content-hash manifest, DB-authoritative provenance, frontmatter re-derivation, `operator` channel | `void/memory/store.py`, `vault.py`, `notes.py` | property tests, forgery test | 4 to 5 | `[built]` |
+| **WP2** | Memory demand: fog, claim feedback, optional veins; the dependence check | `void/config.py`, `void/sim/observation.py`, `void/world/kernel.py` | dependence check | 3 to 5 | `[built]`, veins and fallow nodes included; the check fails on scripted brains (10.4) |
+| **WP3** | Six memory commands, quotas, audit log | `void/memory/commands.py` | path-confinement properties; parity with the documented return strings | 5 | `[built]` |
+| **WP4** | Policy file, versioning, prompt placement and carve-out | `void/memory/policy.py`, `void/brain/prompt.py`, `void/db.py` | golden-prompt tests | 4 | `[built]` |
+| **WP5** | Maintenance step: single-call batch, gate, scripted maintenance brains for E0 | `void/sim/maintenance.py`, `void/brain/` | determinism, resume, money conservation | 6 to 8 | `[built]`, with the 6.13 row 5 baselines |
+| **WP6** | Inheritance modes, `share_practice`, adoption detection | `void/agents/lifecycle.py`, `void/world/kernel.py`, `void/culture/practices.py` | lineage tests | 5 to 6 | `[built]`: inheritance, adaptation, scripted mutation, `share_practice`, kernel-measured adoption, persistence and drops |
+| **WP7** | Canary facts, exams, research pool wallet | `void/research/exams.py`, `void/economy/wallet.py` | exact-match grader, ledger conservation | 6 to 8 | `[built]`: canary facts, audit and reward exams, research pool, arm-C royalty |
+| **WP8** | Memory metrics, `compare` hooks, coding tooling | `void/research/` | analysis tests | 5 | `[built]`: outcomes, pre-registered hypotheses in `compare`, `scripts/gates.py`, `scripts/mem_diagnosis.py`, codebook and keyword coder; the LLM coder is `[proposed]` |
+| **WP9** | `void transplant` and the evaluation-world configs | `void/cli.py`, `configs/` | end to end | 3 to 4 | `[built]` (`void transplant`, `configs/exp_mem_e5_eval.yaml`), and the E3a driver `void generations` |
+| **WP10** | A real local embedder behind the existing `Embedder` protocol | `void/memory/embed.py` | retrieval regression | 2 to 3 | `[proposed]` (10.5) |
+| **WP11** | Control-room views: policy diff, lineage by source, adoption, exams | `web/src/control/` | vitest | 5 to 6 | `[built]`, plus `void report` |
+| **WP12** | MCP wrapper over the six commands | `void/server/mcp.py` | protocol tests | 2 to 3 | `[built]` (`void mcp`) |
+| **WP13** | `configs/exp_mem_*.yaml`, `compare` rules for the new experiments | `configs/`, `void/research/compare.py` | experiment tests | 3 | `[built]` for E0, the dependence check, E1, E2 (arms A and B), E3a, E4 and E5; not for E3, E6, E7 or E8 |
 
 ### 10.2 Roadmap and gates
 
@@ -735,84 +753,40 @@ Effort is *human-equivalent focused days* `[assumption]`, to compare packages. W
 | **G2** | week 19 | Designs frozen; no new mechanisms | Scope cut, not scope creep |
 | **G3** | week 14 (v0.1: week 22) | E5 transplant result in hand, with its faithfulness controls | A null transplant reframes the paper as a mixed or negative result, which is still reportable, and S3 spend is not released |
 
+Status (2026-10-18): logging and the trust model are done, but E0 does not recover the planted effects, so **G0 is not passed** (10.4). `scripts/gates.py` evaluates G0, and G1 with `--g1`; G1 to G3 need paid runs and have not been evaluated.
+
 ### 10.3 If E1 is null
 
 Check, in order: does the fog make memory necessary (amnesic control)? Does the model produce valid commands? Is the maintenance feedback too thin (`F2`)? Is the horizon too short for a policy to pay back its cost? Is the weak tier the problem (`sharp`)? A null after all five is a result about whether agent-authored practice beats a fixed scaffold at equal compute, and it is worth reporting.
 
-### 10.4 Staged spend: what buys what `[proposed]`
+### 10.4 Staged spend: what buys what
 
 The goal is a small number of credible, honestly reported results and public artifacts, not volume. The build is the same size whatever the budget, so the saving is in *when* money is released and *what* is built before the first gate.
 
-**The thin slice (before G1, about 4 weeks elapsed).** Build only what the first decision needs: fog and claim feedback (WP2); the six commands, written *through the store* so provenance cannot be forged and the manifest and reindex hardening can wait until files are editable outside the store (WP3); the policy file (WP4); the maintenance step (WP5); prompt logging (the cheap part of WP0); the amnesic switch; and a minimal audit exam with three question types. Skip until G1 passes: the control-room views, the MCP wrapper, the real embedder, the research pool and reward arms, the inheritance operators and `share_practice`, and the Parquet polish.
+**The thin slice (before G1, about 4 weeks elapsed).** Build only what the first decision needs: fog and claim feedback (WP2); the six commands, written *through the store* so provenance cannot be forged and the manifest and reindex hardening can wait until files are editable outside the store (WP3); the policy file (WP4); the maintenance step (WP5); prompt logging (the cheap part of WP0); the amnesic switch; and a minimal audit exam with three question types. Skip until G1 passes: the control-room views, the MCP wrapper, the real embedder, the research pool and reward arms, the inheritance operators and `share_practice`, and the Parquet polish. In the event all of these except the real embedder were built at $0 while G0 was being diagnosed, so that S2 and S3 can start without a build phase (the status below); nothing of them has run on a paid tier.
 
-| Stage | What is built and run | Cost | Time | Release condition |
+| Stage | What is built and run | Cost `[assumption]` | Time | Release condition |
 |---|---|---|---|---|
 | **S0** | Literature review (section 3); thin slice; E0 controls on scripted brains | $0 | about 4 weeks | none. Review and thin slice **done**; E0 **run and failed**; see the status below |
-| **S1** | Live smoke test, 3 seeds; then the E1 pilot at 10 seeds (4 arms) | about $20, then about $70 | about 2 weeks | S0 done and the review found no fatal overlap. The review condition is **met** (partially scooped, not fatal, provided the 6.13 baselines are adopted). The E0 condition is **not met**: hold the E1 pilot until the live dependence check reads *memory pays* in a world (the rule after the S0 status below) |
-| **S2, the minimum credible paper** | E1 at 20 seeds ($139); E5 transplant with faithfulness controls, straight after E1 ($150); E2 with arms A and B only ($78); E1 replication on Claude Haiku 4.5 at 10 seeds ($249); 15% exam overhead ($92) | about **$710** | about 8 weeks | **G1 passed** |
+| **S1** | Live smoke test, 3 seeds; then the E1 pilot at 10 seeds (4 arms) | about $20, then about $70 | about 2 weeks | S0 done and the review found no fatal overlap. The review condition is **met** (partially scooped, not fatal, provided the 6.13 baselines are adopted). The E0 condition is **not met**: hold the E1 pilot until the live dependence check reads *memory pays* in a world (the rule after the S0 status below). The live smoke test has run: one run, $0.1568 of real spend (section 0) |
+| **S2, the minimum credible paper** | E1 at 20 seeds ($139); E5 transplant with faithfulness controls, straight after E1 ($150); E2 with arms A and B only ($78); E1 replication on the `budget` tier (a second family) at 10 seeds ($249); 15% exam overhead ($92) | about **$710** | about 8 weeks | **G1 passed** |
 | **S3** | E4 capability ladder with the tariff-removed condition ($426); E3a protocol transplant ($50); E7 persistence channel ($78); E2 arm C ($39); 15% exam overhead ($89) | about $680 | about 8 weeks | **G3 passed**, and S2 shows an effect worth extending |
 | **S4** | E3 ratchet at 42 days with its no-selection arm ($581); E8 control levels ($94); replication of E2 on a second family ($417); 15% exam overhead ($164) | about $1,260 | about 8 weeks | S3 positive, or a collaborator or credits fund it |
 
-**Status of S0 (2026-10-13).**
+**Status of S0 (2026-10-18).** The review and the build are done, and the gate failed: **G0 is not passed on scripted brains**, so the definition-of-done item "G0 passes on scripted brains" is **not met**. The reason, found and confirmed below: in every world tried, retrieved notes cost a scripted agent more in prompt tokens than they earn it in foraging, and the positive control's index notes are worth nothing to an agent that already sees a node. The fixes made (R1, a scripted brain that acts on what it remembers, cheaper retrieval, worlds with veins and fallow nodes) narrowed the gap without closing it. Every number in this status is printed by the committed command given with it, on scripted brains at $0, unless it is tagged; numbers in brackets are earlier runs of the same commands on older code, dated.
 
-*Built* `[built]`: prompt and observation logging with a flat export (`void.research.export`); the trust model's manifest, hash-checked `reindex` and `operator` channel; fog and claim feedback; the amnesic switch; the six memory commands; the policy file with versions and seeds S0 to S2; the paid nightly maintenance step with five scripted strategies; the audit exam paid by the research pool; and the E0 and dependence-check configs. The full backend suite passes.
+*Built* `[built]`: prompt and response logging with an export and a data card (`void export`); the trust model's manifest, hash-checked `reindex` and `operator` channel; fog, claim feedback, veins and fallow nodes; the amnesic switch; the six memory commands; the policy file with versions and seeds S0 to S2; the paid nightly maintenance step with eight scripted strategies (`noop`, `index_builder`, `hoarder`, `decoy`, `summarize`, and the 6.13 baselines `distill`, `revert`, `retire`); R1 retrieval; the audit exam, canary facts and the arm-B reward exam, paid by the research pool; inheritance, adaptation, scripted mutation, `share_practice` and kernel-measured adoption with the arm-C royalty; the 7.1 and 7.2 outcomes, pre-registered hypotheses evaluated by `compare` and `scripts/gates.py`, and `scripts/mem_diagnosis.py`; `void transplant` (E5), `void generations` (E3a), `void report` and `void mcp`; the control-room views; and the configs of E0, the dependence check, E1, E2 (arms A and B), E3a, E4 and E5. The full backend suite passes.
 
-*Run*: E0 and the memory-dependence check, scripted, 20 paired seeds per arm, $0. Mean end balance per agent, paired deltas with 95% bootstrap intervals:
+*G0, from the committed gate script (re-run 2026-10-18).* `scripts/gates.py` evaluates G0's four conditions (5.2, 6.2), reading each margin from the hypotheses the configs pre-register:
 
-| Check | Pre-registered | Result |
-|---|---|---|
-| Memory on versus amnesic (the gate, 5.2) | memory on wins by a preset margin | **fails**: amnesic wins in 20 of 20 seeds, by $0.071 [0.054, 0.089] |
-| Index builder versus no-op | index builder wins, power at least 0.8 | **fails**: no difference, −$0.000 [−0.023, 0.024] |
-| Hoarder versus no-op | hoarder loses | passes: −$0.049 [−0.077, −0.017] |
-| Decoy versus no-op | not separated | separated: −$0.038 [−0.067, −0.007]; see the revision in 6.2 |
+```bash
+for c in exp_mem_dep_mem exp_mem_dep_amnesic exp_mem_e0_noop exp_mem_e0_index_builder exp_mem_e0_hoarder exp_mem_e0_decoy; do
+  .venv/bin/void run --config configs/$c.yaml --seeds 1-20 --tick-seconds 0 --out runs
+done
+.venv/bin/python scripts/gates.py runs      # exit 1: G0 FAIL (C1 FAIL, C2 FAIL, C3 FAIL, C4 PASS)
+```
 
-The first E0 run billed scripted maintenance by output length, so the no-op paid about half what the index builder did and "beat" it. Cost matching (6.2) removed that artifact; the table is the cost-matched rerun.
-
-*Diagnosis.* Memory raises the scripted agents' foraging a little and costs four times as much:
-
-| Per agent, memory on minus amnesic, 20 seeds | Value |
-|---|---|
-| Foraging income | +$0.023 [0.002, 0.043], about 5%, higher in 16 of 20 seeds |
-| Decision-call cost | +$0.093 [0.083, 0.103], higher in every seed |
-| Input tokens per decision | 249 without memory, 649 with |
-
-Why, corrected after a second, deeper measurement (2026-10-13). An earlier version of this paragraph said memory "sends the agent back to a spent node". A follow-up that logged what every retrieved note could tell the agent showed that is not what happens. The world simply never makes these agents need memory:
-- Every agent, in both arms, foraged at exactly one node for the whole run (118 of 118 agents across 20 seeds).
-- A forage takes about one unit (0.985 on average) from a node that holds 40 and regrows 0.4 per tick, so depletion almost never bites.
-- In 92% of decisions an agent sees exactly one node, and in 99.9% the retrieved notes place no node the agent cannot already see. The 151 decisions with no node in sight all belong to agents that had not found a node yet, so there was nothing to remember.
-- The price of remembering is high: retrieved notes more than double the prompt, so memory must raise foraging income by about 19% to break even, and it raises it by about 5%. That small gain comes from a shift in the action mix, not from navigation.
-
-A free sweep at 10 seeds of node capacity (12 to 40), regrowth (0.2 to 0.4) and view radius (8 to 12) did not change the picture: in all four settings the amnesic arm won on balance.
-
-*First fix attempt (decision 19, scripted brain plus 4 retrieved notes), 20 paired seeds:* the scripted brain now keeps the newest status per node, skips nodes it last saw empty, and writes a correction note when sight contradicts memory; the amnesic arm is bit-identical to before. Retrieving 4 notes instead of 8 halves the price of memory (463 instead of 649 input tokens per decision), but the benefit does not move. Memory on versus amnesic: **−$0.030 [−0.049, −0.013]**, amnesic still ahead in 15 of 20 seeds. E0: index builder versus no-op is a tie (−$0.005 [−0.028, 0.019]); the hoarder's loss is no longer significant at 4 notes. An independent check reproduced both results and confirmed that the brain change contributes nothing in this world, because there is never a remembered node to walk to. Scripted-brain changes alone cannot pass G0 here.
-
-*What this means.* G0 is not passed, so by the rule in 10.2 no paid memory experiment should run yet. The live scarcity pilot does not depend on memory and can go ahead. The E1 pilot should wait. This is the cheapest possible place to have found the problem: a paid E1 in this world would very likely have returned "memory does not matter", for a reason that has nothing to do with agent-authored practice.
-
-*Second fix attempt: make the world need memory (2026-10-14).* Built: **veins** (a node pays several times more for a window of ticks, recurring at a seeded subset of vein-prone nodes, visible only within a small radius of its node) and **fallow nodes** (a node foraged to nothing does not regrow for a set number of ticks). Both are off by default; worlds that do not use them are byte-identical to before, pinned by golden fingerprints of a base run and of the amnesic arm. The scripted brain notices veins in sight, writes them down with position and remaining ticks, walks to a remembered vein that should still be paying, and ranks remembered vein sites as rich.
-
-Protocol fixed in advance: tune world settings on seeds 1–10 only, at most about 8 settings, then freeze one and confirm on held-out seeds 21–40. Memory on minus amnesic, mean end balance per agent, retrieval of 4 notes in both arms:
-
-| Setting | World | Seeds 1–10 |
-|---|---|---|
-| A | veins (2 prone nodes, x4 for 12 ticks, seen within 4) | +$0.087 [−0.133, 0.306] |
-| B | veins, fallow 12, capacity 12 | +$0.007 [−0.150, 0.125] |
-| C | veins, fallow 24, capacity 8, regrowth 0.2 | −$0.080 [−0.161, 0.012] |
-| D | fallow 24, capacity 8, no veins | −$0.041 [−0.066, −0.016] |
-| E | stronger veins (3 prone, x6 for 18), fallow 12, capacity 12 | −$0.071 [−0.267, 0.097] |
-| F | as C with view radius 8 | +$0.020 [−0.071, 0.089] |
-| G | view radius 6, veins, fallow 6, capacity 12 | −$0.029 [−0.159, 0.096] |
-| H | as G without veins | −$0.009 [−0.056, 0.043] |
-| I | view radius 6, veins, fallow 12, capacity 20, regrowth 0.3 | −$0.029 [−0.147, 0.078] |
-| K | as G with 4 nodes | −$0.095 [−0.256, 0.051] |
-| L | view radius 8, veins, fallow 6, capacity 12 | +$0.057 [−0.070, 0.195] |
-
-The search ran to 11 settings, past the planned 8, and no setting separated memory from amnesia. Frozen setting A (best on tuning) on held-out seeds 21–40: **−$0.078 [−0.219, 0.058]**, and E0 in that world separates nothing (index builder minus no-op +$0.029 [−0.146, 0.207]). The tuning-set edge was noise.
-
-Why: veins make everyone richer (per-run income roughly doubles) but scripted agents with memory reach no more veins than amnesic ones. Their vein notes, about 80 a run, almost all describe the node they already stand at, because a vein is visible only up close and agents rarely know a second node. Where fallow forces movement, wandering under fog finds a node about as fast as walking back to a remembered one, and memory still costs about 200 extra input tokens a decision.
-
-*What this means.* **G0 is not passed on scripted brains**, in any of the 11 worlds. That is a statement about the scripted agents' simple positional use of memory, not about whether a real model can use memory well. The decisive measurement is therefore the live memory-dependence check, run in both the original world and the vein world (stages `memdep`, 16 seed pairs, and `memdep_veins`, 32 pairs on seeds 21–52, never the tuning seeds 1–10, in `scripts/live_claude.sh`, on the cheapest current model; the vein world is disclosed as the best tuning setting that failed its held-out confirmation). Their caps sum to $34.56; the spend the live smoke run's usage predicts is about $9, or $16 if outputs run three times longer `[assumption]`. The E1 pilot waits for that result. The veins and fallow mechanics stay in the code, off by default, for the live runs and later experiments.
-
-*G0 computed by committed code (2026-10-17, re-run 2026-10-18).* `scripts/gates.py` evaluates G0's four conditions (5.2, 6.2) from the runs. On 20 scripted seeds (`void run --seeds 1-20 --tick-seconds 0` for `exp_mem_dep_{mem,amnesic}` and `exp_mem_e0_{noop,index_builder,hoarder,decoy}`, then `scripts/gates.py`, exit 1). The current numbers come after the kernel began classifying a failed action against the observation the agent decided on (stale only if the observation showed it valid, otherwise invalid, which drains stress); that moved every world slightly and changed no verdict. The 2026-10-17 numbers, before that change, are in brackets:
+Per agent, mean end balance unless stated, 95% paired-bootstrap interval over 20 seed pairs. The bracketed numbers are the 2026-10-17 run, before the kernel began classifying a failed action against the observation the agent decided on (stale only if the observation showed it valid, otherwise invalid, which drains stress); that change moved every world slightly and changed no verdict:
 
 | Condition | Contrast, per agent | Result |
 |---|---|---|
@@ -821,9 +795,63 @@ Why: veins make everyone richer (per-run income roughly doubles) but scripted ag
 | C3 negative control | hoarder minus no-op | −$0.017 [−0.046, 0.014]: below, but not significantly: FAIL (was −$0.020 [−0.048, 0.011]) |
 | C4 metric check | decoy minus no-op | balance −$0.041 [−0.072, −0.009], not above; policy length +1,040 characters [1,036, 1,044], above: PASS (was −$0.040 [−0.071, −0.007]) |
 
-The E0 arms now retrieve under R1 (5.3): `memory.index_boost` 0.10 in `configs/exp_mem_e0_base.yaml`, chosen once on seed 99 (outside the evaluation seeds) as the smallest step that puts an index note naming a node in the query among the 4 retrieved notes in at least 90% of decisions `[assumption]`. Index notes reach the index builder's decisions more often (`tests/test_e0_r1.py`), and its balance does not move: better-known node positions are worth nothing to these agents in this world, the same finding as C1. The dependence configs pin the boost back to 0 (`exp_mem_dep_base.yaml`), so the live check below runs on the default scaffold. The E0 base also pins `population.scripted_rules: pre_7_2`, so the E0 and dependence worlds keep the scripted rules they were recorded under while other scripted worlds follow DESIGN 7.2 (births and selection); their config hashes therefore differ from the recorded runs, but their worlds are byte-identical (`tests/test_scripted_selection.py` reproduces the pre-7.2 golden worlds, and `scripts/gates.py` reproduces every number in the table above).
+*Diagnosis* (`.venv/bin/python scripts/mem_diagnosis.py runs/exp_mem_dep --sweep runs/sweep`). Memory raises the scripted agents' foraging a little, and costs more than it raises:
 
-*E5 transplant at $0 (2026-10-18).* `void transplant` seeds fresh agents in the evaluation world (`configs/exp_mem_e5_eval.yaml`) with the index builder's notes and policy from a donor run, under six conditions. On 20 scripted seeds (`void transplant --conditions none,both,shuffled --seeds 1-20`, then `scripts/compare.py`): mean balance none $1.529, both $1.501, shuffled $1.514; both minus none −$0.027 [−0.052, −0.005]. Transplanting the practice makes scripted agents slightly poorer, the opposite of the hoped-for direction, which fits C1 and C2: on scripted brains, remembered structure costs more than it returns. These numbers precede the kernel classification change above.
+| Per agent, mem minus amnesic, 20 seed pairs | Value |
+|---|---|
+| Foraging income | +$0.018 [−0.006, 0.040], +3.8%, higher in 14 of 20 seeds |
+| Decision-call cost | +$0.051 [0.042, 0.059], +33.7%, higher in every seed |
+| Input tokens per decision | 249 without memory, 465 with: +216 [209, 224] |
+| End balance, the net | −$0.034 [−0.053, −0.015], higher in 4 of 20 seeds |
+
+Break-even: memory's extra decision cost is 10.5% of the amnesic arm's foraging income, so income must rise by 10.5% for memory to pay; it rises by 3.8% [−1.3%, +8.4%].
+
+The sweep runs 10 seeds per setting and moves one factor at a time from the dependence world: node capacity 40 to 12, regrowth 0.4 to 0.2, view radius 12 to 8. These four settings are the script's reading of an earlier sweep that named the ranges but not the settings `[assumption]`:
+
+| Setting | Balance, mem minus amnesic | Income change | Break-even income rise |
+|---|---|---|---|
+| dependence world (capacity 40, regrowth 0.4, view radius 12) | −$0.047 [−0.074, −0.018] | +0.1% | 10.7% |
+| capacity 12 | −$0.017 [−0.040, 0.009] | +7.7% | 13.0% |
+| regrowth 0.2 | −$0.049 [−0.074, −0.023] | −0.6% | 11.4% |
+| view radius 8 | −$0.025 [−0.074, 0.019] | +1.7% | 9.5% |
+
+The amnesic arm is ahead on balance in all four settings, and memory's income gain reaches its break-even in none.
+
+*Causes found, and the fixes made.*
+1. **The positive control had no mechanism: the R1 boost was missing.** `memory.index_boost` was a config field that nothing read, so the index builder's index notes entered decisions no more often than any other note, and the scripted brain could not read a node's position from them. Fixed: retrieval adds the boost to the entry score of notes tagged `index` (`void/memory/store.py`), the index notes are written in the scripted brain's node-fact grammar, and every E0 arm runs at `memory.index_boost` 0.10. Index notes now reach the index builder's decisions more often (`tests/test_e0_r1.py`), and its balance does not move (C2): better-known node positions are worth nothing to these agents in this world, the same finding as C1.
+2. **The scripted brain left its memory unused.** It wrote node notes only after a successful forage or on seeing a rich node, so an empty node was never recorded; it acted on a remembered node only when no node at all was in view; and its retrieved notes were crowded with near-duplicate node notes. Fixed (decision 19): it keeps the newest status per node from sightings, forage notes and index notes, records empty nodes and skips them, writes a correction note when sight contradicts memory, walks to a remembered non-empty node before wandering, and remembers and returns to veins (`void/brain/scripted.py`); and retrieval takes 4 notes instead of 8 (`memory.max_retrieved: 4` in `configs/exp_mem_e0_base.yaml`). The amnesic arm was bit-identical before and after these changes. C1 moved toward zero and still fails.
+3. **The world rarely makes a scripted agent need what it remembers.** A forage takes one unit (`world.forage_units_per_tick`) from a node that holds 40 and regrows 0.4 a tick (`configs/base.yaml`, which the E0 world inherits), so depletion seldom forces a move, and under fog an agent mostly forages a node it can see. That agents almost never needed an out-of-sight node was measured in 2026-10-13 by a probe that is not committed `[assumption]`. Fix attempted: veins and fallow nodes, below.
+
+The `memory.index_boost` of 0.10 was chosen once on seed 99 (outside the evaluation seeds) as the smallest step that puts an index note naming a node in the query among the 4 retrieved notes in at least 90% of decisions `[assumption]`. The dependence configs pin the boost back to 0 (`exp_mem_dep_base.yaml`), so the live check below runs on the default scaffold. The E0 base also pins `population.scripted_rules: pre_7_2`, so the E0 and dependence worlds keep the scripted rules they were recorded under while other scripted worlds follow DESIGN 7.2 (births and selection); their config hashes therefore differ from the recorded runs, but their worlds are byte-identical (`tests/test_scripted_selection.py` reproduces the pre-7.2 golden worlds, and `scripts/gates.py` reproduces the 2026-10-17 numbers above).
+
+*Earlier runs.* The first E0 run (2026-10-13) retrieved 8 notes and predates all three fixes; it failed C1 by a wider margin and C2 as it does now, and its decoy result led to the revision in 6.2. It also billed scripted maintenance by output length, so the no-op paid less than the index builder and "beat" it; cost matching (6.2, `memory.maintenance.scripted_billing: flat`) removed that artifact. Its numbers came from code since changed and are not restated here; the git history keeps them.
+
+*The vein world (second fix attempt, 2026-10-14).* Built: **veins** (a node pays several times more for a window of ticks, recurring at a seeded subset of vein-prone nodes, visible only within a small radius of its node) and **fallow nodes** (a node foraged to nothing does not regrow for a set number of ticks). Both are off by default; worlds that do not use them are byte-identical to before, pinned by golden fingerprints of a base run and of the amnesic arm. The protocol was fixed in advance: tune world settings on seeds 1–10 only, at most about 8 settings, then freeze one and confirm on held-out seeds 21–40. The search ran to 11 settings, past the planned 8 (veins, fallow periods, node capacity and count, regrowth and view radius), and no setting separated memory from amnesia on the tuning seeds. Those settings were scratch configs, not committed, so their per-setting numbers are not restated. The frozen setting A is the dependence world plus `world.veins` at its defaults (two vein-prone nodes, a vein pays x4 for 12 ticks, seen within 4); it is re-run here on the current code with a two-line config per arm that extends the committed one (`extends: configs/exp_mem_dep_mem.yaml` and `world: {veins: {enabled: true}}`, and likewise for the amnesic, index builder and no-op arms), then `scripts/mem_diagnosis.py` on each seed range and `scripts/gates.py` on the held-out runs:
+
+| Setting A | Seeds | Per agent, mean balance | 2026-10-14 |
+|---|---|---|---|
+| mem minus amnesic, tuning | 1–10 | +$0.113 [−0.106, 0.348] | +$0.087 [−0.133, 0.306] |
+| mem minus amnesic, held out | 21–40 | −$0.054 [−0.174, 0.061] | −$0.078 [−0.219, 0.058] |
+| index builder minus no-op, held out | 21–40 | −$0.022 [−0.151, 0.118], power 0.05 | +$0.029 [−0.146, 0.207] |
+
+The tuning-set edge was noise. Veins make everyone richer: an amnesic agent forages $1.21 on the held-out seeds against $0.48 in the dependence world (the two diagnoses, different seeds). But memory adds nothing to that income (−3.0% [−10.9%, +5.3%] held out) while still costing 223 [211, 234] extra input tokens a decision. Why, as far as the scripted brain goes: its vein notes mostly describe the node it already stands at, because a vein is visible only up close and agents rarely know a second node; and where fallow forces movement, wandering under fog finds a node about as fast as walking back to a remembered one. Both observations come from 2026-10-14 probes that are not committed `[assumption]`.
+
+*What this means.* **G0 is not passed on scripted brains**, in the dependence world, in the four sweep settings and in the vein world, and by the rule in 10.2 no paid memory experiment runs yet. That is a statement about the scripted agents' simple positional use of memory, not about whether a real model can use memory well. The decisive measurement is therefore the live memory-dependence check, run in both the original world and the vein world (stages `memdep`, 16 seed pairs, and `memdep_veins`, 32 pairs on seeds 21–52, never the tuning seeds 1–10, in `scripts/live_claude.sh`, on the cheapest current model; the vein world is disclosed as the best tuning setting that failed its held-out confirmation). Their caps sum to $34.56 (96 runs at the $0.36 `economy.total_cap_usd` of `configs/live_claude_dep_base.yaml`); the spend the live smoke run's usage predicts is about $9, or $16 if outputs run three times longer `[assumption]`. The paid stages have not run (the spend ledger holds only the smoke run). The E1 pilot waits for their result. The live scarcity pilot does not depend on memory and can go ahead. This is the cheapest possible place to have found the problem: a paid E1 in this world would very likely have returned "memory does not matter", for a reason that has nothing to do with agent-authored practice.
+
+*E5 transplant dry run at $0 (6.7).* `void transplant` seeds three fresh agents of the evaluation world (`configs/exp_mem_e5_eval.yaml`, 3 days) with the notes and policy of the richest agent of the seed-1 index-builder run, under all six conditions:
+
+```bash
+.venv/bin/void transplant --donor-run runs/exp_mem_e0/index_builder/seed_1 --seeds 1-20 --out runs
+.venv/bin/python scripts/compare.py runs/exp_mem_e5
+```
+
+Mean balance per agent, 20 seeds: none $1.528, policy $1.515, vault $1.513, shuffled $1.512, inverted $1.510, both $1.501. Both minus none: −$0.028 [−0.052, −0.005]; inverted minus none −$0.018 [−0.035, −0.003]; policy, vault and shuffled minus none are negative with intervals that include 0. Against its faithfulness controls, both is below shuffled (−$0.011 [−0.031, 0.008]) and inverted (−$0.010 [−0.034, 0.016]). Transplanting the index builder's practice makes scripted agents slightly poorer, the opposite of the dry run's pass condition ("must reproduce the index builder's advantage"), and there is no advantage to reproduce: C2 found none. This fits C1 and C2: on scripted brains, remembered structure costs more than it returns. (An earlier run of three conditions, before the kernel classification change, gave both minus none −$0.027 [−0.052, −0.005].)
+
+*E2 at $0 (6.4), arms A and B on scripted brains.* `void run --config configs/exp_mem_e2_{a,b}.yaml --seeds 1-20 --tick-seconds 0 --out runs`, then `scripts/compare.py runs/exp_mem_e2`. A plumbing check, not an effect: audit-exam accuracy, B minus A, −0.018 [−0.050, 0.017]; mean balance −$0.006 [−0.021, 0.010]. The reward exam is asked in arm B, but `reward_exam_accuracy` and `goodhart_gap` resolve in no seed pair, and `recall_reward_usd_total` is $0 in both arms: scripted brains remember the chronicle's headline, not its lines, so they abstain on every reward question (as `configs/exp_mem_e2_base.yaml` says). The manipulation check needs a live tier.
+
+*E3a at $0 (6.5), on scripted brains.* `.venv/bin/void generations --config configs/exp_mem_e3a.yaml --arms oblique,vertical --generations 10 --seeds 1-10 --out runs`, which prints the slopes on generation (within-seed least squares, cluster bootstrap by seed) and writes them with the cohort rows to `runs/exp_mem_e3a/<arm>/summary.json`. Slope of the cohort's mean end balance per generation: oblique −$0.00129 [−0.00210, −0.00045], vertical −$0.00064 [−0.00150, +0.00010]. Slope of audit-exam accuracy: oblique +0.00763 [−0.00177, +0.01707], vertical +0.00722 [−0.00222, +0.01662]. The policies converge: the monoculture index rises from 0.11 in generation 0 to 0.68 in generation 9 under oblique transmission and to 0.59 under vertical (`summary.json`). But a scripted brain does not act on its policy, so selection here can favour only policies that are cheaper to read, and the slightly falling balance under oblique transmission, which lengthens children's policies, fits that. This is a plumbing result about the protocol, not evidence about H3.
+
+The reading below was fixed on 2026-10-17 and is kept verbatim. Its spreads were read off the bracketed intervals above: C1 of 2026-10-17 for the original world, and the 2026-10-14 held-out interval for the vein world.
 
 *Pre-registered reading of the live check (fixed 2026-10-17, before any `memdep` pair runs).* Every quantity is mem minus amnesic, per agent, with the 95% paired-bootstrap interval `scripts/compare.py` prints, read separately for each world.
 - **Net (primary, `mean_balance`).** *Memory pays* if the interval's lower bound is above $0. *Memory does not pay* if its upper bound is below $0. Anything else is *inconclusive*. Neither stage can establish "no effect": at the scripted brain's paired spread (about $0.04 per agent in the original world and $0.32 in the vein world, read off the intervals above) the smallest effect detectable with 80% power is about $0.03 at 16 pairs and $0.16 at 32 pairs in the vein world (it would be $0.36 at 8) `[assumption]`, and live sampling can only widen the spread.
@@ -837,11 +865,26 @@ The E0 arms now retrieve under R1 (5.3): `memory.index_boost` 0.10 in `configs/e
 - **What this does not decide.** G0 (10.2: E0 recovers the planted effects) stays failed until the scripted E0 passes, whatever the live runs show; `scripts/gates.py --live` prints G0 FAIL for that reason, and its per-world `C1[...]` lines carry the net reading (C1 passes exactly when that world reads *memory pays*: the live dependence configs inherit the margin of 0 pre-registered in `configs/exp_mem_dep_base.yaml`). The live check is the memory-dependence check of 5.2, which is the first condition of G1. At 16 pairs the original world is below the 20 pairs 6.11 asks for primary claims, so its interval is flagged as rough; the reading above is fixed anyway, with the power limits stated under the net reading.
 - **What an income gain is not.** An income gain alone is not evidence that agents navigate by memory, since the scripted gain came from a shift in the action mix. A claim of use also needs the share of moves and forages aimed at a node out of sight but named in that call's retrieved notes, computed from the logged observations (not yet built).
 
-The stages sum to roughly the full programme in 6.12. Small differences come from seed counts on the replications and from pilot seeds being reused in S2.
+The stages sum to roughly the full programme in 6.12 `[assumption]`. Small differences come from seed counts on the replications and from pilot seeds being reused in S2.
 
 **Ways to lower the bill further** (each `[assumption]`, to check): apply for API credits through research-access programmes the model providers run; add a collaborator whose institution has compute or cloud credits; run the replication on a cheaper second family; reduce seeds from 20 to 15 for the primary comparisons (Figure 4: 15 seeds gives 80% power for a large effect with the t-test, but not with the sign test).
 
 **What to expect from S2.** A paper with one clean comparison (does agent-authored memory beat an equal-compute control), a causal test (transplant), a Goodhart test (proxy reward), and a replication on a second family. That is a credible workshop paper. It is a main-track paper only if the effect is large and the writing and framing are strong. If E1 is null, the honest write-up is a negative result, which is worth less as a signal but costs little to produce because most of the work is already done.
+
+### 10.5 Not built in the $60 programme
+
+The live test is capped at $60 in total, and nothing below fits in it or is needed by S0 to S2. Each item stays `[proposed]`: it is a design in this document, not code in the repo.
+
+- **E6, external transfer** (6.8) `[proposed]`: the benchmark subsets, the baselines under matched token budgets and the audit exam in a second model. It needs downloaded benchmark data and paid evaluation calls at S4 scale.
+- **E7, the persistence channel** (6.9, 9.3) `[proposed]`: the governance factors G0 to G3 as switches and the scripted adversary with its payload classes. Only the policy limits that G1 would start from exist (9.2).
+- **E8, how much control** (5.3, 6.10) `[proposed]`: control levels C3 (a `recall` tool inside the tick, retrieval R2) and C4 (retrieval parameters declared in the policy, R3), optional maintenance as an action the agent chooses (the config refuses `memory.maintenance.mode: optional`), and the interactive tool-loop maintenance arm (5.6).
+- **The real embedder** (WP10, L5, decision 7) `[proposed]`: retrieval and every similarity measure stay lexical (feature hashing, token-set overlap), so the programme makes no claim about retrieval quality or semantic drift.
+- **Policy bullets with counters** (5.5) `[proposed]`: the MemSkill four-question schema for seeds and the addressable bullets with helpful and harmful counters.
+- **The LLM practice coder** (7.3) `[proposed]`: practices are coded by the keyword coder; the paid LLM coder and the human-coded validation sample are not built.
+- **The full E3 design** (6.5) `[proposed]`: 42-day runs, reproduction by lottery for the no-selection arm, group selection, the single-lineage baseline at the population's budget and the per-generation safety audit. E3a's driver exists, for scripted tiers only; a live E3a, where children write their own policy with a model, is not built either.
+- **Smaller pieces the design names** `[proposed]`: the paid kernel mutation call (5.7; only the free scripted mutation exists), the reward dose-response extension (5.8, 6.4), an E2 arm-C config (the royalty itself is built), and the replicator-mutator fit (7.1).
+
+Veins, listed as optional in 5.2, are not on this list: they were built in the second attempt to make the world need memory (10.4).
 
 ---
 
@@ -874,7 +917,7 @@ Each has my default. Reply with numbers and changes; I will update the document.
 | 3 | Maintenance | forced, optional, or both as arms | Forced primary, optional as an arm |
 | 4 | Memory demand | fog only; fog plus claim feedback; add veins | Fog plus claim feedback. Veins only if the dependence check is weak |
 | 5 | Reward arms | A only; A and B; A, B and C | All three, with C last |
-| 6 | Models | Flash-Lite for pilots; second family; open weights | Flash-Lite, then Haiku 4.5, open weights after G3 |
+| 6 | Models | the `average` tier for pilots; second family; open weights | `average`, then the `budget` tier as the second family, open weights after G3 (tiers as in `configs/base.yaml`) |
 | 7 | Embedder | keep hashing; local small model; API model | Local small model: free, offline, deterministic enough. Adds a dependency |
 | 8 | Generation depth for E3 | 42 days; higher mortality; shorter lifespans | 42 days first. Mortality changes the ecology and needs its own control |
 | 9 | Human coding | who codes the practice taxonomy and validates the sample? | You plus one collaborator, blind to arm. If neither, weaker claims about categories |
@@ -883,15 +926,17 @@ Each has my default. Reply with numbers and changes; I will update the document.
 | 12 | Collaborators | add a statistician or a safety researcher for E7 | Yes, one of each if you can |
 | 13 | Time assumption | 15 to 20 hours a week from you | Confirm or correct; the roadmap scales with it |
 | 14 | Review first | do the systematic review before building WP3 onward | **Done** ([LITERATURE_REVIEW.md](LITERATURE_REVIEW.md)): partially scooped, not fatal. It reshaped the plan rather than killing it |
-| 15 | Spend release | full budget up front, staged by gates, or staged with the thin slice | Staged with the thin slice (10.4). You commit about $90 before G1 and the rest only if results justify it |
-| 16 | Adopt the review's baselines (6.13) | all ten; only the free ones; none | All ten. They add $411 to the cheap-tier programme (about a quarter), and without them a reviewer can attribute any effect to a published mechanism |
+| 15 | Spend release | full budget up front, staged by gates, or staged with the thin slice | Staged with the thin slice (10.4). You commit about $90 before G1 and the rest only if results justify it `[assumption]`. The live test now runs within $60 in total |
+| 16 | Adopt the review's baselines (6.13) | all ten; only the free ones; none | All ten. They add $411 to the cheap-tier programme (about a quarter, `[assumption]`), and without them a reviewer can attribute any effect to a published mechanism |
 | 17 | Framing | "a new kind of experiment"; "the Vallinder-Hughes protocol transplanted to memory practice, under a cognition-priced economy" | The second. It is what the evidence supports, and it makes E3a the cleanest first inheritance result |
 | 18 | Selection level | individual only; individual and group | Both, with group selection as an exploratory contrast inside E3 at no extra runs |
-| 19 | Making memory matter (10.4) | change kernel retrieval (affects E1's arm `a`); change only the scripted brain's use of memory; make memory cheaper; redesign the world | **Both tried, G0 still not passed on scripted brains** (10.4): the scripted-brain change and 4 retrieved notes halve the cost of memory; veins and fallow nodes across 11 world settings, confirmed on held-out seeds, show no memory benefit, and E0's positive control stays flat with R1 switched on (`scripts/gates.py`). Next: the live memory-dependence check decides; change kernel retrieval (E1's arm `a`) only if live agents also fail to benefit |
+| 19 | Making memory matter (10.4) | change kernel retrieval (affects E1's arm `a`); change only the scripted brain's use of memory; make memory cheaper; redesign the world | **Both tried, G0 still not passed on scripted brains** (10.4): the scripted brain now acts on what it remembers, and 4 retrieved notes instead of 8 shrink memory's extra prompt (+216 input tokens a decision, `scripts/mem_diagnosis.py`); veins and fallow nodes across 11 world settings, confirmed on held-out seeds, show no memory benefit, and E0's positive control stays flat with R1 switched on (`scripts/gates.py`). Next: the live memory-dependence check decides; change kernel retrieval (E1's arm `a`) only if live agents also fail to benefit |
 
 ---
 
-## Appendix A: default seed policy `[proposed]`
+## Appendix A: default seed policy `[built]`
+
+The `S1` seed, verbatim as `SEED_DEFAULT` in `void/memory/policy.py`.
 
 ```markdown
 # How I remember (v1)
@@ -921,7 +966,9 @@ Written by me to show the *shape* of a change. It is not the output of any run.
  - Delete notes that turned out to be wrong.
 ```
 
-## Appendix C: maintenance call, first draft `[proposed]`
+## Appendix C: maintenance call `[built]`
+
+Built as drafted (`void/sim/maintenance.py`: `maintenance_system_prompt`, `render_prompt`, `MaintenanceResponse`), with the suggestions section shown only when practice transmission is on. The interactive tool-loop arm is `[proposed]`.
 
 **System (fixed, cache-stable).** The world's standing rules, plus: "Once a day you may reorganize your own memory. Your memory policy is advice you gave yourself; follow it unless it conflicts with these rules. You pay for this call from your own balance."
 
@@ -949,7 +996,9 @@ Written by me to show the *shape* of a change. It is not the output of any run.
 
 `view` is not needed in the single-call form because the listing is in the prompt. The interactive arm adds it back with a bounded tool loop.
 
-## Appendix D: data model sketch `[proposed]`
+## Appendix D: data model sketch `[built]`
+
+Built in `void/db.py`, which adds a few columns to the sketch (for example `exam_items.tick_about` and `options`, `memory_commands.message` and `call_id`, the `kernel` purpose) and a `canary_facts` table, and keys `note_manifest` by path.
 
 ```sql
 CREATE TABLE policy_versions (
@@ -988,7 +1037,9 @@ CREATE TABLE note_manifest (
 
 Plus a `research_pool` kernel wallet with ledger kinds `recall_reward` and `practice_royalty`, seeded once, so the money-conservation identity gains one term and still balances.
 
-## Appendix E: audit-exam question generators `[proposed]`
+## Appendix E: audit-exam question generators `[built]`
+
+All six generators are built (`void/research/exams.py`, `memory.exam.kinds`); the E0 and E2 configs ask the first three.
 
 Every question is generated from what the kernel recorded as *shown to that agent*, asked at least two days later, and graded by exact match or numeric tolerance. Abstaining is allowed at a small penalty, so calibration is measurable.
 
@@ -1009,11 +1060,12 @@ Every question is generated from what the kernel recorded as *shown to that agen
 
 ```bash
 uv pip install -e '.[figures]'   # matplotlib, numpy, scipy, networkx
-.venv/bin/void run --config configs/demo.yaml --seeds 1-4,42 --days 14 --tick-seconds 0 --out runs/figs
-.venv/bin/python docs/research/figures/make_figures.py --runs runs/figs/demo/default
+.venv/bin/python docs/research/figures/make_figures.py
 ```
 
-`docs/research/figures/facts.json` is written alongside the images with the numbers quoted in this document (seeds needed for 80% power, cost table, generation depth, vault statistics).
+With no `--runs`, the script makes the scripted runs behind Figures 6 and 7 itself, in a temporary directory (`void run --config configs/demo.yaml --seeds 1-4,42 --days 14 --tick-seconds 0`; scripted brains only, $0, a few minutes). To reuse runs made beforehand, pass `--runs runs/figs/demo/default` after that `void run ... --out runs/figs`; `--no-runs` skips the run figures and keeps their facts.
+
+`docs/research/figures/facts.json` is written alongside the images with the numbers quoted in this document: seeds needed for 80% power, the cost table, the literature grid, generation depth, the Figure 7 vault and the notes per living agent at day 14 (`vault_notes_day14`, section 2.4). The 10.4 numbers come from `scripts/gates.py`, `scripts/mem_diagnosis.py` and `scripts/compare.py`, with the commands given there.
 
 ---
 
