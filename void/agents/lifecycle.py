@@ -1,4 +1,15 @@
-"""Births, deaths, replacement and inheritance (DESIGN §13). Single end-of-tick evaluation."""
+"""Births, deaths, replacement and inheritance (DESIGN §13). Single end-of-tick evaluation.
+
+Memory-policy variation at birth (MEMORY_EVOLUTION §5.7): a child starts from its parent's policy verbatim
+(``inherited``, :meth:`void.memory.policy.PolicyStore.init_for`). With ``memory.policy.mutate_at_birth`` the kernel then
+writes one small random change of it as the child's second version (``mutated``): drop, duplicate or move one practice
+line (:func:`void.memory.policy.mutate_text`), drawn from ``rng.stream("mutate", child_id)`` and announced with
+``POLICY_CHANGED`` (its payload names the operation) right after the birth. The option is built for scripted tiers only
+(the config refuses it otherwise), so the mutation is this deterministic rewrite rather than a paid model call, and
+nothing is billed. Founders, arrivals and fresh replacements have no parent and are never mutated. A child's first own
+edit of the inherited policy (``adapted``) is labelled by the nightly step (:mod:`void.sim.maintenance`), where it
+happens.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +24,7 @@ from void.economy.wallet import Wallet
 from void.events import Event, EventBus, Kind
 from void.ids import IdFactory
 from void.memory.notes import Provenance
-from void.memory.policy import PolicyStore
+from void.memory.policy import PolicyStore, mutate_text
 from void.memory.store import MemoryStore
 from void.rng import RNG
 from void.types import ActionOutcome, AgentStatus, Observation, Vec2
@@ -161,7 +172,23 @@ class Lifecycle:
         self.registry.update(rec.agent_id, weather_nudge_used=parent.weather_nudge_used)
         self.bus.emit(Event(tick, day, Kind.BIRTH, {"agent_id": rec.agent_id, "name": rec.name, "tier": rec.model_tier, "generation": rec.generation,
                                                   "parent_id": parent.agent_id, "kind": kind, "endowment_usd": micro_to_usd(funding[1])}, rec.agent_id))
+        self._mutate_policy(rec.agent_id, tick, day)
         return self.registry.get(rec.agent_id) or rec
+
+    def _mutate_policy(self, child_id: str, tick: int, day: int) -> None:
+        """Kernel mutation at birth (see the module docstring): only with ``memory.policy.mutate_at_birth``, only on a
+        policy the child has just inherited, and only when the change alters the text."""
+        if self.policy is None or not self.cfg.memory.policy.mutate_at_birth:
+            return
+        cur = self.policy.current(child_id)
+        if cur is None or cur.source != "inherited":
+            return
+        mutated = mutate_text(cur.text, self.rng.stream("mutate", child_id))
+        if mutated is None:
+            return
+        text, op = mutated
+        version = self.policy.set(child_id, text, tick, source="mutated")
+        self.bus.emit(Event(tick, day, Kind.POLICY_CHANGED, {**self.policy.event_payload(version), "mutation": op}, child_id))
 
     def create_offspring(self, parent: AgentRecord, name: str, endowment: int, tick: int, day: int, hold_min: int, *,
                          obs: Observation | None = None) -> ActionOutcome:

@@ -21,7 +21,8 @@ Rules the implementation keeps:
   balance after metering no longer covers its next decision call is flagged ``pending_bankrupt`` with cause
   ``maintenance``; the end of the first tick resolves it, as for any other cause.
 * **Scripted tiers never call a provider.** Their ``maintenance_strategy`` (``noop``, ``index_builder``,
-  ``hoarder``, ``decoy``, ``summarize``; :mod:`void.brain.maintenance_strategies`) produces the command batch
+  ``hoarder``, ``decoy``, ``summarize``, and the §6.13 baselines ``distill``, ``revert``, ``retire``;
+  :mod:`void.brain.maintenance_strategies`) produces the command batch
   deterministically from the run's RNG stream ``("maintain", agent_id, day)``, and synthetic usage (prompt and
   response tokens as the scripted brain estimates them, the system prompt as a cache write on the agent's
   first maintenance call and a cache read afterwards) is metered exactly like a decision call, so the cost
@@ -37,6 +38,40 @@ Rules the implementation keeps:
 * **Transactions.** Per agent: gate, build, call, meter (outside any transaction, the wallet insists), then one
   ``db.tx()`` for the commands, the call row and the events.
 * **Resume-safe**: the step records ``maintenance_day`` in ``world_kv`` so a restarted run never bills twice.
+* **The revert baseline's inputs.** From the third day on, the context carries the outcomes of the day before the
+  one that just ended (``previous_outcomes``) and, when the agent has two or more policy versions, the text of the
+  one before its current (``previous_policy_text``). Only ``revert`` reads them; they are not rendered.
+
+Practice transmission (MEMORY_EVOLUTION §5.7 "Adopt", §5.8 arm C, Appendix C item 5), only with ``memory.practices``
+and ``memory.policy`` on (:func:`~void.brain.decision.share_practice_enabled`); with it off the prompt, the batch, the
+tables and the events are exactly what they were:
+
+* **Suggestions in the prompt.** The suggestions the agent received since its last maintenance call (or since birth;
+  the newest :data:`MAX_SUGGESTIONS`, oldest first) are listed under "Suggestions received from neighbours" with their
+  sources' names and ids, each excerpt fenced in a code block, before the budget.
+* **Measured adoption.** After the batch, each pending excerpt is compared with the new policy text
+  (:func:`~void.culture.practices.excerpt_similarity`): it is adopted when the new text holds it at
+  ``memory.practices.adopt_similarity`` and the text before the batch did not (an excerpt suggested twice is credited
+  once, to its oldest suggestion). Each adoption is a ``practice_events`` row ``adopted`` (with the similarity) and a
+  ``PRACTICE_ADOPTED`` event (operator visibility: a measurement, not news); the batch's last policy version is
+  relabelled ``adopted`` with the first adoption's source (:meth:`~void.memory.policy.PolicyStore.relabel`), so its
+  ``POLICY_CHANGED`` events are emitted after the measurement, with the final labels. The answer's ``adopted_from`` is
+  logged (``llm_calls.extras`` and the ``MAINTENANCE`` payload, with the measured count) and never trusted: an
+  adoption event says whether the source was also self-reported.
+* **Persistence.** At each day start, before the day's calls, every adoption ``memory.practices.persist_days`` or more
+  old that is not yet settled becomes ``persisted`` when its receiver is alive and its policy still holds the excerpt
+  at the threshold, else ``dropped`` (reason ``removed`` or ``target_dead``), with the matching event.
+  ``practices_settled_through`` in ``world_kv`` (written with the rows) makes this resume-safe. Under
+  ``memory.selection.arm: C`` each persisted adoption then pays its source ``practice_royalty_usd`` from the research
+  pool (``Wallet.transfer``, both ledger rows of kind ``practice_royalty``, ``ref`` the persisted row's id), outside
+  any transaction, with a ``PRACTICE_ROYALTY`` event (operator visibility; ``paid`` false with a reason when the source
+  is dead, the royalty is zero or the pool cannot cover it). A royalty is paid at most once: a crash between the
+  settled rows and the payment loses it rather than paying twice.
+
+Lineage labels (§5.7 "Inherit and adapt"): a child's first own policy edit of the policy it inherited
+(:meth:`~void.memory.policy.PolicyStore.inherited_from`) is relabelled ``adapted`` (crediting the parent) before its
+``POLICY_CHANGED`` is emitted. The label is written only in worlds that turn a variation or transmission operator on
+(``memory.practices`` or ``memory.policy.mutate_at_birth``), so worlds recorded before keep every edit ``self_edit``.
 
 ``mode: optional`` (maintenance as an action the agent chooses) is out of scope for the thin slice and behaves
 like ``forced``.
@@ -53,22 +88,30 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from void.brain.base import BrainResult, Usage
-from void.brain.decision import _strictify, parse_lenient, sanitize_text
+from void.brain.decision import _strictify, parse_lenient, sanitize_text, share_practice_enabled
 from void.brain.maintenance_strategies import StrategyContext, nodes_from_notes, plan
-from void.brain.prompt import estimate_tokens, fence
-from void.config import micro_to_usd
-from void.events import Event, Kind
+from void.brain.prompt import code_fence, estimate_tokens, fence
+from void.config import micro_to_usd, usd_to_micro
+from void.culture.practices import PracticeLedger, excerpt_similarity
+from void.events import OPERATOR, Event, Kind
 from void.memory.commands import POLICY_PATH, MemoryCommand, virtual_path
 from void.memory.store import ENTITY_TAG, PROBE_TAG
+from void.types import AgentStatus
 
 if TYPE_CHECKING:
     from void.agents.models import AgentRecord
+    from void.memory.policy import PolicyVersion
     from void.sim.loop import Simulation
 
-__all__ = ["MaintenanceResponse", "MaintenanceReport", "Maintenance", "maintenance_system_prompt", "response_schema"]
+__all__ = ["MaintenanceResponse", "MaintenanceReport", "Maintenance", "maintenance_system_prompt", "response_schema",
+           "MAX_SUGGESTIONS", "PRACTICE_ROYALTY_KIND"]
 
 MAX_REFLECTION_CHARS = 600
 MAX_UNUSED_TITLES = 12       # retrieval diagnostics shown at F2
+MAX_SUGGESTIONS = 10         # pending practice suggestions shown (and measured) per maintenance call, newest kept
+PRACTICE_ROYALTY_KIND = "practice_royalty"  # ledger kind of both rows of an arm-C royalty (§5.8)
+RESEARCH_POOL = "research_pool"
+SETTLED_KEY = "practices_settled_through"  # world_kv: adoptions up to this tick are settled (persisted or dropped)
 _UNKNOWN_USAGE = ("timeout", "connection", "exception")  # error classes whose usage is unknown: the hold is charged
 
 
@@ -139,6 +182,12 @@ class Maintenance:
         self.cfg = sim.cfg.memory.maintenance
         self.last_report: MaintenanceReport | None = None
         self._schema: dict[str, Any] | None = None
+        # practice transmission (§5.7): suggestions in the prompt, measured adoption, persistence and arm-C royalties
+        self.practices_enabled = share_practice_enabled(sim.cfg)
+        self.practices = PracticeLedger(sim.db)
+        # the kernel's lineage labels of agent edits (adapted, adopted) only where a variation or transmission operator
+        # is on, so every world recorded before keeps its edits self_edit byte for byte
+        self.lineage_labels = self.practices_enabled or bool(sim.cfg.memory.policy.mutate_at_birth)
 
     @property
     def enabled(self) -> bool:
@@ -200,17 +249,44 @@ class Maintenance:
         hay = " ".join(haystack)
         return [t for t in retrieved if t.lower() not in hay][:MAX_UNUSED_TITLES]
 
+    def suggestions_for(self, agent_id: str) -> list[dict[str, Any]]:
+        """The practice suggestions ``agent_id`` received since its last maintenance call (since birth before its first),
+        the newest :data:`MAX_SUGGESTIONS`, oldest first, each with its source's name and balance (micro-dollars; 0 for
+        a source no longer in the registry). Empty unless practice transmission is on. The step runs before the first
+        tick's decisions, so a suggestion made on the tick of the last call came after it and is still pending."""
+        if not self.practices_enabled:
+            return []
+        row = self.sim.db.fetchone("SELECT MAX(tick) AS t FROM llm_calls WHERE agent_id=? AND purpose='maintain'", (agent_id,))
+        since = int(row["t"]) if row is not None and row["t"] is not None else 0
+        out: list[dict[str, Any]] = []
+        for r in self.practices.pending_for(agent_id, since)[-MAX_SUGGESTIONS:]:
+            src = self.sim.registry.get(r["source_agent_id"])
+            out.append({"event_id": r["event_id"], "tick": int(r["tick"]), "source_agent_id": r["source_agent_id"],
+                        "source_name": src.name if src is not None else r["source_agent_id"], "excerpt": r["excerpt"],
+                        "source_balance": self.sim.wallet.balance(src.agent_id) if src is not None else 0})
+        return out
+
     def context_for(self, rec: AgentRecord, day: int, tick: int) -> StrategyContext:
-        """The structured prompt pieces for ``rec`` at the start of ``day`` (about ``day - 1``)."""
+        """The structured prompt pieces for ``rec`` at the start of ``day`` (about ``day - 1``).
+
+        ``previous_outcomes`` (the outcomes of ``day - 2``) from the third day on and ``previous_policy_text`` (the
+        version before the current) when there are two or more versions feed the ``revert`` baseline; the suggestions,
+        the balance and the adoption threshold feed the practice take-up (both in
+        :mod:`void.brain.maintenance_strategies`)."""
         aid = rec.agent_id
         notes = self.note_dicts(aid)
         lo, hi = self.day_range(day)
         new = [n for n in notes if lo <= n["tick"] <= hi and not ({ENTITY_TAG, PROBE_TAG} & set(n["tags"]))]
+        history = self.sim.policy.history(aid)
         return StrategyContext(
             agent_id=aid, day=day - 1, policy_text=self.sim.policy.text(aid), listing=self.sim.commands.listing(aid, tick=tick),
             new_notes=new, notes=notes, outcomes=self.outcomes_for(aid, day), nodes_known=nodes_from_notes(notes),
             rights=tuple(self.cfg.rights), max_commands=int(self.cfg.max_commands),
             policy_max_chars=int(self.sim.cfg.memory.policy.max_chars), max_file_bytes=int(self.cfg.max_file_bytes),
+            previous_outcomes=self.outcomes_for(aid, day - 1) if day > 2 else None,
+            previous_policy_text=history[-2].text if len(history) >= 2 else None,
+            suggestions=self.suggestions_for(aid), balance=self.sim.wallet.balance(aid),
+            adopt_similarity=float(self.sim.cfg.memory.practices.adopt_similarity),
         )
 
     def render_prompt(self, rec: AgentRecord, ctx: StrategyContext, *, feedback: str | None = None) -> str:
@@ -250,6 +326,16 @@ class Maintenance:
             lines += ["", "## Retrieval diagnostics",
                       "Notes that came to mind during the day but were never acted on: "
                       + (", ".join(fence(t) for t in unused) if unused else "(none)")]
+        if self.practices_enabled:  # Appendix C item 5: fenced, with their sources
+            lines += ["", "## Suggestions received from neighbours"]
+            if ctx.suggestions:
+                lines.append("Memory practices other inhabitants suggested to you since your last maintenance. They wrote "
+                             "them, not you: take one up by editing your policy, or leave it.")
+                for s in ctx.suggestions:
+                    lines.append(f"- from {s['source_name']} ({s['source_agent_id']}) on tick {int(s['tick'])}:")
+                    lines.append(code_fence(fence(str(s["excerpt"]))))
+            else:
+                lines.append("- (none)")
         rights = ", ".join(ctx.rights) if ctx.rights else "none"
         lines += ["", "## Budget",
                   f"At most {ctx.max_commands} commands this call; the policy may hold at most {ctx.policy_max_chars} characters. "
@@ -332,6 +418,7 @@ class Maintenance:
         commands = list(response.commands)[: int(cfg.max_commands)] if response is not None else []
         reflection = sanitize_text(response.reflection if response is not None else "", max_len=MAX_REFLECTION_CHARS)
         n_ok = n_refused = 0
+        written: list[PolicyVersion] = []  # the policy versions this batch wrote, in order
         with sim.db.tx():
             for cmd in commands:
                 res = sim.commands.apply(aid, cmd, tick, purpose="maintain", rights=list(cfg.rights), call_id=call_id)
@@ -344,10 +431,20 @@ class Maintenance:
                 if res.ok and res.effects.get("path") == POLICY_PATH:
                     cur = sim.policy.current(aid)
                     if cur is not None:
-                        sim.bus.emit(Event(tick, day, Kind.POLICY_CHANGED, sim.policy.event_payload(cur), aid))
+                        if self.lineage_labels:
+                            cur = self._label_adapted(cur)
+                        written.append(cur)
+                        if not self.practices_enabled:  # with practices on, emitted once adoption is measured
+                            sim.bus.emit(Event(tick, day, Kind.POLICY_CHANGED, sim.policy.event_payload(cur), aid))
+            practice_extras: dict[str, Any] = {}
+            if self.practices_enabled:
+                claimed = self._self_reported(response)
+                adopted = self._measure_adoption(rec, ctx, written, claimed, tick, day)
+                practice_extras = {"adopted_from": claimed, "adopted": len(adopted)}
             logged = bool(sim.cfg.run.log_prompts)
             raw = result.raw_text or ""  # whole when prompts are logged (full response text per call, §7.4)
-            extras = {"strategy": strategy, "payer": payer, "commands": len(commands), "commands_ok": n_ok, "commands_refused": n_refused}
+            extras = {"strategy": strategy, "payer": payer, "commands": len(commands), "commands_ok": n_ok, "commands_refused": n_refused,
+                      **practice_extras}
             sim.db.execute(
                 "INSERT INTO llm_calls(call_id, tick, agent_id, purpose, tier, model, provider, input_tokens, output_tokens, cache_read_tokens, "
                 "cache_write_tokens, real_cost, world_cost, hold, estimated, latency_ms, stop_reason, request_id, error, raw_text, thought, extras, "
@@ -360,24 +457,133 @@ class Maintenance:
             sim.bus.emit(Event(tick, day, Kind.MAINTENANCE, {
                 "agent_id": aid, "tier": tier_name, "strategy": strategy, "model": result.model or tier.model, "payer": payer,
                 "commands": len(commands), "ok": n_ok, "refused": n_refused, "real_cost": meter.real_cost, "world_cost": meter.world_cost,
-                "estimated": meter.estimated, "error": result.error, "reflection": reflection[:200]}, aid))
+                "estimated": meter.estimated, "error": result.error, "reflection": reflection[:200], **practice_extras}, aid))
         report.commands_ok += n_ok
         report.commands_refused += n_refused
         if payer == aid and (meter.overrun or meter.balance_after < sim.hold_min_for().get(tier_name, 0)):
             sim.lifecycle.pending_bankrupt[aid] = "maintenance"  # cannot afford its next decision: resolved at the end of the tick
 
+    # --- lineage and practice transmission (§5.7, §5.8 arm C) ----------------------------------------------------------
+    def _label_adapted(self, version: PolicyVersion) -> PolicyVersion:
+        """``version`` relabelled ``adapted`` (crediting the parent) when it is the agent's first own edit of the policy
+        it inherited; otherwise unchanged. Called inside the batch's transaction, before its ``POLICY_CHANGED``."""
+        if version.source != "self_edit":
+            return version
+        parent = self.sim.policy.inherited_from(version.agent_id, version.version)
+        if parent is None:
+            return version
+        return self.sim.policy.relabel(version.agent_id, version.version, source="adapted", source_agent_id=parent)
+
+    @staticmethod
+    def _self_reported(response: MaintenanceResponse | None) -> list[str | None]:
+        """The answer's ``adopted_from`` as logged: sanitized, one line each, never used for scoring."""
+        if response is None:
+            return []
+        return [None if a is None else sanitize_text(str(a), single_line=True, max_len=40) for a in response.adopted_from]
+
+    def _measure_adoption(self, rec: AgentRecord, ctx: StrategyContext, written: list[PolicyVersion], claimed: list[str | None],
+                          tick: int, day: int) -> list[dict[str, Any]]:
+        """Measure which pending suggestions this batch took up (see the module docstring), record them, relabel the
+        batch's last version ``adopted`` and emit the deferred ``POLICY_CHANGED`` events, then the ``PRACTICE_ADOPTED``
+        ones. Inside the batch's transaction. Returns the adopted suggestions with their similarity."""
+        sim, aid = self.sim, rec.agent_id
+        threshold = float(sim.cfg.memory.practices.adopt_similarity)
+        adopted: list[dict[str, Any]] = []
+        if written and ctx.suggestions:
+            before, after = ctx.policy_text or "", written[-1].text
+            seen: set[str] = set()
+            for s in ctx.suggestions:
+                excerpt = str(s["excerpt"])
+                if excerpt in seen or excerpt_similarity(excerpt, before) >= threshold:
+                    continue
+                score = excerpt_similarity(excerpt, after)
+                if score >= threshold:
+                    seen.add(excerpt)
+                    adopted.append({**s, "similarity": score})
+            if adopted:
+                last = written[-1]
+                written[-1] = sim.policy.relabel(aid, last.version, source="adopted", source_agent_id=adopted[0]["source_agent_id"])
+        for version in written:
+            sim.bus.emit(Event(tick, day, Kind.POLICY_CHANGED, sim.policy.event_payload(version), aid))
+        version_no = written[-1].version if written else None
+        for a in adopted:
+            event_id = self.practices.adopt(tick, a["source_agent_id"], aid, a["excerpt"], a["similarity"])
+            sim.bus.emit(Event(tick, day, Kind.PRACTICE_ADOPTED, {
+                "event_id": event_id, "suggestion_id": a["event_id"], "suggested_tick": a["tick"],
+                "source_agent_id": a["source_agent_id"], "target_agent_id": aid, "similarity": a["similarity"],
+                "version": version_no, "self_reported": a["source_agent_id"] in claimed}, aid, visibility=OPERATOR))
+        return adopted
+
+    def settle_practices(self, day: int, tick: int) -> list[str]:
+        """Settle every adoption ``persist_days`` or more old that is not settled yet (see the module docstring): one
+        ``persisted`` or ``dropped`` row and event each, in the order adopted, committed with ``practices_settled_through``;
+        then, under arm C, each persisted one pays its source outside the transaction. Returns the new rows' ids."""
+        if not self.practices_enabled:
+            return []
+        sim = self.sim
+        span = int(sim.cfg.memory.practices.persist_days) * int(sim.cfg.run.ticks_per_day)
+        through = int(tick) - span
+        after = int(sim.db.kv_get(SETTLED_KEY, 0))
+        if through <= after:
+            return []
+        threshold = float(sim.cfg.memory.practices.adopt_similarity)
+        ids: list[str] = []
+        royalties: list[tuple[str, dict[str, Any]]] = []
+        with sim.db.tx():
+            for r in self.practices.adopted_between(after, through):
+                target = sim.registry.get(r["target_agent_id"])
+                alive = target is not None and target.status == AgentStatus.ALIVE
+                score = excerpt_similarity(r["excerpt"], sim.policy.text(r["target_agent_id"]))
+                kept = alive and score >= threshold
+                event_id = self.practices.settle(kept, tick, r["source_agent_id"], r["target_agent_id"], r["excerpt"], score)
+                payload: dict[str, Any] = {"event_id": event_id, "adopted_event_id": r["event_id"], "adopted_tick": int(r["tick"]),
+                                           "source_agent_id": r["source_agent_id"], "target_agent_id": r["target_agent_id"],
+                                           "similarity": score}
+                if not kept:
+                    payload["reason"] = "removed" if alive else "target_dead"
+                sim.bus.emit(Event(tick, day, Kind.PRACTICE_PERSISTED if kept else Kind.PRACTICE_DROPPED, payload,
+                                   r["target_agent_id"], visibility=OPERATOR))
+                ids.append(event_id)
+                if kept and sim.cfg.memory.selection.arm == "C":
+                    royalties.append((event_id, r))
+            sim.db.kv_set(SETTLED_KEY, through)
+        for event_id, r in royalties:
+            self._pay_royalty(event_id, r, tick, day)
+        return ids
+
+    def _pay_royalty(self, event_id: str, row: dict[str, Any], tick: int, day: int) -> bool:
+        """Arm C: pay a persisted adoption's source ``practice_royalty_usd`` from the research pool, outside any
+        transaction (the settled rows commit first). Emits ``PRACTICE_ROYALTY`` either way."""
+        sim = self.sim
+        if sim.db._depth != 0:
+            raise RuntimeError("practice royalties are paid outside a transaction (the settled rows commit first)")
+        amount = usd_to_micro(float(sim.cfg.memory.selection.practice_royalty_usd))
+        source_id = row["source_agent_id"]
+        src = sim.registry.get(source_id)
+        alive = src is not None and src.status == AgentStatus.ALIVE
+        paid = amount > 0 and alive and sim.wallet.transfer(RESEARCH_POOL, source_id, tick, amount, kind_out=PRACTICE_ROYALTY_KIND,
+                                                            kind_in=PRACTICE_ROYALTY_KIND, ref=event_id)
+        payload: dict[str, Any] = {"event_id": event_id, "source_agent_id": source_id, "target_agent_id": row["target_agent_id"],
+                                   "amount_usd": micro_to_usd(amount) if paid else 0.0, "paid": bool(paid)}
+        if not paid:
+            payload["reason"] = "zero_royalty" if amount <= 0 else "source_dead" if not alive else "research_pool_short"
+        sim.bus.emit(Event(tick, day, Kind.PRACTICE_ROYALTY, payload, source_id, visibility=OPERATOR))
+        return bool(paid)
+
     async def run_day(self, day: int, tick: int) -> MaintenanceReport | None:
         """Maintain every living agent's memory at the start of ``day`` (about the day that just ended).
 
-        Returns None when disabled, on the first day, or when ``day`` was already maintained (resume). Agents are
-        visited in ``agent_id`` order; each is gated, called, metered and committed on its own (see the module
-        docstring), and ``maintenance_day`` is recorded once the whole day is done.
+        Returns None when disabled, on the first day, or when ``day`` was already maintained (resume). With practice
+        transmission on, adoptions old enough are settled first (:meth:`settle_practices`). Agents are visited in
+        ``agent_id`` order; each is gated, called, metered and committed on its own (see the module docstring), and
+        ``maintenance_day`` is recorded once the whole day is done.
         """
         if not self.enabled or day <= 1:
             return None
         done = self.sim.db.kv_get("maintenance_day")
         if done is not None and int(done) >= day:
             return None
+        self.settle_practices(day, tick)
         report = MaintenanceReport(day=day, tick=tick)
         for rec in sorted(self.sim.registry.alive(), key=lambda a: a.agent_id):
             report.agents += 1

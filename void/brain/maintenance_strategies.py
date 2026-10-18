@@ -38,9 +38,19 @@ The published-mechanism baselines of §6.13 row 5 (scripted, so they cost what a
   the day before's (``previous_outcomes``), the policy is restored to its previous version's text
   (``previous_policy_text``) with one policy edit; otherwise nothing. Without both fields, or without an earlier
   version, it does nothing: it is a guard, and a world where nothing else edits the policy gives it nothing to undo.
-  The nightly step (:meth:`void.sim.maintenance.Maintenance.context_for`) does not fill the two fields yet.
+  The nightly step (:meth:`void.sim.maintenance.Maintenance.context_for`) fills both from the third day on.
 * ``retire`` (Ratchet's retirement plus cap): the oldest notes beyond :data:`RETIRE_CAP` are deleted, oldest first;
   index notes, kernel anchors and ``self`` are never retired or counted.
+
+Practice take-up (MEMORY_EVOLUTION §5.7 "Adopt"), on top of every strategy: with practice transmission on, the context
+carries the suggestions the agent received since its last maintenance (``suggestions``, oldest first, each with its
+source's balance). A strategy holding the ``policy`` right then appends to the policy the excerpt of the first
+suggestion whose source is richer than the agent (strictly), that the policy does not already hold
+(:func:`void.culture.practices.excerpt_similarity` below ``adopt_similarity``) and that fits ``policy_max_chars``: one
+``insert`` after the policy's last line, placed *before* the strategy's own commands so a whole-policy
+``str_replace`` (decoy, revert) still finds its text and keeps the appended line. ``adopted_from`` self-reports that
+source. Rich is a scripted proxy for "worth imitating"; the kernel measures the adoption independently. Without
+suggestions (practice transmission off, or nothing received) the batch is the strategy's alone, byte for byte.
 
 Everything is deterministic given the context and the ``random.Random`` the caller derives from the run's RNG
 (``sim.rng.stream("maintain", agent_id, day)``): no clock, no set iteration, no module state. The strategies
@@ -61,6 +71,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from void.config import MaintenanceStrategy
+from void.culture.practices import excerpt_similarity
 from void.ids import slugify
 from void.memory.commands import (
     INDEX_DIR,
@@ -77,7 +88,7 @@ if TYPE_CHECKING:
     from void.sim.maintenance import MaintenanceResponse
 
 __all__ = ["StrategyContext", "plan", "nodes_from_notes", "listed_files", "index_file_name", "index_body",
-           "title_stem", "format_node_fact", "near_duplicate_groups", "DECOY_VOCABULARY", "STRATEGIES",
+           "title_stem", "format_node_fact", "near_duplicate_groups", "take_up", "DECOY_VOCABULARY", "STRATEGIES",
            "DISTILL_COSINE", "RETIRE_CAP"]
 
 # Copied from void.brain.scripted (``_NODE_POS_RE`` / ``_BUCKET_RE``): "[[Node n3]] at (12, -5) ... rich".
@@ -140,6 +151,11 @@ class StrategyContext:
     ``previous_outcomes`` is the ``outcomes`` dict of the day before ``day`` (the feedback the previous night's
     call saw) and ``previous_policy_text`` the text of the policy version before the current one; both are None
     when unknown or when there is none, and only ``revert`` reads them.
+
+    ``suggestions`` are the practices neighbours suggested since the agent's last maintenance (empty unless practice
+    transmission is on), oldest first, each a dict with ``event_id``, ``tick``, ``source_agent_id``, ``source_name``,
+    ``excerpt`` and ``source_balance`` (micro-dollars, 0 for a dead source); ``balance`` is the agent's own and
+    ``adopt_similarity`` the kernel's adoption threshold. Only the take-up rule of :func:`plan` reads them.
     """
 
     agent_id: str
@@ -156,6 +172,9 @@ class StrategyContext:
     max_file_bytes: int = 8000
     previous_outcomes: dict[str, Any] | None = None
     previous_policy_text: str | None = None
+    suggestions: list[dict[str, Any]] = field(default_factory=list)
+    balance: int = 0
+    adopt_similarity: float = 0.6
 
 
 Plan = tuple[str, list[MemoryCommand]]
@@ -584,11 +603,31 @@ STRATEGIES: dict[str, Strategy] = {
 }
 
 
+def take_up(ctx: StrategyContext) -> tuple[dict[str, Any], MemoryCommand] | None:
+    """The scripted take-up rule (see the module docstring): the suggestion a planted strategy adopts tonight and the
+    ``insert`` that appends its excerpt to the policy, or None. Draws no randomness."""
+    text = ctx.policy_text
+    if not ctx.suggestions or text is None or "policy" not in ctx.rights:
+        return None
+    for s in ctx.suggestions:
+        excerpt = str(s.get("excerpt", "")).strip()
+        if not excerpt or int(s.get("source_balance", 0)) <= int(ctx.balance):
+            continue
+        if excerpt_similarity(excerpt, text) >= float(ctx.adopt_similarity):
+            continue  # it already holds this practice
+        if len(text) + (1 if text else 0) + len(excerpt) > int(ctx.policy_max_chars):
+            continue
+        at = len(text.split("\n")) if text else 0
+        return s, MemoryCommand(command="insert", path=POLICY_PATH, insert_line=at, insert_text=excerpt)
+    return None
+
+
 def plan(strategy: MaintenanceStrategy, ctx: StrategyContext, rng: random.Random) -> MaintenanceResponse:
     """The command batch ``strategy`` issues for ``ctx``, as the structured response a model would return.
 
     Deterministic given ``ctx`` and ``rng``. The batch is cut to ``ctx.max_commands`` and the schema's cap, the
-    reflection names the strategy (it is logged, never shown to an agent), ``adopted_from`` is empty.
+    reflection names the strategy (it is logged, never shown to an agent), ``adopted_from`` is empty unless the take-up
+    rule (:func:`take_up`) appended a suggestion, whose source it then names (self-reported, never used for scoring).
     """
     from void.sim.maintenance import MAX_REFLECTION_CHARS, MaintenanceResponse
 
@@ -596,5 +635,12 @@ def plan(strategy: MaintenanceStrategy, ctx: StrategyContext, rng: random.Random
     if fn is None:
         raise ValueError(f"unknown maintenance strategy {strategy!r}")
     reflection, commands = fn(ctx, rng)
+    adopted_from: list[str | None] = []
+    took = take_up(ctx)
+    if took is not None:
+        suggestion, cmd = took
+        commands = [cmd, *commands]
+        reflection = f"{reflection}; took up a practice {suggestion.get('source_name', '')} suggested on tick {suggestion.get('tick')}"
+        adopted_from = [str(suggestion["source_agent_id"])]
     limit = max(0, min(int(ctx.max_commands), MAX_BATCH))
-    return MaintenanceResponse(reflection=reflection[:MAX_REFLECTION_CHARS], commands=commands[:limit], adopted_from=[])
+    return MaintenanceResponse(reflection=reflection[:MAX_REFLECTION_CHARS], commands=commands[:limit], adopted_from=adopted_from)
