@@ -134,11 +134,8 @@ class HubRun:
 @pytest.fixture(scope="module")
 def hub_run(make_sim) -> HubRun:
     """A three-day gate-off scripted run fanned out through the real Hub to one Subscriber (the queue the /ws sender
-    drains). The client side keeps a pushed registry only when its rev is newer, as store.applyGadgets does. The world
-    keeps the pre-7.2 scripted rules: these tests need gadget uses on ticks with no new verification, which that world
-    has and the 7.2 world (births, other gadget parameters) does not reliably have; they test the wire, not the brain."""
-    sim = make_sim("gadgets_wire_hub", deep_merge(NO_PROVIDER_TIERS, {"run": {"days": 3}, "sandbox": {"gate_enabled": False},
-                                                                    "population": {"scripted_rules": "pre_7_2"}}))
+    drains). The client side keeps a pushed registry only when its rev is newer, as store.applyGadgets does."""
+    sim = make_sim("gadgets_wire_hub", deep_merge(NO_PROVIDER_TIERS, {"run": {"days": 3}, "sandbox": {"gate_enabled": False}}))
     out = HubRun(sim)
 
     async def drive() -> None:

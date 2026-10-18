@@ -213,8 +213,10 @@ class GadgetGate:
         value = max(0.0, min(raw, expected, cap))
         expires = tick + self.cfg.world.effect_ticks
         current = self.agents.get(agent_id)
-        if current is not None and current.effects.get(kind, 0.0) >= value:
-            value_applied = current.effects[kind]  # non-stacking, max wins
+        held = current.effects.get(kind, 0.0) if current is not None else None
+        if held is not None and held >= value:
+            # non-stacking, max wins; a use that realizes 0 for a kind the agent does not hold writes no effect row
+            value_applied = held
         else:
             self.agents.set_effect(agent_id, kind, value, expires)
             value_applied = value
