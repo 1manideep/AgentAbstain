@@ -22,9 +22,16 @@ Design rules this module keeps (§5.4, §5.9):
   ``str_replace`` / ``insert`` / ``delete`` / ``rename`` on notes and the index directory. ``view`` is
   always allowed. ``self.md`` is read-only here (``revise_self`` stays the way to change it). Entity
   stubs and probe notes are kernel anchors: their bodies may be edited, never deleted or renamed.
-* **Every command is audited** in ``memory_commands`` with its arguments, outcome, result hash and byte
-  delta, and every file the kernel writes is recorded in ``note_manifest`` with a content hash (the
-  store does that itself; :meth:`MemoryCommands.record_manifest` is a thin wrapper).
+* **The per-tick cheap path** (§5.4): a decision's ``remember`` and ``revise_self`` ops go through
+  :meth:`MemoryCommands.tick_remember` (a ``create``) and :meth:`MemoryCommands.tick_revise_self` (a
+  ``str_replace`` of ``self.md``). They delegate to ``store.remember`` / ``store.revise_self`` unchanged (same
+  note ids, titles, bytes and provenance), but the vault limits apply and each writes one audit row with
+  purpose ``tick``. Those rows take a derived id (tick, agent, sequence) instead of one from the run's id
+  counter, so routing the cheap path through here shifts no later id (gadget placement, child agents).
+* **Every command is audited** in ``memory_commands`` with its arguments (whole, so the rows replay into an
+  empty vault), outcome, result hash and byte delta, and every file the kernel writes is recorded in
+  ``note_manifest`` with a content hash (the store does that itself; :meth:`MemoryCommands.record_manifest`
+  is a thin wrapper).
 * **Limits** come from :class:`~void.config.MaintenanceConfig` (files per vault, bytes per file and per
   vault) and are enforced here, not by callers; the policy's own limits (characters, edits per day) come
   from the policy store's config.
@@ -36,6 +43,7 @@ and angle brackets neutralised); whoever renders a result for a model fences it.
 
 from __future__ import annotations
 
+import functools
 import json
 import posixpath
 import re
@@ -51,7 +59,14 @@ from void.brain.decision import sanitize_text
 from void.config import MaintenanceConfig, MaintenanceRight
 from void.db import Database
 from void.ids import IdFactory
-from void.memory.notes import DEFAULT_TITLE, Note, normalise_title, split_frontmatter
+from void.memory.notes import (
+    DEFAULT_TITLE,
+    Note,
+    Provenance,
+    add_related_links,
+    normalise_title,
+    split_frontmatter,
+)
 from void.memory.policy import PolicyStore
 from void.memory.store import ENTITY_TAG, PROBE_TAG, MemoryStore, clean_title, content_hash
 
@@ -109,12 +124,10 @@ class MemoryCommand(BaseModel):
         return self
 
     def args(self) -> dict[str, Any]:
-        """The arguments as stored in ``memory_commands.args`` (nulls dropped, long text truncated)."""
+        """The arguments as stored in ``memory_commands.args``: nulls dropped, text kept whole (each field is
+        bounded by ``MAX_FILE_TEXT``), so replaying the rows into an empty vault reproduces its files."""
         out = self.model_dump(exclude_none=True)
         out.pop("command", None)
-        for k in ("file_text", "old_str", "new_str", "insert_text"):
-            if k in out and len(out[k]) > 400:
-                out[k] = out[k][:400] + "…"
         return out
 
 
@@ -223,8 +236,9 @@ class MemoryCommands:
     """Apply validated commands to one agent's vault through the store, audit each one, keep the manifest.
 
     ``rights`` is the set of :data:`~void.config.MaintenanceRight` values the caller holds for this batch;
-    ``purpose`` labels the audit row (``maintain`` for the nightly step, ``tick`` for per-tick ops routed
-    here later, ``recall`` for the C3 tool, ``kernel`` for kernel-initiated writes).
+    ``purpose`` labels the audit row (``maintain`` for the nightly step, ``tick`` for the per-tick ops of
+    :meth:`tick_remember` / :meth:`tick_revise_self`, ``recall`` for the C3 tool, ``kernel`` for
+    kernel-initiated writes).
     """
 
     def __init__(self, db: Database, store: MemoryStore, cfg: MaintenanceConfig, ids: IdFactory,
@@ -311,6 +325,67 @@ class MemoryCommands:
                 res = CommandResult(False, str(e), result_hash=self._hash_at(agent_id, cmd.path or cmd.old_path))
         self._audit(agent_id, cmd, tick, purpose, res, call_id)
         return res
+
+    # --- the per-tick cheap path (§5.4) -------------------------------------------------------------
+    def tick_remember(self, agent_id: str, tick: int, text: str, *, title: str | None = None, tags: Sequence[str] = (),
+                      links_to: Sequence[str] = (), channel: str = "observed", provenance: Provenance | None = None,
+                      call_id: str | None = None) -> tuple[Note | None, str | None]:
+        """A decision's ``remember`` op as a thin wrapper over ``create``; returns ``(note, None)`` or ``(None, refusal)``.
+
+        The vault's file count and byte total are checked as :meth:`apply` counts them for a ``create`` (every
+        live note is a file; the new note weighs its text plus the requested links). On success the note is
+        written by ``store.remember`` with exactly the arguments the loop used to pass (auto-linking included),
+        so note ids, titles, file bytes and provenance are what they were before this wrapper existed. Either
+        way one ``memory_commands`` row (purpose ``tick``, command ``create``) records the arguments whole; a
+        refusal writes no note and the caller emits the ``MEMORY_COMMAND`` event.
+        """
+        tags, links_to = list(tags), list(links_to)
+        args: dict[str, Any] = {"file_text": text, "tags": tags, "links_to": links_to, "channel": channel}
+        if title is not None:
+            args["title"] = title
+        if provenance is not None:
+            args["provenance"] = provenance.to_mapping()
+        body, _ = add_related_links(text[: int(self.store.cfg.note_max_chars)], links_to)
+        try:
+            self._check_limits(self._entries(agent_id), new_bytes=_nbytes(body), new_file=True, file_bytes=False)
+        except _Refusal as e:
+            self._audit_tick(agent_id, tick, "create", args, CommandResult(False, str(e)), call_id)
+            return None, str(e)
+        note = self.store.remember(agent_id, tick, text, title=title, links_to=links_to, tags=tags, channel=channel,
+                                   provenance=provenance)
+        path = virtual_path(note)
+        res = CommandResult(True, f"File created successfully at: {path}", bytes_delta=_nbytes(note.body),
+                            result_hash=self._note_hash(note), note_id=note.note_id, effects={"path": path, "title": note.title})
+        self._audit_tick(agent_id, tick, "create", {**args, "path": path}, res, call_id)
+        return note, None
+
+    def tick_revise_self(self, agent_id: str, tick: int, text: str, *, call_id: str | None = None,
+                         ) -> tuple[tuple[int, str] | None, str | None]:
+        """A decision's ``revise_self`` op as a ``str_replace`` of ``self.md``; returns ``((version, summary), None)``
+        or ``(None, refusal)``.
+
+        The new summary (capped at ``self_max_words`` as the store caps it) counts toward the vault's bytes on
+        top of the notes, as a ``create`` counts them; ``self.md`` is a new file only before its first version.
+        The write is ``store.revise_self`` unchanged; the audit row (purpose ``tick``) holds the old summary as
+        ``old_str`` and the op's text whole as ``new_str``.
+        """
+        vault = self.store.vault_for(agent_id)
+        exists = vault.self_path.is_file()
+        old = self.store.get_self(agent_id) if exists else ""
+        summary = " ".join(text.split()[: int(self.store.cfg.self_max_words)])
+        args: dict[str, Any] = {"path": SELF_PATH, "old_str": old, "new_str": text}
+        try:
+            self._check_limits(self._entries(agent_id), new_bytes=_nbytes(summary), new_file=not exists, file_bytes=False)
+        except _Refusal as e:
+            res = CommandResult(False, str(e), result_hash=self._hash_of(agent_id, resolve_path(SELF_PATH), None))
+            self._audit_tick(agent_id, tick, "str_replace", args, res, call_id)
+            return None, str(e)
+        version, written = self.store.revise_self(agent_id, tick, text)
+        res = CommandResult(True, SUCCESS_EDITED, bytes_delta=_nbytes(written) - _nbytes(old),
+                            result_hash=self._hash_of(agent_id, resolve_path(SELF_PATH), None),
+                            effects={"path": SELF_PATH, "version": version})
+        self._audit_tick(agent_id, tick, "str_replace", args, res, call_id)
+        return (version, written), None
 
     def _dispatch(self, agent_id: str, cmd: MemoryCommand, tick: int) -> CommandResult:
         handler = {
@@ -500,10 +575,13 @@ class MemoryCommands:
         except ValueError as e:
             raise _Refusal(str(e)) from e
 
-    def _check_limits(self, entries: list[_Entry], *, new_bytes: int, old_bytes: int = 0, new_file: bool = False) -> None:
+    def _check_limits(self, entries: list[_Entry], *, new_bytes: int, old_bytes: int = 0, new_file: bool = False,
+                      file_bytes: bool = True) -> None:
+        """Refuse a write that would break the vault limits. ``file_bytes`` False skips the per-file cap (the per-tick
+        path, whose notes are already capped by ``memory.note_max_chars`` and ``self_max_words``)."""
         if new_file and len(entries) >= self.cfg.max_files:
             raise _Refusal(f"your vault already holds {self.cfg.max_files} files; delete one first")
-        if new_bytes > self.cfg.max_file_bytes:
+        if file_bytes and new_bytes > self.cfg.max_file_bytes:
             raise _Refusal(f"the file would be {new_bytes} bytes; the limit is {self.cfg.max_file_bytes}")
         total = sum(e.size for e in entries) - old_bytes + new_bytes
         if total > self.cfg.max_vault_bytes:
@@ -584,11 +662,23 @@ class MemoryCommands:
 
     # --- audit and manifest -------------------------------------------------------------------------
     def _audit(self, agent_id: str, cmd: MemoryCommand, tick: int, purpose: str, res: CommandResult, call_id: str | None) -> str:
-        cmd_id = self.ids.new("mc")
+        return self._insert_audit(self.ids.new("mc"), agent_id, tick, purpose, cmd.command, cmd.args(), res, call_id)
+
+    def _audit_tick(self, agent_id: str, tick: int, command: str, args: dict[str, Any], res: CommandResult,
+                    call_id: str | None) -> str:
+        """The audit row of a per-tick op. Its id is derived from (tick, agent, sequence within the tick), not drawn
+        from the run's id counter, so the cheap path leaves every other id of the run where it was."""
+        row = self.db.fetchone("SELECT COUNT(*) AS n FROM memory_commands WHERE agent_id=? AND tick=? AND purpose='tick'",
+                               (agent_id, int(tick)))
+        seq = (int(row["n"]) if row is not None else 0) + 1
+        return self._insert_audit(f"mc_t{int(tick):08d}_{agent_id}_{seq}", agent_id, tick, "tick", command, args, res, call_id)
+
+    def _insert_audit(self, cmd_id: str, agent_id: str, tick: int, purpose: str, command: str, args: dict[str, Any],
+                      res: CommandResult, call_id: str | None) -> str:
         self.db.execute(
             "INSERT INTO memory_commands(cmd_id, tick, agent_id, purpose, command, args, ok, message, result_hash, bytes_delta, call_id) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            (cmd_id, int(tick), agent_id, purpose, cmd.command, json.dumps(cmd.args(), sort_keys=True), int(res.ok),
+            (cmd_id, int(tick), agent_id, purpose, command, json.dumps(args, sort_keys=True), int(res.ok),
              res.message[:400], res.result_hash, int(res.bytes_delta), call_id),
         )
         return cmd_id
@@ -625,9 +715,17 @@ def _nbytes(text: str) -> int:
 
 def _body_bytes(path: Path) -> int:
     try:
-        _, rest = split_frontmatter(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
     except OSError:
         return 0
+    return _text_body_bytes(text)
+
+
+@functools.lru_cache(maxsize=4096)
+def _text_body_bytes(text: str) -> int:
+    """Body bytes of a vault file's text, memoized by the text: the limits read every file of a vault on each write
+    (the per-tick path too), and parsing each file's YAML frontmatter again every time dominated a run's cost."""
+    _, rest = split_frontmatter(text)
     return _nbytes(rest[:-1] if rest.endswith("\n") else rest)
 
 

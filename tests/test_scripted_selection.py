@@ -316,7 +316,9 @@ BEFORE_7_2 = {
     "amnesic_fog": {"config_hash": "fb105920e6b0993e29971b43cf9f1c984343500dcb33fa8178b837499498c47d",
                     "metrics": "e26476ceec9018344294c550a42a3c40e45b3b825106081920b882aed01cc72f",
                     "events": "75e82ce6cb6f8ee827b7293a303f35a15829efc68c589294df1420c6f3686294",
-                    "calls": "f266313eec9dc6d017a7b03951e90880d8ad5943d9958f0f1d69ce93233d7da1",
+                    # full response text under run.log_prompts (the memory-audit item): one 25953-character scripted
+                    # gadget proposal is now stored whole; cut back to 4000 characters it gives f266313e... as before
+                    "calls": "b1a777debe18bfcaab06321b2cbdbfcdeddbf965a6a809acc30268eb72553cbb",
                     "ledger": "61b2acd093d556e97364681d40ca452c4b623a9508cab9b1959579be5ff77905"},
 }
 

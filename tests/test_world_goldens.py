@@ -69,6 +69,10 @@ NO_CHILD_PROVIDERS = {"population": {"tier_mutation_prob": 0.0}, "run": {"days":
 # purely additive: removing the new keys from the new rows gives back the old rows exactly; nothing else moved.
 # The DESIGN §7.2 scripted brain then moved every digest (births in both worlds); its metrics digests were recorded
 # on top of the added keys, and stripping those keys from these rows gives back the §7.2 rows recorded without them.
+# The amnesic arm's "calls" digest also moved when decision responses stopped being cut at 4000 characters under
+# run.log_prompts (full response text per call, MEMORY_EVOLUTION §7.4); cutting every raw_text back to 4000
+# characters gives the digest recorded before that change exactly. The base world has no response over 4000
+# characters, so its "calls" digest held.
 
 BASE_GOLDEN = {
     "status": "completed",
