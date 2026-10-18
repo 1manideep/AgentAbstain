@@ -1,0 +1,32 @@
+# exp_mem_e4, arm flat_tariff: arm selfedit with the size-dependent tariff removed (MEMORY_EVOLUTION §6.6, the Energy
+# Society control in §6.13 row 9), so every rung pays the same in-world price for a call it is shown the same prompt
+# for, and the real spend is unchanged. It separates "smarter" from "pays more to think".
+#
+# Why it is expressed through the equalized prices: compare requires economy.world_pricing: equalized in every exp_mem
+# arm, and the config has no per-call price, so the flat tariff cannot be a pricing mode of its own. It is the
+# declared IVs economy.equalized_price_*: output (thinking included) is free in-world, and fresh input, cache reads
+# and cache writes cost the same, so a call's in-world price is its prompt's length times one price, whatever the
+# rung, however much it thinks or writes, and whether or not its provider cached the prefix. Real cost (the caps and
+# the live budget) is metered at each tier's own prices, as in every arm.
+#
+# The input price, $6 per million tokens, keeps the money that leaves the world about the same as in arm selfedit
+# `[estimate]`. Under the assumptions of exp_mem_e4_base.yaml (a 2.5k-token prompt with a 1.2k-token cached system
+# prompt, 250 visible output tokens, half the thinking budget) E1's prices charge a genius decision about $0.031, a
+# sharp one $0.021 and the others $0.010, a roster mean of $0.0145, and $0.0145 / 2.5k tokens is about $5.8 per
+# million, rounded to 6. Recalibrate it before the paid run from a pilot of arm selfedit: the total
+# llm_calls.world_cost of its decide calls divided by their total input + cache-read + cache-write tokens. The rule
+# is sensitive to how much of the prompt is cached (on the scripted mirror it gives about $3, see
+# exp_mem_e4s_flat_tariff.yaml). Keep the price at $4 or more, or VoidConfig.warnings() flags the arm.
+# What an agent writes still costs it later, when the note or the policy is retrieved into a prompt. A maintenance
+# batch is output too, so in this arm the nightly call costs only its prompt (on the mirror about 60% of what it costs
+# in arm selfedit).
+extends: exp_mem_e4_selfedit.yaml
+run:
+  name: exp_mem_e4_flat_tariff
+economy:
+  equalized_price_in_per_mtok: 6.0
+  equalized_price_out_per_mtok: 0.0
+  equalized_price_cache_read_per_mtok: 6.0
+  equalized_price_cache_write_per_mtok: 6.0
+experiment:
+  arm: flat_tariff

@@ -1,0 +1,106 @@
+# E4 shared world (docs/research/MEMORY_EVOLUTION.md §6.6): who benefits from self-directed memory? The capability
+# ladder of exp_ladder on base.yaml's five live rungs, smartest first [genius, sharp, average, slow, dim]: ten agents
+# with no tier are placed on it by a normal distribution, 1/2/4/2/1 (void.intelligence; the placement is a function
+# of run.seed, so every arm of a seed puts the same agents on the same rungs), crossed with the memory condition.
+# The world is E1's (live_mem_e1_base.yaml): fog (view radius 12), claim feedback 0.5, 10 days x 24 ticks, observe
+# mode, equalized pricing at E1's prices, the audit exam two days back paid by the research pool. No tier mutation,
+# so a child keeps its parent's rung and every rung keeps its own lineage.
+# The three arms differ ONLY in the declared independent variables:
+#   default      the default scaffold: per-tick notes and kernel retrieval, no policy, no maintenance
+#   selfedit     the policy file plus the nightly maintenance call at C2 (notes, policy, structure), paid by the agent
+#   flat_tariff  selfedit with the size-dependent tariff removed (below)
+# Endpoint: the rung by condition interaction. Primary mean_balance; the per-rung balances are secondaries so each
+# arm pair reports the per-rung deltas, and compare's per-tier difference-in-differences covers exam_score,
+# false_claim_rate and invalid_action_rate (its tier outcomes).
+#
+# The tariff. compare requires economy.world_pricing: equalized for the whole exp_mem family, so no arm may price a
+# rung's tokens at its own list price (the Energy Society's per-token tariff); every arm here pays one in-world
+# price per token. What stays size-dependent under that price is how many tokens a rung generates: the upper rungs
+# think (thinking budgets 2048 and 1024 in base.yaml, billed as output) and have larger output caps (1536 down to
+# 320), so at E1's prices a genius decision costs about three times a dim one in-world `[estimate]`. Arm flat_tariff
+# removes that through the declared equalized prices: output, thinking included, is free in-world and every input
+# token (fresh, read from the cache or written to it) costs the same, so a call's in-world price depends only on
+# what the call is shown, which the rung does not choose, and not on how much the rung thinks or writes or on
+# whether its provider cached the prefix. The real spend is unchanged: real cost is metered at each tier's own
+# prices in every arm. The flat input price matches the roster's mean in-world price per decision (see
+# exp_mem_e4_flat_tariff.yaml), so the arms differ in who pays, not in how much money leaves the world.
+#
+# Cost `[estimate, prices unverified]`, per run of 10 days x 24 ticks with every agent deciding every tick, at
+# base.yaml's tier prices. Assumed: a 2.5k-token decision prompt whose 1.2k-token system prompt is read from the
+# cache (the brain sends it as a stable prefix), 250 visible output tokens on every rung and half the thinking
+# budget used. A decision then costs about $0.018 on genius, $0.0039 on sharp, $0.0007 on average and $0.00024 on
+# slow and dim: about $0.030 a tick and $7.1 a run, plus about $0.6 of exams (0.8k-token prompt) and, in the two
+# self-edit arms, $0.5 of maintenance (4k-token prompt, 600 visible output tokens). About $7.7 for default and $8.2
+# for each self-edit arm, $24 per seed and about $480 for 20 seeds x 3 arms (the plan's §6.1 figure is $426 under
+# its own assumptions). The genius alone is more than half of it. At the full thinking budget on every call the
+# busiest day is about $1.3 and the run about $13, so the caps below ($2 a day, $20 a run) are a ceiling a normal
+# run does not reach. In-world, E1's prices put a genius decision at about $0.031 and a sharp one at $0.021 under
+# the same assumptions, above the $0.02 a forage pays: check the upper rungs' survival in a pilot before the paid run.
+# Not an arm itself: the three exp_mem_e4_*.yaml arms extend it. Never run under the $60 live budget: E4 is stage S3
+# (MEMORY_EVOLUTION 10.4), released only after G3. The ladder's provider key must be set. The scripted mirror,
+# exp_mem_e4s_*.yaml, runs the same design for $0.
+extends: base.yaml
+run:
+  name: exp_mem_e4
+  days: 10
+  ticks_per_day: 24
+world:
+  view_radius: 12.0
+  claim_feedback_p: 0.5
+economy:
+  daily_cap_usd: 2.00
+  total_cap_usd: 20.00
+  world_pricing: equalized
+  equalized_price_in_per_mtok: 4.0          # E1's prices (the config defaults), stated so the tariff IV is explicit
+  equalized_price_out_per_mtok: 20.0
+  equalized_price_cache_read_per_mtok: 0.20
+  equalized_price_cache_write_per_mtok: 5.0
+  research_pool_usd: 3.00   # exam calls at in-world prices: about $2 a run when the upper rungs think `[estimate]`
+population:
+  cap: 13
+  tier_mutation_prob: 0.0
+entropy:
+  degeneration:
+    mode: observe
+memory:
+  policy:
+    enabled: false
+  maintenance:
+    enabled: false
+  exam:
+    enabled: true
+    delay_days: 2
+    questions_per_agent: 3
+    kinds: [balance, neighbour, node, heard, claim]
+intelligence:
+  ladder: [genius, sharp, average, slow, dim]
+agents:
+  - {name: Ada,   personality: {curiosity: 0.9, sociability: 0.7}}
+  - {name: Bao,   personality: {greed: 0.9, honesty: 0.3}}
+  - {name: Cyra,  personality: {caution: 0.9}}
+  - {name: Dev,   personality: {industriousness: 0.95}}
+  - {name: Enzo,  personality: {sociability: 0.95, honesty: 0.9}}
+  - {name: Faye,  personality: {curiosity: 0.8, caution: 0.2}}
+  - {name: Gil,   personality: {greed: 0.2, sociability: 0.6}}
+  - {name: Hex,   personality: {curiosity: 0.6, honesty: 0.5}}
+  - {name: Ivo,   personality: {industriousness: 0.7, caution: 0.6}}
+  - {name: Juno,  personality: {sociability: 0.8, greed: 0.5}}
+experiment:
+  name: exp_mem_e4
+  independent_variables:
+    - memory.policy.enabled
+    - memory.maintenance.enabled
+    - economy.equalized_price_in_per_mtok
+    - economy.equalized_price_out_per_mtok
+    - economy.equalized_price_cache_read_per_mtok
+    - economy.equalized_price_cache_write_per_mtok
+  primary_outcome: mean_balance
+  secondary_outcomes:
+    - by_tier.genius.mean_balance
+    - by_tier.sharp.mean_balance
+    - by_tier.average.mean_balance
+    - by_tier.slow.mean_balance
+    - by_tier.dim.mean_balance
+    - exam_score
+    - false_claim_rate
+    - invalid_action_rate
