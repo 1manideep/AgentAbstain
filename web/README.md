@@ -8,13 +8,17 @@ TypeScript, react-three-fiber, drei, zustand; charts are inline SVG.
 | script | what |
 |---|---|
 | `npm run dev` | dev server; `/api` and `/ws` are proxied to the Python server on `127.0.0.1:8000` |
-| `VITE_FEED=fixture npm run dev` | fixture mode: replays `public/fixtures/mock.jsonl`, POSTs are logged no-ops |
-| `npm run gen:fixture [-- --out dir]` | synthetic 300-tick fixture + `api.json` (a genuine one: `void mock-feed --out web/public/fixtures/mock.jsonl`) |
-| `npm run typecheck` / `test` / `build` / `lint` | tsc -b, vitest, vite build, oxlint |
+| `VITE_FEED=fixture npm run dev` | fixture mode: replays `public/fixtures/mock.jsonl` and answers the control room's detail requests from `public/fixtures/api.json`; POSTs are logged no-ops |
+| `npm run gen:fixture [-- --out DIR [--force]]` | a synthetic 300-tick fixture + `api.json`, written to a fresh temp dir (the path is printed) unless `--out DIR` (or `FIXTURE_OUT`) names one; writing into `public/fixtures`, which holds the committed recording, is refused without `--force` |
+| `npm run typecheck` / `test` / `build` / `lint` | tsc -b, vitest, vite build, oxlint (run vitest as `npx vitest run --root .`) |
 | `npm run screenshot` / `screenshot:landscape` | Playwright smoke shots + fps / draw-call measurement (dev server must be running) |
 | `npm run screenshot:tour` | visual tour, 35 stills + captions in `screenshots/tour/` (fixture dev server, best with `VITE_FIXTURE_BURST=1000`) |
 
+The committed fixture is a genuine recording, not the synthetic one: `void mock-feed` (from the repository root, `.venv/bin/void mock-feed`) runs `configs/demo_memory.yaml` for 240 ticks on scripted brains and writes `web/public/fixtures/mock.jsonl` and `api.json`. Those are its defaults, so a bare `void mock-feed` re-records the committed fixture in place; `--config`, `--ticks`, `--seed` and `--out` record something else (a config that could call a paid provider is refused).
+
 Fixture pacing: `VITE_FIXTURE_PACE` (ts-delta multiplier, default 0.6), `VITE_FIXTURE_BURST` (ticks delivered at once on connect, default 40).
+
+The screenshot scripts drive headless Chromium through Playwright. Install its browser once with `npx playwright install chromium` (on a bare Linux box `npx playwright install --with-deps chromium` also installs the system libraries); `screenshot:landscape`, `screenshot:humans` and `screenshot:behaviour` use it unless `VOID_CHROME` names a Chrome/Chromium executable. `screenshot` and `screenshot:tour` still default to a fixed Chromium path from the machine they were written on, so on any other machine set `VOID_CHROME` for them (for example to the `chrome` binary that `npx playwright install chromium` puts under `~/.cache/ms-playwright/`, or under `$PLAYWRIGHT_BROWSERS_PATH` when that is set). `VOID_URL` points any of them at another server.
 
 ## Architecture in one paragraph
 
@@ -120,6 +124,15 @@ false, the listener's claim feedback (red X on the side away from the
 speaker, head shake), a remember (note card stacked above the speech bubble,
 writing gesture) and a nightly maintenance pass.
 
-The server's CSP allows same-origin assets and blob workers
-(`worker-src 'self' blob:`), which is what the troika text workers and GLB
-loading need.
+The server sends this Content-Security-Policy on `/`, `/api/*` and every HTML
+response (`void/server/auth.py`, `CSP`):
+
+```
+default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; img-src 'self' data: blob:; connect-src 'self' ws: wss: blob:; object-src 'none'; base-uri 'none'; form-action 'none'
+```
+
+`blob:` in `script-src` and `worker-src` is for the troika text workers; `blob:`
+in `img-src` and `connect-src` is for GLB loading, since GLTFLoader turns the
+textures embedded in a GLB into `blob:` URLs and loads them through `<img>` or
+`fetch`. Nothing is loaded from another origin, so fonts, models and textures
+must be served by the app itself (`public/`).
