@@ -1,12 +1,25 @@
 import { isValidElement, type MouseEvent, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { DayRow, EventMsg, GadgetItem, RosterAgent } from '../protocol'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { DayRow, EventMsg, GadgetItem, GadgetsMsg, RosterAgent } from '../protocol'
 import { EventRing } from '../state/events'
 import { useStore } from '../state/store'
 import { dailyFailureRate, GadgetsCard, MAX_PROPOSALS, ProposalLog, proposalSummary } from './cards/GadgetsCard'
 import { EMPTY_TEXT } from './cards/EmptyState'
-import { GadgetDetails, gadgetFailureRate, GadgetPanel, selectGadget, useGadgetSelection } from './GadgetPanel'
+import {
+  COUNTS_STALE_TITLE,
+  freshestRegistry,
+  GadgetDetails,
+  gadgetFailureRate,
+  GadgetPanel,
+  refreshGadgetCounts,
+  REFRESH_MS,
+  RegistryRefresh,
+  selectGadget,
+  startRegistryRefresh,
+  useGadgetCounts,
+  useGadgetSelection,
+} from './GadgetPanel'
 import { AgentLink } from './PolicyHistory'
 
 /** A gadget as the server sends it with every wave-1 field filled (void/sim/snapshot.py gadget_item). */
@@ -63,10 +76,17 @@ function elements(node: ReactNode): ReactElement[] {
  */
 const PRISTINE_STORE = { ...useStore.getInitialState() }
 const PRISTINE_SELECTION = { ...useGadgetSelection.getInitialState() }
+const PRISTINE_COUNTS = { ...useGadgetCounts.getInitialState() }
 function ssr(node: ReactElement): string {
   Object.assign(useStore.getInitialState(), useStore.getState())
   Object.assign(useGadgetSelection.getInitialState(), useGadgetSelection.getState())
+  Object.assign(useGadgetCounts.getInitialState(), useGadgetCounts.getState())
   return renderToStaticMarkup(node)
+}
+
+/** The newest snapshot tick the client has (what applySnapshot commits into world.tick). */
+function atTick(tick: number): void {
+  useStore.setState({ world: { ...useStore.getState().world, tick } })
 }
 
 beforeEach(() => {
@@ -75,11 +95,14 @@ beforeEach(() => {
   useStore.getState().resetRun()
   useStore.setState({ runId: null })
   useGadgetSelection.setState({ id: null, runId: null })
+  useGadgetCounts.setState({ fetched: null, failed: false })
 })
 afterEach(() => {
+  vi.useRealTimers()
   delete (globalThis as { localStorage?: unknown }).localStorage
   Object.assign(useStore.getInitialState(), PRISTINE_STORE)
   Object.assign(useGadgetSelection.getInitialState(), PRISTINE_SELECTION)
+  Object.assign(useGadgetCounts.getInitialState(), PRISTINE_COUNTS)
 })
 
 describe('gadget inspector', () => {
@@ -243,5 +266,134 @@ describe('gadgets card', () => {
     const { days, series } = dailyFailureRate(rows)
     expect(days).toEqual([1, 2, 3])
     expect(series[0]!.values).toEqual([null, null, 0.5])
+  })
+})
+
+describe('live use counts', () => {
+  const pushed = (rev: number, uses: number, failures: number): GadgetsMsg => ({ type: 'gadgets', rev, items: [{ ...LAMP, uses, failures }] })
+  /** A stub GET /api/gadgets answering with whatever `server` holds, counting the requests. */
+  function stubServer(initial: GadgetsMsg) {
+    const server = { msg: initial, calls: 0, fail: false }
+    const fetcher = async (path: string): Promise<unknown> => {
+      expect(path).toBe('/api/gadgets')
+      server.calls++
+      if (server.fail) throw new Error('server gone')
+      return structuredClone(server.msg)
+    }
+    return { server, fetcher }
+  }
+
+  it('picks the fetched registry over the push it was made on, and a newer push over an older fetch', () => {
+    const p1 = pushed(1, 1, 0)
+    const f = { msg: pushed(1, 3, 1), base: p1, tick: 50, runId: 'r' }
+    expect(freshestRegistry(p1, f, 'r')).toEqual({ msg: f.msg, asOfTick: 50 })
+    // a fetch that already saw a newer rev is newer than the push
+    expect(freshestRegistry(p1, { ...f, msg: pushed(2, 3, 1), base: null }, 'r').asOfTick).toBe(50)
+    // a later push (a new gadget was verified) supersedes the fetch
+    const p2 = pushed(2, 3, 1)
+    expect(freshestRegistry(p2, f, 'r')).toEqual({ msg: p2, asOfTick: null })
+    // a fetch from another run never shows
+    expect(freshestRegistry(p1, f, 'other')).toEqual({ msg: p1, asOfTick: null })
+    expect(freshestRegistry(p1, null, 'r')).toEqual({ msg: p1, asOfTick: null })
+  })
+
+  it('serves uses recorded after the last verification, which the rev-gated push never delivers', async () => {
+    useStore.setState({ runId: 'r' })
+    const st = useStore.getState()
+    st.applyRoster(ROSTER)
+    st.applyGadgets(pushed(1, 1, 0))
+    atTick(30)
+    // the server records more uses but verifies no new gadget: same rev, and the store keeps the first push
+    st.applyGadgets(pushed(1, 3, 1))
+    expect(useStore.getState().gadgets!.items[0]!.uses).toBe(1)
+    selectGadget('gd_lamp')
+    let html = ssr(<GadgetPanel />)
+    expect(html).toMatch(/data-field="uses" class="tnum">1</)
+    expect(html).toContain(`data-field="counts-as-of" class="muted" title="${COUNTS_STALE_TITLE}">as of the last registry update<`)
+
+    const { server, fetcher } = stubServer(pushed(1, 3, 1))
+    expect(await refreshGadgetCounts(fetcher)).toBe(true)
+    html = ssr(<GadgetPanel />)
+    expect(html).toMatch(/data-field="uses" class="tnum">3</)
+    expect(html).toMatch(/data-field="failures" class="tnum">1<span class="muted"> · 25% of uses failed<\/span>/)
+    expect(html).toContain('data-field="counts-as-of" class="muted">as of tick 30<')
+    const card = ssr(<GadgetsCard />)
+    expect(card).toContain('<div class="chart-sub" data-field="counts-as-of">uses and failures as of tick 30</div>')
+    expect(card).toMatch(/<li data-gadget-id="gd_lamp"[^>]*>.*3 used · 1 failed \(25%\)/)
+    expect(server.calls).toBe(1)
+  })
+
+  it('asks again only when the run has moved on, one request at a time, and keeps the push on a failure', async () => {
+    useStore.setState({ runId: 'r' })
+    const { server, fetcher } = stubServer(pushed(1, 1, 0))
+    // nothing pushed yet in this run: nothing to refresh
+    expect(await refreshGadgetCounts(fetcher)).toBe(false)
+    expect(server.calls).toBe(0)
+    useStore.getState().applyGadgets(pushed(1, 1, 0))
+    atTick(10)
+    const [a, b] = [refreshGadgetCounts(fetcher), refreshGadgetCounts(fetcher)]
+    expect(await a).toBe(true)
+    expect(await b).toBe(true)
+    expect(server.calls).toBe(1)
+    // same tick: the counts cannot have changed
+    expect(await refreshGadgetCounts(fetcher)).toBe(false)
+    expect(server.calls).toBe(1)
+    atTick(11)
+    server.msg = pushed(1, 2, 0)
+    expect(await refreshGadgetCounts(fetcher)).toBe(true)
+    expect(useGadgetCounts.getState().fetched!.msg.items[0]!.uses).toBe(2)
+    // a failed request is reported and the last good fetch stays
+    atTick(12)
+    server.fail = true
+    expect(await refreshGadgetCounts(fetcher)).toBe(false)
+    expect(useGadgetCounts.getState()).toMatchObject({ failed: true, fetched: { tick: 11 } })
+    expect(ssr(<GadgetsCard />)).toContain('data-field="counts-as-of">uses and failures as of tick 11; the last refresh failed</div>')
+    // so is an answer that is not a registry
+    server.fail = false
+    expect(await refreshGadgetCounts(async () => ({ detail: 'nope' }))).toBe(false)
+    expect(useGadgetCounts.getState().failed).toBe(true)
+    // a run that changes while the request is out discards the answer
+    atTick(13)
+    let release: (v: unknown) => void = () => {}
+    const pending = refreshGadgetCounts(() => new Promise((res) => (release = res)))
+    useStore.setState({ runId: 'r2' })
+    release(pushed(1, 9, 9))
+    expect(await pending).toBe(false)
+    expect(useGadgetCounts.getState().fetched!.runId).toBe('r')
+  })
+
+  it('the refresher in the card body adds no markup', () => {
+    useStore.setState({ runId: 'r' })
+    useStore.getState().applyGadgets(pushed(1, 1, 0))
+    expect(ssr(<RegistryRefresh />)).toBe('')
+  })
+
+  it('polls on an interval while the run advances, and never in fixture mode', async () => {
+    vi.useFakeTimers()
+    useStore.setState({ runId: 'r' })
+    useStore.getState().applyGadgets(pushed(1, 1, 0))
+    atTick(5)
+    const { server, fetcher } = stubServer(pushed(1, 1, 0))
+
+    const none = startRegistryRefresh({ fixture: true, fetcher })
+    await vi.advanceTimersByTimeAsync(REFRESH_MS * 3)
+    none()
+    expect(server.calls).toBe(0)
+
+    const stop = startRegistryRefresh({ fixture: false, fetcher })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(server.calls).toBe(1)
+    // the tick did not move: the interval does not ask
+    await vi.advanceTimersByTimeAsync(REFRESH_MS * 2)
+    expect(server.calls).toBe(1)
+    atTick(6)
+    server.msg = pushed(1, 4, 2)
+    await vi.advanceTimersByTimeAsync(REFRESH_MS)
+    expect(server.calls).toBe(2)
+    expect(useGadgetCounts.getState().fetched).toMatchObject({ tick: 6, msg: { items: [{ uses: 4, failures: 2 }] } })
+    stop()
+    atTick(7)
+    await vi.advanceTimersByTimeAsync(REFRESH_MS * 2)
+    expect(server.calls).toBe(2)
   })
 })

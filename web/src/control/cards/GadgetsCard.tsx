@@ -5,7 +5,7 @@ import { useStore } from '../../state/store'
 import { Card } from '../Card'
 import { fmtPct, SERIES } from '../charts/chartTheme'
 import { DayLines, type DayLineSeries } from '../charts/DailyCharts'
-import { gadgetFailureRate, GadgetPanel, selectGadget, useSelectedGadgetId } from '../GadgetPanel'
+import { COUNTS_STALE_TITLE, countsAsOf, gadgetFailureRate, GadgetPanel, RegistryRefresh, selectGadget, useGadgetCounts, useRegistryView, useSelectedGadgetId } from '../GadgetPanel'
 import { AgentLink } from '../PolicyHistory'
 import { EmptyState } from './EmptyState'
 
@@ -206,7 +206,8 @@ export function proposalSummary(rows: readonly ProposalRow[]): string {
 /**
  * The gadget registry and the gate (DESIGN §12, §17 exp_gate): the selected gadget's inspector, the verified gadgets
  * on the map, the daily use-failure rate from the day rows and the verified and rejected proposals from the gate
- * events.
+ * events. While the card is open it refetches the registry so the uses and failures follow the run, and it says which
+ * tick they are current at.
  */
 export const GadgetsCard = memo(function GadgetsCard() {
   const seriesRev = useStore((s) => s.seriesRev)
@@ -214,7 +215,10 @@ export const GadgetsCard = memo(function GadgetsCard() {
   const events = useStore((s) => s.events)
   const series = useStore((s) => s.series)
   const runId = useStore((s) => s.runId)
-  const gadgets = useStore((s) => s.gadgets)
+  // the pushed registry, or a fresher one from GET /api/gadgets (RegistryRefresh, in the open card's body): the push
+  // only follows new verifications
+  const registry = useRegistryView()
+  const refreshFailed = useGadgetCounts((s) => s.failed)
   const rosterById = useStore((s) => s.rosterById)
   const selectAgent = useStore((s) => s.select)
   const selectedId = useSelectedGadgetId()
@@ -234,7 +238,7 @@ export const GadgetsCard = memo(function GadgetsCard() {
     void daySignature
     return dailyFailureRate(series.daily)
   }, [series, daySignature])
-  const items = useMemo(() => gadgets?.items ?? [], [gadgets])
+  const items = useMemo(() => registry.msg?.items ?? [], [registry])
   const onMap = useMemo(() => new Set(items.map((g) => g.id)), [items])
   const nameOf = useMemo(() => (id: string) => rosterById.get(id)?.name ?? id, [rosterById])
 
@@ -264,8 +268,15 @@ export const GadgetsCard = memo(function GadgetsCard() {
         <EmptyState />
       ) : (
         <>
+          <RegistryRefresh />
           <GadgetPanel />
           <h3 className="sub">Registry</h3>
+          {items.length ? (
+            <div className="chart-sub" data-field="counts-as-of" title={registry.asOfTick === null ? COUNTS_STALE_TITLE : undefined}>
+              uses and failures {countsAsOf(registry.asOfTick)}
+              {refreshFailed ? '; the last refresh failed' : ''}
+            </div>
+          ) : null}
           <RegistryList items={items} selectedId={selectedId} nameOf={nameOf} />
           <h3 className="sub">Use-failure rate by day</h3>
           <div className="chart-sub">failed / all gadget uses so far, at each day's end</div>

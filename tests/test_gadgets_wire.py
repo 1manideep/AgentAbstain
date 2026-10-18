@@ -5,18 +5,29 @@
 ``failures`` counters and ``created_tick``, all read from the ``gadgets`` table. Two one-day scripted runs (gate on,
 gate off) must each verify at least one gadget; their messages validate against :class:`GadgetsMsg` and agree with
 the table column by column.
+
+A three-day run fanned out through the real :class:`~void.server.ws.Hub` checks what a connected client holds: every
+verified gadget is pushed, but the push follows ``gadgets_rev``, which moves only with the verified count, so the
+pushed uses and failures go stale; ``GET /api/gadgets`` (which the web's gadget panel refetches) stays current.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
 from conftest import NO_PROVIDER_TIERS, SimRun, deep_merge
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from void.sandbox.registry import GadgetRecord
+from void.server.api import router as api_router
 from void.server.protocol import GadgetItem, GadgetsMsg, parse_message
+from void.server.ws import Hub, Subscriber
+from void.sim.loop import Simulation
 from void.sim.snapshot import gadget_item, gadgets_message
 
 NEW_FIELDS = {"effect_kind", "effect_value", "purpose", "verified_without_tests", "failures", "created_tick"}
@@ -88,6 +99,98 @@ def test_uses_and_failures_follow_the_use_ledger(gadget_run: SimRun) -> None:
     assert item["uses"] == int(ledger["ok"]) >= 1
     assert item["failures"] == int(ledger["n"]) - int(ledger["ok"]) >= 2
     GadgetItem.model_validate(item)
+
+
+# --- what a connected client receives --------------------------------------------------------------------------
+Counts = dict[str, tuple[int, int]]
+
+
+def _counts(msg: dict[str, Any]) -> Counts:
+    return {i["id"]: (int(i["uses"]), int(i["failures"])) for i in msg["items"]}
+
+
+def _ledger(sim: Simulation) -> Counts:
+    """(ok uses, failed uses) per placed verified gadget, from the gadget_uses ledger."""
+    rows = sim.db.fetchall("SELECT g.gadget_id AS id, COALESCE(SUM(u.ok), 0) AS ok, COUNT(u.gadget_id) AS n FROM gadgets g "
+                           "LEFT JOIN gadget_uses u ON u.gadget_id = g.gadget_id "
+                           "WHERE g.status='verified' AND g.x IS NOT NULL GROUP BY g.gadget_id")
+    return {r["id"]: (int(r["ok"]), int(r["n"]) - int(r["ok"])) for r in rows}
+
+
+@dataclass
+class HubTick:
+    tick: int
+    client: Counts  # the registry a client holds: the preamble, then each pushed message with a newer rev
+    server: Counts  # what GET /api/gadgets answers at the same moment (Hub.gadgets_message)
+    ledger: Counts
+
+
+@dataclass
+class HubRun:
+    sim: Simulation
+    ticks: list[HubTick] = field(default_factory=list)
+
+
+@pytest.fixture(scope="module")
+def hub_run(make_sim) -> HubRun:
+    """A three-day gate-off scripted run fanned out through the real Hub to one Subscriber (the queue the /ws sender
+    drains). The client side keeps a pushed registry only when its rev is newer, as store.applyGadgets does."""
+    sim = make_sim("gadgets_wire_hub", deep_merge(NO_PROVIDER_TIERS, {"run": {"days": 3}, "sandbox": {"gate_enabled": False}}))
+    out = HubRun(sim)
+
+    async def drive() -> None:
+        hub = Hub(sim)
+        sub = Subscriber(queue_size=1_000_000)
+        hub.subscribe(sub)
+        hub.start()
+        client = hub.gadgets_message()  # the preamble's registry
+
+        def on_tick(report: Any) -> None:
+            nonlocal client
+            for msg in sub.drain():
+                if msg.get("type") == "gadgets" and int(msg["rev"]) > int(client["rev"]):
+                    client = msg
+            out.ticks.append(HubTick(int(report.tick), _counts(client), _counts(hub.gadgets_message()), _ledger(sim)))
+
+        try:
+            await sim.run(on_tick=on_tick)
+            await hub.flush()
+        finally:
+            await hub.stop()
+
+    asyncio.run(drive())
+    if not getattr(sim.sandbox, "available", False):  # known once setup has probed the sandbox
+        pytest.skip("sandbox unavailable: gadget proposals fail closed")
+    return out
+
+
+def test_the_hub_pushes_each_new_gadget_and_the_endpoint_serves_current_counts(hub_run: HubRun) -> None:
+    ticks = hub_run.ticks
+    assert ticks and ticks[-1].ledger, "the scripted run verified no gadget"
+    # the run uses gadgets at ticks that verify none: there the push stays put and only the endpoint moves
+    verify_ticks = {int(r["tick"]) for r in hub_run.sim.db.fetchall("SELECT tick FROM events WHERE kind='gadget_verified'")}
+    use_ticks = {int(r["tick"]) for r in hub_run.sim.db.fetchall("SELECT tick FROM gadget_uses")}
+    assert use_ticks - verify_ticks
+    for t in ticks:
+        assert set(t.client) == set(t.server) == set(t.ledger), f"tick {t.tick}: a verified gadget did not reach the client"
+        assert t.server == t.ledger, f"tick {t.tick}: the endpoint lags the use ledger"
+    # and through the HTTP route the web panel polls (void/server/api.py GET /api/gadgets)
+    app = FastAPI()
+    app.include_router(api_router)
+    app.state.sim, app.state.hub = hub_run.sim, Hub(hub_run.sim)
+    with TestClient(app) as c:
+        body = c.get("/api/gadgets").json()
+    assert GadgetsMsg.model_validate(body).rev == int(hub_run.sim.db.kv_get("gadgets_rev", 0))
+    assert _counts(body) == _ledger(hub_run.sim) == ticks[-1].ledger
+
+
+@pytest.mark.xfail(strict=True, reason="gadgets_rev moves only when the verified count changes (void/sim/loop.py "
+                   "_publish_snapshot), so uses after the last verification never reach a connected client; the web "
+                   "refetches GET /api/gadgets instead. Drop this marker once loop.py also bumps the rev on a change "
+                   "of SUM(uses)+SUM(failures).")
+def test_the_hub_pushes_current_use_counts(hub_run: HubRun) -> None:
+    stale = [t.tick for t in hub_run.ticks if t.client != t.server]
+    assert not stale, f"the pushed registry's counts lag the server on {len(stale)} of {len(hub_run.ticks)} ticks"
 
 
 # --- record conversion without a run ----------------------------------------------------------------------
