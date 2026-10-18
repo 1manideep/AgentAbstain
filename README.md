@@ -59,6 +59,8 @@ The demo world is written to `runs/demo/` and lasts 14 days of 24 ticks at 0.6 s
 
 `--resume` needs the same config and seed as the run it reopens (the config hash is checked, `--tick-seconds` included); `--fresh` takes the first free `runs/demo.prev-<n>`. Both work the same way for `void run`.
 
+A run directory that a live process is using is never touched. `void serve` and `void run` hold an exclusive lock on their run directory (`runs/demo/.void.lock`, which records the pid and the command) for their whole life, and the operating system releases it when the process exits, however it exits. A second `void serve` or `void run` on that directory, plain or with `--resume` or `--fresh`, renames and writes nothing and exits 2 with one line: `void serve: runs/demo is in use by a running server (pid N); stop it first` (from `void run` the line starts `void run:`, and it says `a running headless run (pid N)` when a `void run` holds the directory). Stop the first server by its pid, then rerun. `void serve` also checks its port before it touches the directory, so `--fresh` archives nothing when the port is busy: `void serve: port 8000 on 127.0.0.1 is in use by another process; stop it or pass another --port`, exit 2.
+
 One output root: every run in this README is written under `runs/` (`--out runs`), which is gitignored. Without `--out`, `void run` and `void serve` write to the config's `run.data_dir` (`data/runs/`, also ignored); live runs that spend real money go to `data/live/` (`docs/RUNBOOK.md`).
 
 Headless runs and experiments (all scripted, so free and deterministic):
