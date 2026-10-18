@@ -64,9 +64,7 @@ RESERVED_KINDS: dict[str, str] = {
 }
 # Kinds a parallel wave-3 item starts to emit: tolerated whether or not that work is merged yet. Remove the entry
 # once it is.
-IN_FLIGHT_KINDS: dict[str, str] = {
-    Kind.PRACTICE_SUGGESTED: "share_practice (WP6, wave 3): the kernel emits it when a practice is suggested",
-}
+IN_FLIGHT_KINDS: dict[str, str] = {}
 # Kinds emitted outside the registry, with why they still are. Each one needs a Kind constant in void/events.py (a
 # shared surface) before its emitter can switch to it; the entry must then go.
 OUTSIDE_REGISTRY: dict[str, str] = {
@@ -85,6 +83,7 @@ EVIDENCE: dict[tuple[str, str, str], tuple[str, str]] = {
     ("agents", "status", "archived"): ("void/agents/lifecycle.py", "status=AgentStatus.ARCHIVED"),
     ("gadgets", "status", "rejected"): ("void/sandbox/gate.py", '"rejected", {}, {}, verification'),
     ("gadgets", "status", "verified"): ("void/sandbox/gate.py", 'sha256(tests), "verified"'),
+    ("practice_events", "kind", "suggested"): ("void/culture/practices.py", 'return self.record("suggested", tick'),
     ("policy_versions", "source", "seed"): ("void/memory/policy.py", 'source="seed"'),
     ("policy_versions", "source", "inherited"): ("void/memory/policy.py", 'source="inherited"'),
     ("policy_versions", "source", "self_edit"): ("void/memory/commands.py", 'source="self_edit"'),
@@ -113,9 +112,7 @@ RESERVED_VALUES: dict[tuple[str, str, str], str] = {
                                               "and records as written_by kernel",
 }
 # Values a parallel wave-3 item starts to write (tolerated either way; remove once merged).
-IN_FLIGHT_VALUES: dict[tuple[str, str, str], str] = {
-    ("practice_events", "kind", "suggested"): "share_practice (WP6, wave 3): void/culture/practices.py writes it",
-}
+IN_FLIGHT_VALUES: dict[tuple[str, str, str], str] = {}
 
 
 # --- the static scan -----------------------------------------------------------------------------------------------------
