@@ -296,6 +296,31 @@ def test_a_busy_port_refuses_before_the_dir_is_touched(tmp_path: Path, tiny: str
     assert (made / f"{NAME}.prev-1" / "world.db").is_file() and len(no_port) == 1
 
 
+def test_without_port_the_configs_port_is_checked_and_the_check_is_one_seam(
+        tmp_path: Path, no_port: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """A serve that names no --port binds the config's port (8000 by default) for real before touching the directory,
+    so an in-process test that only replaces uvicorn's runner depends on that port being free. Replacing
+    ``void.cli._port_refusal`` as well, as such a test's fixture should, is the one change that removes it."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen(1)
+        port = int(taken.getsockname()[1])
+        config = tmp_path / "on_port.yaml"  # TINY on a port something listens on; no --host or --port below
+        config.write_text(yaml.safe_dump({"extends": SMOKE, **TINY, "server": {"host": "127.0.0.1", "port": port}}))
+        out = tmp_path / "out"
+        args = ["serve", "--config", str(config), "--out", str(out), "--static", str(tmp_path / "nostatic")]
+        line = f"void serve: port {port} on 127.0.0.1 is in use by another process; stop it or pass another --port"
+        for extra in ([], ["--port", "0"]):  # --port 0 means "not given": still the config's port
+            assert main([*args, *extra]) == 2, extra
+            assert capsys.readouterr().err.splitlines() == [line], extra
+        assert not out.exists() and no_port == []
+        monkeypatch.setattr(cli, "_port_refusal", lambda host, port: None)
+        assert main(args) == 0
+        assert len(no_port) == 1 and (no_port[0]["host"], no_port[0]["port"]) == ("127.0.0.1", port)
+        assert (out / NAME / "world.db").is_file()
+
+
 def test_the_port_check_matches_what_the_server_can_bind() -> None:
     assert cli._port_refusal("127.0.0.1", 0) is None  # any free port
     port = free_port()

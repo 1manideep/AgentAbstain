@@ -326,6 +326,11 @@ def _port_refusal(host: str, port: int) -> str | None:
     Binds and closes a socket for every address the host resolves to, with the options the server's own bind uses
     (``SO_REUSEADDR``; ``IPV6_V6ONLY`` for IPv6), so a port left in TIME_WAIT by a stopped server passes and one
     something listens on does not. Port 0 (any free port) always passes.
+
+    This really binds, so an in-process ``void serve`` that replaces uvicorn's runner but keeps the config's port
+    (8000 by default) depends on that port being free: such a test passes a free ``--port`` or replaces this
+    function too (``void.cli._port_refusal``, looked up when ``cmd_serve`` runs). ``--port 0`` is no way out:
+    ``cmd_serve`` reads it as "not given" and uses the config's port, as it always has.
     """
     if int(port) == 0:
         return None
