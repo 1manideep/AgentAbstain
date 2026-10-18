@@ -33,7 +33,7 @@ import type { EventMsg } from '../protocol'
 import { isEventKind } from '../protocol'
 import { history } from '../state/history'
 import { useStore } from '../state/store'
-import { BUBBLE_LINE_HEIGHT, clampBubbleText, clampNoteText } from './bubbleText'
+import { BUBBLE_LINE_HEIGHT, clampBubbleText, clampNoteText, toTroikaText } from './bubbleText'
 import { BUBBLE_MS, bubbleStyle, MARK_MS, markSide, NOTE_MS, noteClearY, type BubbleKind } from './bubbleStyle'
 import { fxQueue } from './fx'
 import { nodePulse } from './Nodes'
@@ -194,11 +194,11 @@ const HoverTag = memo(function HoverTag() {
   const label = useMemo(() => {
     if (hoveredId) {
       const a = rosterById.get(hoveredId)
-      return a ? `${a.name} · ${a.tier} · g${a.generation}` : hoveredId
+      return toTroikaText(a ? `${a.name} - ${a.tier} - g${a.generation}` : hoveredId)
     }
     if (hoveredGadget) {
       const g = gadgets?.items.find((i) => i.id === hoveredGadget)
-      return g ? `${g.render.label || g.name} · ${g.uses} uses` : ''
+      return g ? toTroikaText(`${g.render.label || g.name} - ${g.uses} uses`) : ''
     }
     return ''
   }, [hoveredId, hoveredGadget, rosterById, gadgets])
@@ -393,8 +393,11 @@ export function Effects() {
         const last = bubbleState.lastSpoke.get(speaker)
         if (last !== undefined && now - last < SPEAK_COOLDOWN_MS / 1000) return
         bubbleState.lastSpoke.set(speaker, now)
+        // troika text is printable ASCII only; a line that folds to nothing (all emoji or CJK) shows no bubble
+        const text = toTroikaText(clampBubbleText(e.payload.text))
+        if (!text) return
         const lied = Number(e.payload.claims_false ?? 0) > 0
-        if (upsertBubble(speaker, 'speech', clampBubbleText(e.payload.text), BUBBLE_MS, now, lied)) dirtyBubbles = true
+        if (upsertBubble(speaker, 'speech', text, BUBBLE_MS, now, lied)) dirtyBubbles = true
         return
       }
       if (e.kind === 'remember' || e.kind === 'revise_self' || e.kind === 'maintenance') {
@@ -403,7 +406,7 @@ export function Effects() {
         if (!id) return
         let text: string
         let ttl = NOTE_MS
-        if (e.kind === 'remember') text = clampNoteText(p.title)
+        if (e.kind === 'remember') text = toTroikaText(clampNoteText(p.title))
         else if (e.kind === 'revise_self') text = 'rewrote who I am'
         else {
           const n = Number(p.commands ?? p.ok ?? 0)

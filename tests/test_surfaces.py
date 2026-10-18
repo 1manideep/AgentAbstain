@@ -59,8 +59,14 @@ def _hyp(**kw: Any) -> dict[str, Any]:
 def test_every_shipped_config_loads(path: Path) -> None:
     cfg = load_config(path)
     assert cfg.memory.maintenance.mode == "forced"
-    # the new blocks default off, so no shipped config changes behaviour or hash by their arrival
-    assert not cfg.memory.practices.enabled and cfg.memory.selection.arm == "A" and not cfg.memory.selection.canary.enabled
+    # the new blocks default off, so no shipped config changes behaviour or hash by their arrival; the E2 configs
+    # (exp_mem_e2_*) turn the selection layer on deliberately: canaries in both arms, arm B in exp_mem_e2_b
+    sel = cfg.memory.selection
+    if path.name.startswith("exp_mem_e2"):
+        assert sel.canary.enabled and sel.arm == ("B" if path.name == "exp_mem_e2_b.yaml" else "A")
+    else:
+        assert sel.arm == "A" and not sel.canary.enabled
+    assert not cfg.memory.practices.enabled
     assert not cfg.memory.policy.mutate_at_birth and cfg.experiment.hypotheses == []
 
 

@@ -21,6 +21,19 @@ entropy:
     mode: observe
 memory:
   max_retrieved: 4         # notes retrieved per decision (default 8): halves the price of remembering (decision 19)
+  # R1 retrieval (§5.3; §6.2 "an index note per node, which R1 boosts"): a note tagged `index` enters retrieval at
+  # cosine + index_boost. The rule is the same in every arm; only the index builder writes index notes (the files its
+  # nightly batch creates under /memories/index/), so it differs in effect only there. The dependence check
+  # (exp_mem_dep_base.yaml) inherits the value but runs no maintenance; its scripted notes never carry the tag, so it
+  # ranks exactly as R0 (a live brain could still tag a remembered note `index`; live_claude_dep_* extend that file).
+  # [assumption] 0.10, chosen once, a priori, from the retrieval geometry of the index-builder arm at seed 99 (not an
+  # evaluation seed), run at index_boost 0 with every decide retrieval replayed on a 0.01 boost grid. Rule fixed before
+  # measuring: the smallest multiple of 0.05 that puts an index note naming a node in the decide query among the 4
+  # retrieved notes in at least 90% of the retrievals that have one (291 of 356, days 2 to 6). Measured: such a note is
+  # retrieved at 0 in 41%, the minimal boost has median 0.02, p90 0.07, max 0.13; 0.05 reaches 82%, 0.10 reaches 98%.
+  # The day-1 gap between the 1st and 4th cosine of a decide query (19 retrievals with 4 or more notes) agrees:
+  # median 0.028, p90 0.092. Not tuned on seeds 1 to 20.
+  index_boost: 0.10
   policy:
     enabled: true
     seed: default

@@ -1,7 +1,17 @@
 # exp_press, arm both: chronicle on x gossip on (one cell of the 2x2). The four arms (both /
-# chronicle / gossip / none) toggle chronicle.enabled and gossip.enabled and nothing else.
-# Primary `notes_by_channel.chronicle` and secondary `notes_by_channel.gossip` are live note
-# counts per channel from the last day row. VoidConfig.warnings() is empty for this config.
+# chronicle / gossip / none) differ only in their declared independent variables, chronicle.enabled
+# and gossip.enabled. Outcomes are computed offline (void/research/outcomes/press.py):
+#   chronicle_reach (primary): share of living agents holding a live chronicle-derived note (one written
+#     after reading the paper, or a gossip or inherited copy of one); chronicle_reach.chronicle counts
+#     the direct readers only, chronicle_reach.gossip those who heard it by word of mouth.
+#   chronicle_fidelity: mean cosine of each chronicle-channel note to its best-matching item of the paper
+#     it read (chronicle_items, embedded with the run's embedder config).
+#   gossip_fidelity: mean similarity of gossip copies to their origin (gossip_transfer events).
+#   gossip_reach: share of living agents holding a live gossip-channel note.
+#   gossip_transfers: run total; notes_by_channel.chronicle: live chronicle-channel notes, last day row.
+# An arm with the chronicle off has chronicle_reach 0 and chronicle_fidelity None; one with gossip off has
+# gossip_reach 0 and gossip_fidelity None; compare leaves a seed pair holding a None out of that outcome.
+# VoidConfig.warnings() is empty for this config.
 extends: base.yaml
 run:
   name: exp_press_both
@@ -18,5 +28,5 @@ experiment:
   name: exp_press
   arm: both
   independent_variables: [chronicle.enabled, gossip.enabled]
-  primary_outcome: notes_by_channel.chronicle
-  secondary_outcomes: [notes_by_channel.gossip, gossip_transfers]
+  primary_outcome: chronicle_reach
+  secondary_outcomes: [chronicle_fidelity, gossip_fidelity, gossip_reach, gossip_transfers, notes_by_channel.chronicle]

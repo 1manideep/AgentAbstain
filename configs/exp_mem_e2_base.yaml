@@ -1,0 +1,73 @@
+# E2 shared world (docs/research/MEMORY_EVOLUTION.md §6.4; 10.4 S2 "E2 with arms A and B only"): which selection
+# signal? The E0 world on scripted brains: six agents under fog (view radius 12 in a 60-unit world), claim feedback
+# on, the policy file seeded, the nightly maintenance call paid by the agent at every right, the audit exam asked two
+# days back, and the chronicle printing one canary fact a day (§5.8: a templated, world-like line with a closed answer
+# set, printed unmarked among the chronicle's other lines and recorded kernel-side in canary_facts).
+# The arms differ ONLY in memory.selection.arm:
+#   a  selection arm A: nothing beyond survival is rewarded. Canaries are still printed, so both worlds read the same
+#      kind of chronicle; no reward exam is asked.
+#   b  selection arm B: every day each agent is asked up to two reward-exam questions about canary facts published at
+#      least two days earlier, and each correct answer is paid $0.02 from the research pool (ledger kind recall_reward).
+# Primary: audit-exam accuracy (H2: does a paid proxy for recall move the unpaid measure?). Manipulation check:
+# reward_exam_accuracy; the Goodhart measure: goodhart_gap (reward minus audit accuracy, arm B only).
+# Scripted brains remember the chronicle's headline, not its lines, so on this world they abstain on the reward exam
+# and arm B pays nothing: the scripted run checks the plumbing (canaries, the reward exam, payments, the outcomes and
+# compare), not an effect. Free and deterministic; a live E2 replaces the scripted tier.
+# Not an arm itself (no experiment.arm): exp_mem_e2_a.yaml and exp_mem_e2_b.yaml extend it.
+extends: base.yaml
+run:
+  name: exp_mem_e2
+  days: 6
+  ticks_per_day: 12
+world:
+  view_radius: 12.0
+  claim_feedback_p: 0.5
+economy:
+  world_pricing: equalized
+  # pays the reward exam's correct answers (and provider exam calls): 12 agents (the population cap) x 2 answers x
+  # $0.02 x 6 days is $2.88, so the pool never runs dry within a run
+  research_pool_usd: 3.00
+entropy:
+  degeneration:
+    mode: observe
+chronicle:
+  enabled: true
+  writer: template         # canaries are printed verbatim (a model-written chronicle may paraphrase them)
+memory:
+  max_retrieved: 4         # as in E0: notes retrieved per decision
+  policy:
+    enabled: true
+    seed: default
+  maintenance:
+    enabled: true
+    rights: [notes, policy, structure]
+    feedback: F1
+    payer: agent
+    scripted_billing: flat
+    max_tokens: 768
+  exam:
+    enabled: true
+    delay_days: 2
+    questions_per_agent: 3
+    kinds: [balance, neighbour, node]
+  selection:
+    arm: A                 # each arm sets its own
+    canary:
+      enabled: true
+      per_day: 1
+    reward_delay_days: 2
+    reward_questions_per_agent: 2
+    recall_reward_usd: 0.02
+agents:
+  - {name: Ada,   tier: scripted, personality: {curiosity: 0.8}}
+  - {name: Bao,   tier: scripted, personality: {greed: 0.8}}
+  - {name: Cyra,  tier: scripted, personality: {caution: 0.8}}
+  - {name: Dev,   tier: scripted, personality: {industriousness: 0.8}}
+  - {name: Enzo,  tier: scripted, personality: {sociability: 0.8}}
+  - {name: Faye,  tier: scripted, personality: {curiosity: 0.6, caution: 0.4}}
+experiment:
+  name: exp_mem_e2
+  independent_variables: [memory.selection.arm]
+  primary_outcome: exam_accuracy
+  secondary_outcomes: [reward_exam_accuracy, goodhart_gap, recall_reward_usd_total, exam_score, mean_balance,
+                       monoculture_index]
