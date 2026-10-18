@@ -85,7 +85,7 @@ class TaskView:
 
 @dataclass
 class HeardMessage:
-    kind: str  # talk | windfall | transfer | gossip | system | feedback
+    kind: str  # talk | windfall | transfer | gossip | system | feedback | practice
     from_agent_id: str | None
     from_name: str | None
     text: str

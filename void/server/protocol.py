@@ -292,7 +292,8 @@ MESSAGE_MODELS: dict[str, type[BaseModel]] = {
 }
 
 #: The schemas ``void schema`` exports (DESIGN §2: ``schemas/`` is committed and consumed by ``web/``).
-SCHEMA_NAMES: tuple[str, ...] = ("hello", "snapshot", "event", "metrics", "roster", "gadgets", "tasks", "chronicle", "status")
+SCHEMA_NAMES: tuple[str, ...] = ("hello", "snapshot", "event", "metrics", "day", "roster", "gadgets", "tasks", "chronicle",
+                                 "status")
 
 _adapter: TypeAdapter[Any] = TypeAdapter(ServerMessage)
 

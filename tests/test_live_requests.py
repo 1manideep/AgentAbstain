@@ -10,13 +10,16 @@ prefill, effort inside ``output_config``, and refusal fallbacks only where the m
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from typing import Any
 
 import pytest
+from conftest import REPO
 from live_mock import message_body, mock_client, wire_client
 from test_brains import obs
+from test_share_practice import SCHEMA_SHA256
 
 from void.brain import anthropic_brain
 from void.brain.anthropic_brain import (
@@ -28,6 +31,7 @@ from void.brain.anthropic_brain import (
     prepare_client,
 )
 from void.brain.base import Sampling
+from void.brain.decision import SHARE_PRACTICE, share_practice_enabled, strict_json_schema
 from void.config import load_config
 from void.economy.catalog import rejects_sampling
 
@@ -331,3 +335,40 @@ def test_a_response_billed_off_the_list_is_metered_then_the_tier_stops_sending(u
     assert first.usage.input_tokens == 1500  # the tokens were billed, so they are metered
     assert len(captured) == 1  # nothing more is sent on this tier
     assert second.error.startswith("billing: not sent") and second.usage.total == 0
+
+
+# --- share_practice in the decision schema: only in worlds that offer it ------------------------------------------
+PRACTICES_ON = {"memory": {"policy": {"enabled": True}, "practices": {"enabled": True}}}
+LIVE_CLAUDE_CONFIGS = sorted(f"configs/{p.name}" for p in (REPO / "configs").glob("live_claude_*.yaml"))
+
+
+def _decision_body(cfg: Any, tier: str) -> dict[str, Any]:
+    captured, result = _capture(tier, "decide", cfg=cfg)
+    assert result.ok
+    return captured[-1]["body"]
+
+
+@pytest.mark.parametrize("path", LIVE_CLAUDE_CONFIGS)
+def test_practice_off_live_worlds_send_the_schema_they_were_recorded_with(path: str) -> None:
+    """Every live Claude config is practices-off, so its decide request carries the strict schema byte for byte as
+    it was before share_practice existed (the digest is the one pinned in test_share_practice)."""
+    cfg = load_config(path)
+    assert not share_practice_enabled(cfg)
+    tiers = sorted(t for t, tc in cfg.tiers.items() if tc.provider == "anthropic")
+    assert tiers, path
+    for tier in tiers:
+        schema = _decision_body(cfg, tier)["output_config"]["format"]["schema"]
+        assert hashlib.sha256(json.dumps(schema, separators=(",", ":")).encode()).hexdigest() == SCHEMA_SHA256, (path, tier)
+        assert SHARE_PRACTICE not in schema["$defs"]["Action"]["properties"]["type"]["enum"]
+
+
+def test_a_world_with_practices_on_offers_share_practice_to_the_live_brain() -> None:
+    off, on = load_config(LADDER), load_config(LADDER, PRACTICES_ON)
+    assert share_practice_enabled(on) and not share_practice_enabled(off)
+    before, after = _decision_body(off, "swift"), _decision_body(on, "swift")
+    schema = after["output_config"]["format"]["schema"]
+    assert schema == strict_json_schema(share_practice=True)
+    assert schema["$defs"]["Action"]["properties"]["type"]["enum"][-1] == SHARE_PRACTICE
+    # the enum is the only difference outside the system prompt (whose ACTIONS list names the action when it is on)
+    before["output_config"]["format"]["schema"]["$defs"]["Action"]["properties"]["type"]["enum"].append(SHARE_PRACTICE)
+    assert {k: v for k, v in before.items() if k != "system"} == {k: v for k, v in after.items() if k != "system"}

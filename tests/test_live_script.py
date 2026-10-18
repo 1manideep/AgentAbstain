@@ -354,3 +354,49 @@ def test_the_scarcity_pilot_stops_the_stage_when_runs_list_too_few_claims(tmp_pa
                    MIN_CLAIMS="10")
     assert p.returncode == 1 and "scarcity pilot" in p.stderr
     assert not (tmp_path / "void_called").exists()  # seeds 2 and 3 never started
+
+
+def completed_pair_run(run_dir: Path, config: str, seed: int, mean_balance: float) -> Path:
+    """A completed paired run as compare and the gates read it: verifying calls, the run row, and a metrics tail at the
+    config's last tick that carries its end-of-run mean balance."""
+    from void.config import load_config
+
+    make_run(run_dir, config, seed=seed, calls=[{}] * 3)
+    cfg = load_config(REPO / "configs" / config, {"run": {"seed": seed}})
+    row = {"tick": cfg.run.days * cfg.run.ticks_per_day, "day": cfg.run.days, "mean_balance": mean_balance}
+    (run_dir / "metrics.jsonl").write_text(json.dumps(row) + "\n")
+    return run_dir
+
+
+def test_the_gate_reading_is_printed_after_the_dependence_stage_and_never_fails_the_script(tmp_path: Path) -> None:
+    out = tmp_path / "out" / "exp_mem_dep_claude"
+    for seed, (mem, amnesic) in {1: (1.40, 1.50), 2: (1.38, 1.47)}.items():  # memory loses here: C1 fails
+        completed_pair_run(out / "mem" / f"seed_{seed}", "live_claude_dep_mem.yaml", seed, mem)
+        completed_pair_run(out / "amnesic" / f"seed_{seed}", "live_claude_dep_amnesic.yaml", seed, amnesic)
+    scripted = tmp_path / "no_scripted_runs"
+    p = run_script(tmp_path, smoke_ledger(tmp_path), STAGES="memdep", DEP_SEEDS="1 2", GATES_RUNS=str(scripted))
+    assert p.returncode == 0, p.stderr
+    assert not (tmp_path / "void_called").exists()  # both pairs were done: nothing was started
+    start = p.stdout.index(f"=== gates: scripts/gates.py {scripted} --live {tmp_path / 'out'} ===")
+    assert p.stdout.index("=== stage memdep done") < start < p.stdout.index("all stages done")
+    reading = p.stdout[start:p.stdout.index("=== gates done")]
+    assert re.search(r"^C1\[exp_mem_dep_claude\] +FAIL", reading, re.M), reading
+    assert re.search(r"^G0 +FAIL", reading, re.M), reading
+    assert "=== gates done: exit status 1 (informational" in p.stdout  # gates.py exits 1 and the script goes on
+
+
+def test_the_gate_reading_follows_the_last_planned_dependence_stage_only(tmp_path: Path) -> None:
+    for experiment, prefix, seed in (("exp_mem_dep_claude", "live_claude_dep", 1),
+                                     ("exp_mem_dep_veins_claude", "live_claude_dep_veins", 21)):
+        for arm in ("mem", "amnesic"):
+            completed_pair_run(tmp_path / "out" / experiment / arm / f"seed_{seed}", f"{prefix}_{arm}.yaml", seed, 1.5)
+    p = run_script(tmp_path, smoke_ledger(tmp_path), STAGES="memdep memdep_veins", DEP_SEEDS="1", VEIN_SEEDS="21",
+                   GATES_RUNS=str(tmp_path / "no_scripted_runs"))
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.count("=== gates: ") == 1
+    assert p.stdout.index("=== stage memdep_veins done") < p.stdout.index("=== gates: ")
+    # a plan prints no reading, and neither does a run without a dependence stage
+    assert "=== gates" not in run_script(tmp_path, smoke_ledger(tmp_path), PLAN_ONLY="1", STAGES=ALL_STAGES).stdout
+    make_run(tmp_path / "out" / "live_claude_ladder", "live_claude_ladder.yaml", calls=LADDER_CALLS)
+    p = run_script(tmp_path, smoke_ledger(tmp_path))
+    assert p.returncode == 0 and "=== gates" not in p.stdout, p.stderr

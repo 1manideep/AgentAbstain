@@ -42,7 +42,7 @@ from typing import Any
 import anthropic
 
 from void.brain.base import BrainResult, Sampling, Usage
-from void.brain.decision import Decision, parse_lenient, strict_json_schema
+from void.brain.decision import Decision, parse_lenient, share_practice_enabled, strict_json_schema
 from void.brain.prompt import render_observation, system_prompt
 from void.config import TierConfig, VoidConfig
 from void.economy.catalog import fallback_targets, rejects_sampling
@@ -151,7 +151,8 @@ class AnthropicBrain:
         self.client = prepare_client(client) if client is not None else make_client(cfg)
         self.semaphore = semaphore or asyncio.Semaphore(cfg.server.max_concurrent_calls)
         self._system = [{"type": "text", "text": system_prompt(cfg, tier), "cache_control": {"type": "ephemeral"}}]
-        self._schema = strict_json_schema()
+        # share_practice is in the action enum only in worlds that offer it; without practices the schema is unchanged
+        self._schema = strict_json_schema(share_practice=share_practice_enabled(cfg))
         self._fallbacks_ok = bool(self.tcfg.refusal_fallbacks and fallback_targets(self.tcfg.model))
         self._halted: str | None = None  # set once a response was billed above the list prices: send nothing more
 

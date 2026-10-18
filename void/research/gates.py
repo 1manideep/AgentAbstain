@@ -17,8 +17,10 @@ paired bootstrap that ``scripts/compare.py`` reports (:func:`void.research.compa
   "Ranks hoarder below no-op" is read as a significant ranking, not a point estimate that could be noise.
 * **C4, metric check** (6.2 as revised there before any paid run): the decoy is not significantly above the no-op on
   ``mean_balance`` (the 95% interval's lower bound is at most 0) *and* it is significantly above it on
-  ``policy_chars``, the naive text metric (the interval lies above 0). ``policy_chars`` is computed here: the mean
-  over agents of the length of each agent's latest ``policy_versions`` text.
+  ``policy_chars``, the naive text metric (the interval lies above 0). ``policy_chars`` is the registered outcome of
+  :mod:`void.research.outcomes.memory_structure`, the one ``compare`` reports: the mean over the living agents of the
+  length of each one's current (latest) ``policy_versions`` text. (Until 2026-10-18 it was computed here over every
+  agent with a policy, dead ones included; no agent with a policy dies in the E0 runs, so C4 reads the same numbers.)
 
 Verdicts: ``PASS``, ``FAIL``, or ``MISSING`` when the condition cannot be evaluated: an arm has no runs or no completed
 run, fewer than two complete seed pairs carry a value (no interval), or the runs were refused. Runs are refused when
@@ -85,7 +87,7 @@ import yaml
 from pydantic import ValidationError
 
 from void.config import HypothesisConfig
-from void.research.analysis import connect, end_of_run_outcome, resolve_path, run_config_dict
+from void.research.analysis import end_of_run_outcome, resolve_path, run_config_dict
 from void.research.compare import (
     ALWAYS_ALLOWED,
     IncomparableRuns,
@@ -161,19 +163,14 @@ CONFIGS_DIR = Path(__file__).resolve().parents[2] / "configs"
 
 # --- outcomes ---------------------------------------------------------------------------------------------
 def policy_chars(run_dir: str | Path) -> float | None:
-    """Mean over agents of the length, in characters, of each agent's latest ``policy_versions`` text: the naive text
-    metric of the decoy check (6.2). None when the run kept no policy (the policy file was off) or has no database."""
+    """The naive text metric of the decoy check (6.2): the registered outcome ``policy_chars``
+    (:func:`void.research.outcomes.memory_structure.policy_chars`, the mean length in characters of the living agents'
+    current policies), resolved as every outcome is (:func:`void.research.analysis.end_of_run_outcome`), so the gate
+    and ``compare`` cannot drift apart. None when the run kept no policy (the policy file was off) or has no database."""
     try:
-        with connect(run_dir) as db:
-            rows = db.execute(
-                "SELECT p.text AS text FROM policy_versions p JOIN "
-                "(SELECT agent_id, MAX(version) AS v FROM policy_versions GROUP BY agent_id) m "
-                "ON p.agent_id = m.agent_id AND p.version = m.v").fetchall()
+        return end_of_run_outcome(run_dir, TEXT_METRIC)
     except (FileNotFoundError, sqlite3.Error):
         return None
-    if not rows:
-        return None
-    return sum(len(str(r["text"])) for r in rows) / len(rows)
 
 
 OUTCOMES: dict[str, Callable[[str | Path], float | None]] = {TEXT_METRIC: policy_chars}

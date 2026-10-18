@@ -10,6 +10,10 @@
 #   5 scarcity      configs/live_claude_scarcity_{high,low}.yaml: the scarcity-and-deception pilot; the first
 #                   SCARCITY_PILOT pairs run first and the rest only if every pilot run listed MIN_CLAIMS claims
 #
+# Once the last planned dependence stage (memdep or memdep_veins) is done, the script prints the gate reading of the
+# live dependence checks, `scripts/gates.py GATES_RUNS --live OUT` (C1 per live world; C2 to C4 from the scripted E0
+# runs under GATES_RUNS). It is informational: its exit status (1 while the scripted E0 fails) never stops the script.
+#
 # Spend is counted from two records: the run directories under OUT (and the repository's data/live), and the
 # committed spend ledger (LEDGER), which survives a new machine or a fresh clone. Before every run the script adds
 # up both and refuses the run when that plus its economy.total_cap_usd would exceed BUDGET_USD; it then appends a
@@ -36,7 +40,8 @@
 # LEDGER (default docs/research/live_spend.jsonl), LEDGER_PUSH (default 1: commit and push every ledger line to
 # LEDGER_BRANCH, default claude/trusting-goodall-ew0p38; 0 keeps it on this machine), RERUN_LOST=1 (pay again for a
 # run the ledger records but whose directory is gone), PLAN_ONLY=1 (print the plan and the budget arithmetic, run
-# nothing).
+# nothing), GATES_RUNS (default runs: the scripted G0 runs, as docs/RUNBOOK.md writes them, that the gate reading
+# takes C2 to C4 from).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -57,6 +62,7 @@ LEDGER_PUSH="${LEDGER_PUSH:-1}"
 LEDGER_BRANCH="${LEDGER_BRANCH:-claude/trusting-goodall-ew0p38}"
 RERUN_LOST="${RERUN_LOST:-0}"
 CONSOLE_SPEND_LIMIT_USD="${CONSOLE_SPEND_LIMIT_USD:-}"
+GATES_RUNS="${GATES_RUNS:-$ROOT/runs}"
 HELPER="$ROOT/scripts/live_budget.py"
 CONFIGS="$ROOT/configs"
 SMOKE="$CONFIGS/live_claude_smoke.yaml"
@@ -266,6 +272,15 @@ stage_memdep_veins() {
   stage_pairs exp_mem_dep_veins_claude "$CONFIGS/live_claude_dep_veins_mem.yaml" "$CONFIGS/live_claude_dep_veins_amnesic.yaml" "$VEIN_SEEDS"
 }
 
+# the gate reading of the live dependence checks, printed as it is; informational, so its exit status (1 while the
+# scripted E0 fails, 2 while a condition is missing) is reported and never stops the script
+print_gates() {
+  local rc=0
+  echo "live_claude: === gates: scripts/gates.py $GATES_RUNS --live $OUT ==="
+  "$PY" "$ROOT/scripts/gates.py" "$GATES_RUNS" --live "$OUT" || rc=$?
+  echo "live_claude: === gates done: exit status $rc (informational: G0 stays FAIL while the scripted E0 fails) ==="
+}
+
 # false_claim_rate is undefined in a run whose agents list no claim, so a short pilot must show claims first
 stage_scarcity() {
   local high="$CONFIGS/live_claude_scarcity_high.yaml" low="$CONFIGS/live_claude_scarcity_low.yaml" s pilot
@@ -343,6 +358,11 @@ if [[ "$LEDGER_PUSH" != "0" ]]; then  # the next reservation's commit is the har
     || echo "live_claude: WARNING: the ledger holds lines or commits that are not on origin/$LEDGER_BRANCH yet" >&2
 fi
 
+last_dep_stage=""  # the gate reading follows the last planned dependence stage
+for stage in $STAGES; do
+  case "$stage" in memdep | memdep_veins) last_dep_stage="$stage" ;; esac
+done
+
 summary=()
 for stage in $STAGES; do
   if [[ "$stage" != "smoke" ]] && ! smoke_passed; then
@@ -354,6 +374,7 @@ for stage in $STAGES; do
   after="$(spent)"
   summary+=("$stage \$$(usd_sub "$after" "$before")")
   echo "live_claude: === stage $stage done: real spend \$$(usd_sub "$after" "$before") (total \$$after) ==="
+  if [[ "$stage" == "$last_dep_stage" ]]; then print_gates; fi
 done
 
 if [[ "$LEDGER_PUSH" != "0" ]]; then

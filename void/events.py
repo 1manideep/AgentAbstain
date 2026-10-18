@@ -50,6 +50,7 @@ class Kind:
     REMEMBER = "remember"
     REVISE_SELF = "revise_self"
     GOSSIP_TRANSFER = "gossip_transfer"
+    GOSSIP_PARAPHRASE_DOWNGRADED = "gossip_paraphrase_downgraded"  # an LLM paraphrase fell back to the scripted one
     CHRONICLE = "chronicle"
     # economy
     GATE_BLOCKED = "gate_blocked"

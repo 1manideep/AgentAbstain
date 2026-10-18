@@ -72,7 +72,7 @@ LAZY_COMMANDS: dict[str, tuple[str, str]] = {
     "report": ("void.research.report", "write the report of a run or an experiment"),
     "transplant": ("void.research.transplant", "the practice transplant harness (E5)"),
     "generations": ("void.research.generations", "the generational protocol: runs chained generation by generation"),
-    "mcp": ("void.server.mcp", "a Model Context Protocol server over a run"),
+    "mcp": ("void.server.mcp", "a Model Context Protocol server over a vault directory"),
 }
 LEDGER_ENV = "VOID_LEDGER"            # the spend ledger to count (default void.economy.budget.LEDGER_FILE)
 ATTEMPT_ENV = "VOID_LEDGER_ATTEMPT"   # set by scripts/live_claude.sh: this start's own reservation in the ledger
