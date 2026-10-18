@@ -1,0 +1,57 @@
+# E3a, the discrete-generation protocol (docs/research/MEMORY_EVOLUTION.md §6.5, §6.13 row 3): the Vallinder-Hughes
+# protocol with the memory policy as the heritable text. Twelve agents live in a 3-day evaluation world; the top half
+# by end balance survive; each child gets a survivor parent's policy (round-robin by rank) and the next generation
+# starts. `void generations` (void.research.generations) runs it, generation by generation, into
+# OUT/exp_mem_e3a/<arm>/seed_<n>/gen_<g>/ and writes generations.json per seed and summary.json per arm.
+#
+# The world is the E5 evaluation world (fog, claim feedback, seeded default policies, paid nightly maintenance with
+# the no-op strategy, the audit exam, R1 retrieval; E0 cut to three days) with twelve agents instead of six. Nothing
+# in the world edits a policy (the no-op maintenance strategy), so a policy changes only between generations, by the
+# protocol. The roster is the same in every generation: a slot's name, personality and spawn place belong to the
+# world; a survivor keeps its slot and a child takes a dead agent's slot.
+#
+# The arm (experiment.arm) is the transmission rule for a child's policy:
+#   oblique   the parent's policy plus the survivors' most common bullet the parent lacks (source 'adapted')
+#   vertical  a verbatim copy of the parent's policy (source 'inherited')
+# `void generations --arms oblique,vertical` runs both; the arm is written into experiment.arm only (run.name carries
+# the generation, not the arm), so at a given seed and generation the arms share every random stream and generation 0
+# is the same world in both.
+#
+# Births happen only between generations: in-world reproduction is off and the spawn pool is empty, so the kernel
+# spawns no replacement for an agent that goes bankrupt and every generation world holds exactly its twelve agents.
+#
+# The founders start from the ten S2 seed policies (memory.policy.seed: diverse; the eleventh and twelfth slots repeat
+# the first two), as Vallinder and Hughes's first generation writes its strategies independently. Under the default
+# seed every founder holds the same text, nothing would differ for the protocol to select or transmit, and the two
+# arms would be one world. A scripted brain does not act on its policy; the text reaches its balance only through
+# the price of reading it (the policy is part of every observation, so a longer policy costs more per decision).
+extends: exp_mem_e5_eval.yaml
+run:
+  name: exp_mem_e3a
+  days: 3
+population:
+  cap: 12
+  reproduction_enabled: false
+  spawn_pool_usd: 0.0
+memory:
+  policy:
+    seed: diverse
+agents:
+  - {name: Ada,   tier: scripted, personality: {curiosity: 0.8}}
+  - {name: Bao,   tier: scripted, personality: {greed: 0.8}}
+  - {name: Cyra,  tier: scripted, personality: {caution: 0.8}}
+  - {name: Dev,   tier: scripted, personality: {industriousness: 0.8}}
+  - {name: Enzo,  tier: scripted, personality: {sociability: 0.8}}
+  - {name: Faye,  tier: scripted, personality: {curiosity: 0.6, caution: 0.4}}
+  - {name: Gus,   tier: scripted, personality: {greed: 0.6, industriousness: 0.6}}
+  - {name: Hana,  tier: scripted, personality: {sociability: 0.6, honesty: 0.9}}
+  - {name: Ivo,   tier: scripted, personality: {caution: 0.6, curiosity: 0.4}}
+  - {name: Juno,  tier: scripted, personality: {industriousness: 0.8, greed: 0.4}}
+  - {name: Kai,   tier: scripted, personality: {curiosity: 0.7, sociability: 0.5}}
+  - {name: Lena,  tier: scripted, personality: {caution: 0.7, greed: 0.5}}
+experiment:
+  name: exp_mem_e3a
+  arm: oblique
+  independent_variables: []
+  primary_outcome: mean_balance
+  secondary_outcomes: [exam_score, probe_recall, monoculture_index, notes_by_channel.inherited, invalid_action_rate]
