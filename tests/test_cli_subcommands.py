@@ -46,11 +46,14 @@ def tiny(tmp_path_factory: pytest.TempPathFactory) -> str:
 
 @pytest.fixture
 def no_port(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Replace the server runner so `void serve` never binds a port; returns the recorded calls."""
+    """Replace the server runner and its port check so `void serve` never binds a port; returns the recorded calls."""
     import uvicorn
+
+    import void.cli
 
     calls: list[dict[str, Any]] = []
     monkeypatch.setattr(uvicorn, "run", lambda app, **kw: calls.append({"app": app, **kw}))
+    monkeypatch.setattr(void.cli, "_port_refusal", lambda host, port: None)  # it binds the config's port (8000)
     return calls
 
 
@@ -393,7 +396,7 @@ def test_serve_into_an_existing_run_dir_exits_2_without_traceback(tmp_path: Path
 
 
 def test_serve_catches_the_simulation_refusal(tmp_path: Path, tiny: str, monkeypatch: pytest.MonkeyPatch,
-                                              capsys: pytest.CaptureFixture[str]) -> None:
+                                              no_port: list[dict[str, Any]], capsys: pytest.CaptureFixture[str]) -> None:
     import void.server.app as app
 
     def refuse(cfg: Any, run_dir: Path, **kw: Any) -> None:
