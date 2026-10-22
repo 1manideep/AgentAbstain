@@ -564,3 +564,13 @@ def test_e2e_four_arm_interaction_on_scripted_press_runs(tmp_path: Path) -> None
     assert f"  {verdict}  press_x [interaction two_sided, margin 0, primary] (both - chronicle) - (gossip - none) " \
            "on mean_balance: n=3" in text
     assert result["factorial"] is not None and "(descriptive, no verdict" in text
+
+
+def test_the_report_table_names_each_interaction_contrast_as_compare_does(tmp_path: Path) -> None:
+    from void.research.report import _hypotheses_section
+
+    by_level = compare(_by_level_exp(tmp_path / "a" / "exp_lvl", {"hi": UP, "lo": FLAT}, [_lvl_hyp()]))
+    four = compare(_four_exp(tmp_path / "b" / "exp_four", 0.6, [{**_four(name="press_x"), "direction": "greater"}]))
+    level_html, four_html = "".join(_hypotheses_section(by_level)), "".join(_hypotheses_section(four))
+    assert "(treat - base) at each level - at mid" in level_html and "treat - base</td>" not in level_html
+    assert "(both - chronicle) - (gossip - none)" in four_html

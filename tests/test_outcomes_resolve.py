@@ -112,9 +112,10 @@ RARE_EVENTS = [(stem, name, ex) for stem, entries in ALLOWED_NONE.items() for na
 
 
 def declared_outcomes(cfg: VoidConfig) -> list[str]:
-    """The primary, the secondaries and every hypothesis outcome, in that order, without repeats."""
+    """The primary, the secondaries and every hypothesis outcome (one per level for a by-level interaction), in that
+    order, without repeats."""
     names = [cfg.experiment.primary_outcome, *cfg.experiment.secondary_outcomes,
-             *(h.outcome for h in cfg.experiment.hypotheses)]
+             *(p for h in cfg.experiment.hypotheses for p in h.outcome_paths())]
     return list(dict.fromkeys(n for n in names if n))
 
 
@@ -242,17 +243,18 @@ def test_every_hypothesis_names_arms_of_its_experiment() -> None:
     This also catches a list inherited through ``extends`` from another experiment's base (exp_mem_e5_eval.yaml
     extends exp_mem_e0_base.yaml and so must clear E0's hypotheses, which name E0's arms)."""
     arms: dict[str, set[str]] = {}
-    hyps: dict[str, set[tuple[str, str, str]]] = {}
+    hyps: dict[str, set[tuple[str, ...]]] = {}
     for path in _arm_configs("*.yaml"):
         cfg = load_config(path)
         exp = str(cfg.experiment.name or cfg.run.name)
         arms.setdefault(exp, set()).add(str(cfg.experiment.arm))
-        hyps.setdefault(exp, set()).update((h.name, h.arm_a, h.arm_b) for h in cfg.experiment.hypotheses)
+        hyps.setdefault(exp, set()).update((h.name, *(a for a in (h.arm_a, h.arm_b, h.arm_c, h.arm_d) if a))
+                                           for h in cfg.experiment.hypotheses)
     assert {"exp_mem_dep", "exp_mem_e0", "exp_mem_e1"} <= set(hyps)
     assert hyps["exp_mem_e5"] == set()
     for exp, declared in sorted(hyps.items()):
-        for name, a, b in sorted(declared):
-            assert {a, b} <= arms[exp], f"{exp}: hypothesis {name!r} names {a!r} and {b!r}, arms are {sorted(arms[exp])}"
+        for name, *named in sorted(declared):
+            assert set(named) <= arms[exp], f"{exp}: hypothesis {name!r} names {named}, arms are {sorted(arms[exp])}"
 
 
 def test_the_live_e1_pilot_declares_outcomes_the_analysis_can_resolve(one_day_run) -> None:

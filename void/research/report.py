@@ -618,8 +618,14 @@ def _hypotheses_section(result: Mapping[str, Any]) -> list[str]:
         margin = f"{_text(h.get('margin'))}{' SD' if h.get('margin_unit') == 'sd' else ''}"
         lo, hi = h.get("ci") or [None, None]
         level = round(100 * float(h.get("ci_level") or 0.95))
+        if h["kind"] == "interaction" and h.get("levels"):  # the same contrast wording as compare.render_hypotheses
+            contrast = f"({h['arm_b']} - {h['arm_a']}) at each level - at {h['reference']}"
+        elif h["kind"] == "interaction":
+            contrast = f"({h['arm_d']} - {h['arm_c']}) - ({h['arm_b']} - {h['arm_a']})"
+        else:
+            contrast = f"{h['arm_b']} - {h['arm_a']}"
         rows.append([verdict, h["name"], kind, margin, "primary" if h.get("primary") else "exploratory",
-                     f"{h['arm_b']} - {h['arm_a']}", h["outcome"], h.get("n"), h.get("delta"),
+                     contrast, h["outcome"], h.get("n"), h.get("delta"),
                      f"CI{level} [{_text(lo)}, {_text(hi)}]", h.get("d_z"), h.get("power"), h.get("p"), h.get("p_holm"),
                      h.get("reason")])
     lines = render_hypotheses(dict(result)).splitlines()
