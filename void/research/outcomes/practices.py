@@ -83,6 +83,14 @@ walk ignores an edge back into a version it is still expanding.
     the entropy of the cluster sizes; it is 0 when every agent leans the same way however varied each policy is, the
     monoculture H8 asks about. ``.keyword`` ignores ``practice_codes.csv``. T9 (other) counts as a category. None
     without a coded bullet.
+``practice_share.<T>[.dominant][.keyword]``
+    The share of category ``<T>`` (``T1`` to ``T9``) in the distribution whose entropy ``cluster_entropy`` is, with
+    the same coder, the same population (living agents whose current policy has a bullet) and the same optional
+    arguments after the category (``dominant`` and ``keyword``, in any order, each as ``cluster_entropy`` reads
+    them). Bare: the share of an agent's current-policy bullets coded ``<T>``, averaged over the agents (each agent
+    weighs the same, as in ``cluster_entropy``). ``.dominant``: the share of those agents whose dominant category is
+    ``<T>``. So the nine shares sum to 1, and ``-sum p log2 p`` over them is ``cluster_entropy`` with the same
+    arguments, whenever ``cluster_entropy`` is defined; None exactly when it is None.
 
 Any other argument raises ``ValueError`` (a typo in a config's outcome list fails loudly).
 
@@ -135,7 +143,10 @@ __all__ = [
     "agreement",
     "bullets",
     "cluster_entropy",
+    "code_profile",
+    "code_table",
     "cohens_kappa",
+    "dominant_code",
     "first_adoption_source_richer_share",
     "first_adoptions",
     "keyword_code",
@@ -146,6 +157,7 @@ __all__ = [
     "novelty_share",
     "pair_adoptions",
     "persistence_rate",
+    "practice_share",
     "read_codes",
     "sample_policy_lines",
     "write_csv",
@@ -626,34 +638,70 @@ def read_codes(path: str | Path) -> dict[str, str]:
     return {key: min(c, key=lambda code: (-c[code], CODES.index(code))) for key, c in votes.items()}
 
 
+def code_table(run_dir: str | Path, *, keyword: bool = False) -> dict[str, str]:
+    """The codes a run's bullets are looked up in first: :func:`read_codes` of ``practice_codes.csv`` in the run
+    directory, or ``{}`` (the keyword coder for every bullet) without the file or with ``keyword``."""
+    path = Path(run_dir) / CODES_FILE
+    return read_codes(path) if path.is_file() and not keyword else {}
+
+
+def code_profile(text: str | None, table: Mapping[str, str]) -> Counter[str]:
+    """``{code: bullets}`` of a policy text: each of its :func:`bullets` coded by ``table`` (normalized text to code),
+    falling back to :func:`keyword_code`. Empty for a text without a bullet."""
+    return Counter(table.get(b) or keyword_code(b) for b in bullets(text))
+
+
+def dominant_code(profile: Mapping[str, int]) -> str:
+    """The most frequent code of a non-empty profile; a tie goes to the lower code number."""
+    return min(profile, key=lambda code: (-profile[code], CODES.index(code)))
+
+
 def _entropy_bits(shares: Iterable[float]) -> float:
     return -sum(p * math.log2(p) for p in shares if p > 0.0) + 0.0
+
+
+def _coding_flags(name: str, arg: str | None) -> list[str]:
+    """The ``dominant`` / ``keyword`` flags of a coding outcome's argument (``cluster_entropy``'s grammar)."""
+    flags = [] if arg is None else arg.split(".")
+    if any(f not in ("dominant", "keyword") for f in flags):
+        raise ValueError(f"{name} argument {arg!r} must be made of 'dominant' and 'keyword'")
+    return flags
+
+
+def _category_shares(run_dir: str | Path, flags: Sequence[str]) -> dict[str, float] | None:
+    """The category distribution of the living agents' current policies whose entropy is ``cluster_entropy`` (every
+    code of :data:`CODES` a key); None without a living agent whose policy has a bullet."""
+    loaded = _living_graph(run_dir)
+    if loaded is None:
+        return None
+    graph, alive = loaded
+    table = code_table(run_dir, keyword="keyword" in flags)
+    profiles = [p for p in (code_profile(graph.versions[graph.current[aid]].text, table) for aid in alive) if p]
+    if not profiles:
+        return None
+    if "dominant" in flags:
+        clusters = Counter(dominant_code(p) for p in profiles)
+        return {c: clusters[c] / len(profiles) for c in CODES}
+    return {c: sum(p[c] / sum(p.values()) for p in profiles) / len(profiles) for c in CODES}
 
 
 @register("cluster_entropy")
 def cluster_entropy(run_dir: str | Path, arg: str | None = None) -> float | None:
     """H8's cluster entropy in bits over the living agents' current policies (see the module docstring)."""
-    flags = [] if arg is None else arg.split(".")
-    if any(f not in ("dominant", "keyword") for f in flags):
-        raise ValueError(f"cluster_entropy argument {arg!r} must be made of 'dominant' and 'keyword'")
-    loaded = _living_graph(run_dir)
-    if loaded is None:
-        return None
-    graph, alive = loaded
-    path = Path(run_dir) / CODES_FILE
-    table = read_codes(path) if path.is_file() and "keyword" not in flags else {}
-    profiles: list[Counter[str]] = []
-    for aid in alive:
-        mine = bullets(graph.versions[graph.current[aid]].text)
-        if mine:
-            profiles.append(Counter(table.get(b) or keyword_code(b) for b in mine))
-    if not profiles:
-        return None
-    if "dominant" in flags:
-        clusters = Counter(min(p, key=lambda code: (-p[code], CODES.index(code))) for p in profiles)
-        return _entropy_bits(clusters[c] / len(profiles) for c in CODES)
-    mix = {c: sum(p[c] / sum(p.values()) for p in profiles) / len(profiles) for c in CODES}
-    return _entropy_bits(mix[c] for c in CODES)
+    shares = _category_shares(run_dir, _coding_flags("cluster_entropy", arg))
+    return None if shares is None else _entropy_bits(shares[c] for c in CODES)
+
+
+@register("practice_share")
+def practice_share(run_dir: str | Path, arg: str | None = None) -> float | None:
+    """The share of one practice category in ``cluster_entropy``'s distribution:
+    ``practice_share.<T>[.dominant][.keyword]`` (see the module docstring); None when ``cluster_entropy`` is."""
+    code, dot, rest = (arg or "").partition(".")
+    if code not in CODE_NAMES:
+        raise ValueError(f"practice_share argument {arg!r} must start with a category {CODES[0]} to {CODES[-1]}: "
+                         "practice_share.<T>[.dominant][.keyword]")
+    shares = _category_shares(run_dir, _coding_flags("practice_share", rest if dot else None))
+    return None if shares is None else shares[code]
 
 
 # --- the blind sampler -----------------------------------------------------------------------------------------------
