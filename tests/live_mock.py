@@ -15,14 +15,30 @@ import json
 import math
 import re
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-THINK = {  # assumed thinking tokens at effort low: (decide, maintain, exam, text)
-    "claude-opus-5-5": (800, 1600, 400, 400),
-    "claude-sonnet-5-5": (800, 1600, 400, 400),
-    "claude-haiku-5-5": (600, 1200, 300, 300),
+from void.config import load_config
+
+LADDER = Path(__file__).resolve().parents[1] / "configs" / "live_claude_ladder.yaml"
+# assumed thinking tokens at effort low, per ladder tier: (decide, maintain, exam, text)
+THINK_BY_TIER = {
+    "frontier": (800, 1600, 400, 400),
+    "standard": (800, 1600, 400, 400),
+    "swift": (600, 1200, 300, 300),
 }
+
+
+def _think_by_model() -> dict[str, tuple[int, int, int, int]]:
+    """:data:`THINK_BY_TIER` keyed by the exact model string each ladder tier sends, read from the kit's config."""
+    tiers = load_config(LADDER).tiers
+    models = {tier: tiers[tier].model for tier in THINK_BY_TIER}
+    assert all(models.values()) and len(set(models.values())) == len(models), f"one distinct model per tier: {models}"
+    return {models[tier]: think for tier, think in THINK_BY_TIER.items()}
+
+
+THINK = _think_by_model()
 NODE_RE = re.compile(r"^- node (\S+) at \((-?[\d.]+), (-?[\d.]+)\), ([\d.]+) away, (\w+)", re.M)
 NULL_ACTION = {k: None for k in ("target", "x", "y", "text", "note_title", "amount_usd", "delta", "name", "code", "tests", "params")}
 NULL_COMMAND = {k: None for k in ("path", "file_text", "old_str", "new_str", "insert_line", "insert_text", "old_path",
