@@ -10,7 +10,9 @@ lists the dropped runs instead of refusing.
 
 ``--hypotheses-only`` prints only the PASS / FAIL line of each pre-registered hypothesis (``experiment.hypotheses``;
 with ``--json``, their rows) and turns the verdict into the exit code: 1 when any primary hypothesis fails, 0
-otherwise (also when none is registered), 2 when the comparison is refused.
+otherwise (also when none is registered), 2 when the comparison is refused. An interaction hypothesis over within-run
+levels (H4: rung x self-edit) also prints one PASS / FAIL line per contrast under its own; its own line is the verdict
+that counts (``void.research.compare`` has the rule).
 """
 
 from __future__ import annotations

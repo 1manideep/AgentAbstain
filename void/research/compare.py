@@ -53,16 +53,47 @@ with ``margin_unit: sd``, in standard deviations of those paired differences:
 * ``equivalence`` passes when the two one-sided t-tests (:func:`~void.research.stats.tost_paired`) give ``p`` (``p_holm``
   when primary) below alpha; ``ci`` is then the 90% t interval and ``power`` the TOST power at a zero effect
   (:func:`~void.research.stats.power_tost`).
+* ``interaction`` (H4) is decided on per-seed differences of paired differences, below.
 * Holm's step-down adjustment runs across the hypotheses with ``primary: true``; the others are exploratory
   (``p_holm`` None). A hypothesis with fewer than two paired seeds, or naming an arm without runs, fails.
 
+**Interaction hypotheses** (``kind: interaction``; :class:`void.config.HypothesisConfig`) come in two layouts:
+
+* four arms (a between-arm 2x2): one contrast per seed, ``(arm_d - arm_c) - (arm_b - arm_a)`` of ``outcome``, over
+  the seeds all four arms completed;
+* arm x within-run levels (H4: the rungs of one world): for each level L of ``levels`` other than ``reference`` (the
+  first level unless set), one contrast per seed, ``(arm_b - arm_a)`` of ``outcome_template`` at L minus the same at
+  the reference, over the seeds both arms completed.
+
+Each contrast gets its estimate (the mean over seeds), the two-sided ``1 - alpha`` paired percentile bootstrap CI (the
+one interval method of this module: 2000 resamples, ``random.Random(0)``), the margin-shifted paired t p-value of
+:func:`~void.research.stats.contrast_test` (``two_sided`` tests the side of the observed mean, which gives the
+two-sided p) and the power at its observed effect beyond the margin. The k contrasts with at least two seeds are
+Holm-adjusted among themselves (each contrast's ``p_holm``). A contrast *clears* when its CI clears the margin on the
+declared side (``two_sided``: on either side), its within-hypothesis ``p_holm`` is below alpha and, with
+``min_power``, its power reaches it.
+
+How a multi-contrast hypothesis enters the Holm family across primary hypotheses: as ONE member, with ``p`` equal to
+its smallest within-hypothesis Holm p, ``min(1, k * smallest contrast p)``, the Bonferroni p of the global null "every
+interaction contrast is 0" (H4 is falsified when every interaction CI includes 0). Holm across the primary hypotheses
+then adjusts that p like any other hypothesis's into the row's ``p_holm``. An interaction hypothesis PASSES when at
+least one contrast clears and, when it is primary, its family ``p_holm`` is below alpha. Its row's ``n, delta, ci,
+d_z, power`` are the deciding contrast's (the clearing contrast with the smallest within-hypothesis ``p_holm``, else
+the contrast with the smallest one); ``contrasts`` holds every contrast with its per-seed values, and :func:`render`
+prints, under the hypothesis's PASS or FAIL line, a PASS or FAIL line per contrast (PASS: it clears) when the layout is
+by level. A four-arm interaction's one contrast is printed on the hypothesis's own line.
+
 ``result["hypotheses"]`` holds one row per hypothesis (``name, kind, outcome, n, delta, ci, d_z, power, p, p_holm,
-passed, reason`` and the inputs); :func:`render` prints a PASS or FAIL line for each.
+passed, reason`` and the inputs; an interaction row also ``arm_c, arm_d, outcome_template, levels, reference, k,
+deciding, contrasts``, its ``outcome`` being ``outcome_template`` in the by-level layout); :func:`render` prints a PASS
+or FAIL line for each.
 
 **2x2 factorial** (DESIGN §17 ``exp_press``): with exactly four arms whose declared independent variables include
 exactly two that vary, each over exactly two values, crossed so every combination is one arm, ``result["factorial"]``
 holds the main effects and the interaction of the primary outcome per seed
 (:func:`~void.research.stats.interaction_2x2`; level 0 is the lower value, ``false`` before ``true``). Otherwise None.
+It is descriptive (no verdict, no Holm), whether or not an interaction hypothesis is declared; only a declared
+interaction hypothesis is decided.
 
 **Per-tier difference-in-differences** (PLAN §8 Q2, scarcity x capability tier): when every arm rosters the same two
 or more tiers, each bare tier-resolvable primary or secondary outcome (:data:`TIER_OUTCOMES`, e.g.
@@ -86,7 +117,7 @@ from typing import Any
 
 import yaml
 
-from void.config import VoidConfig, load_config
+from void.config import HypothesisConfig, VoidConfig, load_config
 from void.research import stats
 from void.research.analysis import (
     CONFIG_FILE,
@@ -110,6 +141,7 @@ __all__ = [
     "decide_hypotheses",
     "discover_runs",
     "evaluate_hypothesis",
+    "evaluate_interaction",
     "factorial_design",
     "in_family",
     "paired_stats",
@@ -366,6 +398,8 @@ def _outcome_stats(a: str, b: str, path: str, values: dict[str, dict[int, dict[s
 
 # --- pre-registered hypotheses -------------------------------------------------------------------------------
 _HYP_FIELDS = ("name", "kind", "outcome", "arm_a", "arm_b", "direction", "margin", "margin_unit", "primary", "min_power")
+_INTERACTION_FIELDS = ("arm_c", "arm_d", "outcome_template", "levels", "reference")  # interaction rows only
+FOUR_ARM_CONTRAST = "interaction"  # the label of a four-arm interaction's single contrast
 
 
 def _std_power(effect: float, sd: float | None, n: int, fn: Any) -> float | None:
@@ -420,14 +454,110 @@ def evaluate_hypothesis(h: Mapping[str, Any], diffs: Sequence[float], *, alpha: 
     return out
 
 
+def evaluate_interaction(h: Mapping[str, Any], contrasts: Mapping[str, Sequence[float]], *, alpha: float = ALPHA,
+                         n_boot: int = N_BOOT, boot_seed: int = BOOT_SEED) -> dict[str, Any]:
+    """The test of one ``kind: interaction`` hypothesis (as a dict) on its contrasts' per-seed values, ``{label:
+    values}`` in order (one label for a four-arm interaction, one per non-reference level otherwise); see the module
+    docstring for the rule.
+
+    Returns the fields :func:`evaluate_hypothesis` returns, with ``p`` the hypothesis's own p (the smallest
+    within-hypothesis Holm p, the one that enters the Holm family when the hypothesis is primary), ``holds`` whether
+    any contrast clears (None when no contrast has two values), ``n, delta, sd, d_z, margin_abs, ci, power,
+    ci_clears`` those of the deciding contrast (``deciding``), ``k`` the number of contrasts tested and ``contrasts``
+    one row per contrast: ``{label, n, estimate, sd, d_z, margin_abs, ci, side, p, p_holm, power, ci_clears,
+    clears}``."""
+    direction = str(h.get("direction", "greater"))
+    margin = float(h.get("margin", 0.0))
+    min_power = h.get("min_power")
+    rows: list[dict[str, Any]] = []
+    for label, values in contrasts.items():
+        d = [float(x) for x in values]
+        n = len(d)
+        mean = sum(d) / n if n else None
+        sd = statistics.stdev(d) if n >= 2 else None
+        margin_abs: float | None = margin
+        if h.get("margin_unit") == "sd":
+            margin_abs = margin * sd if sd is not None else None
+        row: dict[str, Any] = {"label": str(label), "n": n, "estimate": mean, "sd": sd,
+                               "d_z": mean / sd if mean is not None and sd else None, "margin_abs": margin_abs,
+                               "ci": [None, None], "side": None, "p": None, "p_holm": None, "power": None,
+                               "ci_clears": None, "clears": None}
+        if n >= 2 and margin_abs is not None and mean is not None:
+            t = stats.contrast_test(d, margin_abs, direction, alpha, n_boot=n_boot, seed=boot_seed)
+            beyond = (abs(mean) if direction == "two_sided" else mean if direction == "greater" else -mean) - margin_abs
+            row.update(ci=t["ci"], side=t["side"], p=t["p"], ci_clears=t["ci_clears"],
+                       power=_std_power(beyond, sd, n, lambda z, k: stats.power_paired(z, k, alpha)))
+        rows.append(row)
+    within = stats.holm({r["label"]: r["p"] for r in rows})
+    tested = [r for r in rows if r["p"] is not None]
+    for r in tested:
+        r["p_holm"] = within[r["label"]]
+        powered = min_power is None or (r["power"] is not None and r["power"] >= float(min_power))
+        r["clears"] = bool(r["ci_clears"]) and r["p_holm"] < alpha and powered
+    clearing = sorted((r for r in tested if r["clears"]), key=lambda r: r["p_holm"])
+    by_p = sorted(tested, key=lambda r: r["p_holm"])
+    deciding = clearing[0] if clearing else by_p[0] if by_p else (rows[0] if rows else None)
+    out: dict[str, Any] = {"n": 0, "delta": None, "sd": None, "d_z": None, "margin_abs": None, "ci": [None, None],
+                           "ci_level": 1.0 - alpha, "p": by_p[0]["p_holm"] if by_p else None, "power": None,
+                           "power_at": "observed effect beyond the margin", "holds": bool(clearing) if tested else None,
+                           "ci_clears": None, "k": len(tested), "deciding": None, "contrasts": rows}
+    if deciding is not None:
+        out.update(n=deciding["n"], delta=deciding["estimate"], sd=deciding["sd"], d_z=deciding["d_z"],
+                   margin_abs=deciding["margin_abs"], ci=deciding["ci"], power=deciding["power"],
+                   ci_clears=deciding["ci_clears"], deciding=deciding["label"])
+    return out
+
+
 def _g(v: float | None) -> str:
     return "n/a" if v is None else f"{v:.4g}"
+
+
+def _side_text(direction: str, margin: Any, unit: Any) -> str:
+    m = f"{_g(float(margin or 0.0))}{' SD' if unit == 'sd' else ''}"
+    if direction == "two_sided":
+        return f"beyond +/-{m}" if float(margin or 0.0) > 0 else "away from 0 (either side)"
+    return f"> {m}" if direction == "greater" else f"< -{m}"
+
+
+def _contrast_shortfall(c: Mapping[str, Any], alpha: float, min_power: Any) -> str:
+    """Why a tested contrast does not clear: the first of its three rules that fails."""
+    if not c["ci_clears"]:
+        return "CI95 does not clear"
+    if c["p_holm"] >= alpha:
+        return f"CI95 clears but p_holm {_g(c['p_holm'])} >= {alpha}"
+    return f"power {_g(c['power'])} < min_power {_g(min_power)}"
+
+
+def _interaction_verdict(r: Mapping[str, Any], alpha: float) -> tuple[bool, str]:
+    side = _side_text(str(r["direction"]), r["margin"], r["margin_unit"])
+    k = r["k"]
+    ok: list[str] = []
+    bad: list[str] = []
+    clearing = [c["label"] for c in r["contrasts"] if c["clears"]]
+    within = f"Holm across its {k} contrast{'s' if k != 1 else ''}"
+    if clearing:
+        ok.append(f"{', '.join(clearing)} clear{'s' if len(clearing) == 1 else ''} {side} (CI95 and p_holm < {alpha}, "
+                  f"{within})")
+    else:
+        why = [f"{c['label']}: {_contrast_shortfall(c, alpha, r['min_power'])}" for c in r["contrasts"] if c["p"] is not None]
+        bad.append(f"no contrast clears {side} after {within} ({'; '.join(why)})")
+    if r["primary"]:
+        p_holm = r["p_holm"]
+        (ok if p_holm < alpha else bad).append(f"p_holm {_g(p_holm)} {'<' if p_holm < alpha else '>='} {alpha} "
+                                               f"(its p {_g(r['p'])} in the Holm family of primary hypotheses)")
+    return not bad, "; ".join(bad + ok)
 
 
 def _verdict(r: Mapping[str, Any], alpha: float) -> tuple[bool, str]:
     """``(passed, reason)`` for one evaluated row whose ``p_holm`` is set."""
     if r.get("missing_arms"):
         return False, f"arm(s) {r['missing_arms']} have no runs in this experiment"
+    if r["kind"] == "interaction":
+        if r["holds"] is None:
+            most = max((int(c["n"]) for c in r.get("contrasts") or []), default=0)
+            return False, (f"undetermined: no contrast has values for at least 2 seeds in every arm and level it reads "
+                           f"(at most {most})")
+        return _interaction_verdict(r, alpha)
     if r["n"] < 2 or r["holds"] is None:
         return False, f"undetermined: {r['n']} seed pair(s) with values for both arms, at least 2 needed"
     kind, greater = r["kind"], r["direction"] == "greater"
@@ -466,6 +596,57 @@ def decide_hypotheses(rows: list[dict[str, Any]], alpha: float = ALPHA) -> list[
         r["p_holm"] = adjusted.get(r["name"]) if r["primary"] else None
         r["passed"], r["reason"] = _verdict(r, alpha)
     return rows
+
+
+def _interaction_row(h: Mapping[str, Any], lookup: Mapping[str, str], seeds: list[int],
+                     problems: Mapping[tuple[str, int], str], get: Any, *, alpha: float, n_boot: int,
+                     boot_seed: int) -> dict[str, Any]:
+    """One evaluated row of a ``kind: interaction`` hypothesis (see the module docstring): its contrasts' per-seed
+    values over the seeds every arm it names completed, then :func:`evaluate_interaction`."""
+    spec = HypothesisConfig.model_validate(dict(h))
+    four = spec.layout == "four_arms"
+    labels = [spec.arm_a, spec.arm_b] + ([str(spec.arm_c), str(spec.arm_d)] if four else [])
+    dirs = [lookup.get(x) for x in labels]
+    missing = [x for x, d in zip(labels, dirs, strict=True) if d is None]
+    if not missing and len(set(dirs)) < len(dirs):
+        missing = [f"{', '.join(labels)} name the same runs more than once"]
+    row: dict[str, Any] = {**{k: h.get(k) for k in _HYP_FIELDS + _INTERACTION_FIELDS},
+                           "outcome": spec.outcome or spec.outcome_template, "reference": spec.reference_level,
+                           "missing_arms": missing}
+    per_seed: dict[str, Any] = {}
+    values: dict[str, dict[str, float]] = {}
+    used = [] if missing else [s for s in seeds if all((d, s) not in problems for d in dirs)]
+    run_dirs = [str(d) for d in dirs]
+    if four:
+        values[FOUR_ARM_CONTRAST] = {}
+        for s in used:
+            ya, yb, yc, yd = (get(d, s, str(spec.outcome)) for d in run_dirs)
+            per_seed[str(s)] = [ya, yb, yc, yd]
+            if None not in (ya, yb, yc, yd):
+                values[FOUR_ARM_CONTRAST][str(s)] = (yd - yc) - (yb - ya)
+    else:
+        paths = spec.level_outcomes()
+        ref = str(spec.reference_level)
+        others = [lv for lv in paths if lv != ref]
+        for lv in others:
+            values[lv] = {}
+        for s in used:
+            cell = {lv: [get(run_dirs[0], s, p), get(run_dirs[1], s, p)] for lv, p in paths.items()}
+            per_seed[str(s)] = cell
+            ra, rb = cell[ref]
+            for lv in others:
+                va, vb = cell[lv]
+                if None not in (va, vb, ra, rb):
+                    values[lv][str(s)] = (vb - va) - (rb - ra)
+    row.update(evaluate_interaction(row, {lb: list(v.values()) for lb, v in values.items()}, alpha=alpha,
+                                    n_boot=n_boot, boot_seed=boot_seed))
+    for c in row["contrasts"]:
+        c["per_seed"] = values[c["label"]]
+        c["dropped"] = len(used) - len(values[c["label"]])
+        c["vs"] = None if four else row["reference"]
+    deciding = next((c for c in row["contrasts"] if c["label"] == row["deciding"]), None)
+    row.update(n_seeds=len(used), dropped=deciding["dropped"] if deciding else 0, per_seed=per_seed)
+    return row
 
 
 def _hypotheses(reps: Mapping[str, Mapping[str, Any]], names: list[str]) -> list[dict[str, Any]]:
@@ -772,6 +953,10 @@ def compare(exp_dir: str | Path, primary: str | None = None, *, allow_incomplete
     lookup = _arm_lookup(reps, names)
     hyp_rows: list[dict[str, Any]] = []
     for h in hypotheses:
+        if h.get("kind") == "interaction":
+            hyp_rows.append(_interaction_row(h, lookup, seeds, problems, get, alpha=alpha, n_boot=n_boot,
+                                             boot_seed=boot_seed))
+            continue
         a_dir, b_dir = lookup.get(str(h["arm_a"])), lookup.get(str(h["arm_b"]))
         missing = [str(h[k]) for k, d in (("arm_a", a_dir), ("arm_b", b_dir)) if d is None]
         if a_dir is not None and a_dir == b_dir:
@@ -846,19 +1031,53 @@ def _hypothesis_line(h: dict[str, Any]) -> str:
     unit = " SD" if h["margin_unit"] == "sd" else ""
     tag += f", margin {_g(h['margin'])}{unit}, " + ("primary" if h["primary"] else "exploratory")
     level = round(100 * h["ci_level"])
-    return (f"{'PASS' if h['passed'] else 'FAIL'}  {h['name']} [{tag}] {h['arm_b']} - {h['arm_a']} on {h['outcome']}: "
-            f"n={h['n']} delta={_fmt(h['delta'])} CI{level}=[{_fmt(lo)}, {_fmt(hi)}] d_z={_fmt(h['d_z'], 3)} "
+    verdict = f"{'PASS' if h['passed'] else 'FAIL'}  {h['name']} [{tag}]"
+    if h["kind"] == "interaction" and h.get("levels"):
+        return (f"{verdict} ({h['arm_b']} - {h['arm_a']}) at each level - at {h['reference']} on {h['outcome']}: "
+                f"{h['k']} contrast(s) of {len(h['contrasts'])}, Holm within; p={_g(h['p'])} p_holm={_g(h['p_holm'])} "
+                f"-- {h['reason']}")
+    if h["kind"] == "interaction":
+        contrast = f"({h['arm_d']} - {h['arm_c']}) - ({h['arm_b']} - {h['arm_a']})"
+        delta = "estimate"
+    else:
+        contrast, delta = f"{h['arm_b']} - {h['arm_a']}", "delta"
+    return (f"{verdict} {contrast} on {h['outcome']}: "
+            f"n={h['n']} {delta}={_fmt(h['delta'])} CI{level}=[{_fmt(lo)}, {_fmt(hi)}] d_z={_fmt(h['d_z'], 3)} "
             f"power={_fmt(h['power'], 3)} p={_g(h['p'])} p_holm={_g(h['p_holm'])} -- {h['reason']}")
 
 
+def _contrast_line(h: dict[str, Any], c: dict[str, Any], alpha: float) -> str:
+    """One contrast of an arm x levels interaction, ``<level> - <reference>``: PASS when it clears (its CI clears the
+    margin on the declared side, its within-hypothesis Holm p is below alpha and any ``min_power`` is met)."""
+    lo, hi = c["ci"]
+    level = round(100 * h["ci_level"])
+    if c["p"] is None:
+        verdict, state = "FAIL", "untested: fewer than 2 seeds with values in both arms at both levels"
+    elif c["clears"]:
+        verdict, state = "PASS", "clears"
+    else:
+        verdict, state = "FAIL", f"does not clear: {_contrast_shortfall(c, alpha, h['min_power'])}"
+    return (f"{verdict}  contrast {c['label']} - {c['vs']}: n={c['n']} (dropped {c['dropped']}) "
+            f"estimate={_fmt(c['estimate'])} CI{level}=[{_fmt(lo)}, {_fmt(hi)}] d_z={_fmt(c['d_z'], 3)} "
+            f"power={_fmt(c['power'], 3)} p={_g(c['p'])} p_holm(within)={_g(c['p_holm'])} -- {state}")
+
+
 def render_hypotheses(result: dict[str, Any]) -> str:
-    """One PASS or FAIL line per pre-registered hypothesis of :func:`compare`'s result."""
+    """One PASS or FAIL line per pre-registered hypothesis of :func:`compare`'s result; an arm x levels interaction
+    adds one indented PASS or FAIL line per contrast below its own."""
     hyps = result.get("hypotheses") or []
     if not hyps:
         return "pre-registered hypotheses: none (experiment.hypotheses is empty)"
     n_primary = sum(1 for h in hyps if h["primary"])
-    lines = [f"pre-registered hypotheses (alpha {result.get('alpha', ALPHA)}; Holm across {n_primary} primary):"]
-    lines.extend(f"  {_hypothesis_line(h)}" for h in hyps)
+    note = ""
+    if any(h["kind"] == "interaction" for h in hyps):
+        note = "; an interaction enters it once, with its smallest within-hypothesis Holm p"
+    alpha = float(result.get("alpha", ALPHA))
+    lines = [f"pre-registered hypotheses (alpha {alpha}; Holm across {n_primary} primary{note}):"]
+    for h in hyps:
+        lines.append(f"  {_hypothesis_line(h)}")
+        if h["kind"] == "interaction" and h.get("levels"):
+            lines.extend(f"      {_contrast_line(h, c, alpha)}" for c in h["contrasts"])
     return "\n".join(lines)
 
 
@@ -870,7 +1089,7 @@ def _effect_line(label: str, e: dict[str, Any]) -> str:
 
 def _render_factorial(f: dict[str, Any]) -> list[str]:
     fa, fb = f["factor_a"], f["factor_b"]
-    lines = [f"factorial 2x2 on {f['outcome']} (n={f['n']}, dropped {f['dropped']}): "
+    lines = [f"factorial 2x2 on {f['outcome']} (descriptive, no verdict; n={f['n']}, dropped {f['dropped']}): "
              f"A={fa['path']} {_canon(fa['levels'][0])} -> {_canon(fa['levels'][1])}, "
              f"B={fb['path']} {_canon(fb['levels'][0])} -> {_canon(fb['levels'][1])}; "
              "cells " + ", ".join(f"{k}={arm}" for k, arm in f["cells"].items())]

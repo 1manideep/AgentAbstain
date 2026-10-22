@@ -69,9 +69,10 @@ def test_every_shipped_config_loads(path: Path) -> None:
     assert not cfg.memory.practices.enabled
     assert not cfg.memory.policy.mutate_at_birth
     # pre-registered hypotheses are declared only by the experiments that pre-register them: E0 and the dependence
-    # check (exp_mem_e0_base.yaml and exp_mem_dep_base.yaml, inherited by their arms and by the live dependence configs)
-    # and the E1 pilot (live_mem_e1_base.yaml); every other config, E5's evaluation world included, declares none
-    if path.name.startswith(("exp_mem_dep", "exp_mem_e0", "live_claude_dep", "live_mem_e1")):
+    # check (exp_mem_e0_base.yaml and exp_mem_dep_base.yaml, inherited by their arms and by the live dependence configs),
+    # the E1 pilot (live_mem_e1_base.yaml) and E4 (H4 in live_mem_e4_base.yaml, inherited by its arms and by the
+    # scripted mirror exp_mem_e4s_*); every other config, E5's evaluation world included, declares none
+    if path.name.startswith(("exp_mem_dep", "exp_mem_e0", "live_claude_dep", "live_mem_e1", "live_mem_e4", "exp_mem_e4s")):
         assert cfg.experiment.hypotheses
     else:
         assert cfg.experiment.hypotheses == []
