@@ -1,0 +1,424 @@
+{
+  "$defs": {
+    "ClaimTally": {
+      "properties": {
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "payload.agent_id (the speaker); null when it was not a string",
+          "title": "Agent Id"
+        },
+        "falsy": {
+          "description": "Claims whose payload.truthful is not truthy",
+          "title": "Falsy",
+          "type": "integer"
+        },
+        "made": {
+          "title": "Made",
+          "type": "integer"
+        },
+        "tier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "payload.tier; the client files the group under the roster's tier for the speaker",
+          "title": "Tier"
+        }
+      },
+      "required": [
+        "agent_id",
+        "tier",
+        "made",
+        "falsy"
+      ],
+      "title": "ClaimTally",
+      "type": "object"
+    },
+    "DayCount": {
+      "properties": {
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "day": {
+          "title": "Day",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "day",
+        "count"
+      ],
+      "title": "DayCount",
+      "type": "object"
+    },
+    "DegenerationAggregate": {
+      "properties": {
+        "by_generation": {
+          "description": "degeneration events per payload.generation",
+          "items": {
+            "$ref": "#/$defs/GenerationCount"
+          },
+          "title": "By Generation",
+          "type": "array"
+        },
+        "t_c_by_tier": {
+          "description": "Tiers in order of their first degeneration event with a t_c",
+          "items": {
+            "$ref": "#/$defs/TierCollapse"
+          },
+          "title": "T C By Tier",
+          "type": "array"
+        }
+      },
+      "required": [
+        "by_generation",
+        "t_c_by_tier"
+      ],
+      "title": "DegenerationAggregate",
+      "type": "object"
+    },
+    "EventMsg": {
+      "properties": {
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Id"
+        },
+        "day": {
+          "title": "Day",
+          "type": "integer"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "seq": {
+          "title": "Seq",
+          "type": "integer"
+        },
+        "tick": {
+          "title": "Tick",
+          "type": "integer"
+        },
+        "type": {
+          "const": "event",
+          "default": "event",
+          "title": "Type",
+          "type": "string"
+        },
+        "visibility": {
+          "default": "public",
+          "enum": [
+            "public",
+            "operator"
+          ],
+          "title": "Visibility",
+          "type": "string"
+        }
+      },
+      "required": [
+        "seq",
+        "tick",
+        "day",
+        "kind"
+      ],
+      "title": "EventMsg",
+      "type": "object"
+    },
+    "ExamDayTally": {
+      "properties": {
+        "abstained": {
+          "title": "Abstained",
+          "type": "integer"
+        },
+        "asked": {
+          "title": "Asked",
+          "type": "integer"
+        },
+        "correct": {
+          "title": "Correct",
+          "type": "integer"
+        },
+        "day": {
+          "title": "Day",
+          "type": "integer"
+        },
+        "failed": {
+          "title": "Failed",
+          "type": "integer"
+        },
+        "kind": {
+          "description": "payload.kind (the question kind); 'unknown' when absent",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "day",
+        "kind",
+        "asked",
+        "correct",
+        "abstained",
+        "failed"
+      ],
+      "title": "ExamDayTally",
+      "type": "object"
+    },
+    "GenerationCount": {
+      "properties": {
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "generation": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "payload.generation; null when it was not an integral number (total only)",
+          "title": "Generation"
+        }
+      },
+      "required": [
+        "generation",
+        "count"
+      ],
+      "title": "GenerationCount",
+      "type": "object"
+    },
+    "GossipEdgeTally": {
+      "properties": {
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "last_tick": {
+          "description": "Tick of the edge's newest transfer",
+          "title": "Last Tick",
+          "type": "integer"
+        },
+        "listener_id": {
+          "description": "payload.listener_id; '' when it was not a string",
+          "title": "Listener Id",
+          "type": "string"
+        },
+        "speaker_id": {
+          "description": "payload.speaker_id; '' when it was not a string",
+          "title": "Speaker Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "speaker_id",
+        "listener_id",
+        "count",
+        "last_tick"
+      ],
+      "title": "GossipEdgeTally",
+      "type": "object"
+    },
+    "MemoryAgentTally": {
+      "description": "One agent's maintenance, maintenance_skipped and exam_answered events (agent: payload.agent_id, else the event's).",
+      "properties": {
+        "abstained": {
+          "title": "Abstained",
+          "type": "integer"
+        },
+        "agent_id": {
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "asked": {
+          "description": "exam_answered events without payload.failed (graded items)",
+          "title": "Asked",
+          "type": "integer"
+        },
+        "correct": {
+          "title": "Correct",
+          "type": "integer"
+        },
+        "failed": {
+          "title": "Failed",
+          "type": "integer"
+        },
+        "maintenance_calls": {
+          "title": "Maintenance Calls",
+          "type": "integer"
+        },
+        "maintenance_real_micro": {
+          "description": "Sum of maintenance payload.real_cost (micro-dollars)",
+          "title": "Maintenance Real Micro",
+          "type": "number"
+        },
+        "maintenance_skipped": {
+          "title": "Maintenance Skipped",
+          "type": "integer"
+        },
+        "maintenance_world_micro": {
+          "description": "Sum of maintenance payload.world_cost (micro-dollars)",
+          "title": "Maintenance World Micro",
+          "type": "number"
+        },
+        "maintenance_world_self_micro": {
+          "description": "World cost of the maintenance calls the agent paid itself",
+          "title": "Maintenance World Self Micro",
+          "type": "number"
+        }
+      },
+      "required": [
+        "agent_id",
+        "maintenance_real_micro",
+        "maintenance_world_micro",
+        "maintenance_world_self_micro",
+        "maintenance_calls",
+        "maintenance_skipped",
+        "asked",
+        "correct",
+        "abstained",
+        "failed"
+      ],
+      "title": "MemoryAgentTally",
+      "type": "object"
+    },
+    "MemoryAggregate": {
+      "properties": {
+        "agents": {
+          "items": {
+            "$ref": "#/$defs/MemoryAgentTally"
+          },
+          "title": "Agents",
+          "type": "array"
+        },
+        "exams": {
+          "description": "exam_answered events per day and question kind",
+          "items": {
+            "$ref": "#/$defs/ExamDayTally"
+          },
+          "title": "Exams",
+          "type": "array"
+        },
+        "skipped_by_day": {
+          "description": "maintenance_skipped events per day, with or without an agent",
+          "items": {
+            "$ref": "#/$defs/DayCount"
+          },
+          "title": "Skipped By Day",
+          "type": "array"
+        }
+      },
+      "required": [
+        "agents",
+        "skipped_by_day",
+        "exams"
+      ],
+      "title": "MemoryAggregate",
+      "type": "object"
+    },
+    "TierCollapse": {
+      "properties": {
+        "t_c": {
+          "description": "The newest finite payload.t_c of the tier's degeneration events",
+          "title": "T C",
+          "type": "number"
+        },
+        "tier": {
+          "title": "Tier",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tier",
+        "t_c"
+      ],
+      "title": "TierCollapse",
+      "type": "object"
+    }
+  },
+  "$id": "https://void.local/schemas/http/event_aggregates.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Whole-run totals of the event-derived charts over every event with ``seq <= as_of_seq``.\n\nA client seeds its aggregates with these and then counts only events with a larger seq, so the backfill and the\nlive stream meet without overlap. Epoch events (few) and the newest gadget gate events (the proposals list) come\nas event messages, for the reducers that keep the events themselves.",
+  "properties": {
+    "as_of_seq": {
+      "description": "Every event with seq <= as_of_seq is counted; nothing after it",
+      "title": "As Of Seq",
+      "type": "integer"
+    },
+    "claims": {
+      "description": "Per speaker and payload tier",
+      "items": {
+        "$ref": "#/$defs/ClaimTally"
+      },
+      "title": "Claims",
+      "type": "array"
+    },
+    "degeneration": {
+      "$ref": "#/$defs/DegenerationAggregate"
+    },
+    "epochs": {
+      "description": "The epoch events (the newest 1000), oldest first",
+      "items": {
+        "$ref": "#/$defs/EventMsg"
+      },
+      "title": "Epochs",
+      "type": "array"
+    },
+    "gate": {
+      "description": "The newest 200 gadget_verified / gadget_rejected events, oldest first",
+      "items": {
+        "$ref": "#/$defs/EventMsg"
+      },
+      "title": "Gate",
+      "type": "array"
+    },
+    "gossip": {
+      "description": "Per speaker -> listener edge",
+      "items": {
+        "$ref": "#/$defs/GossipEdgeTally"
+      },
+      "title": "Gossip",
+      "type": "array"
+    },
+    "memory": {
+      "$ref": "#/$defs/MemoryAggregate"
+    }
+  },
+  "required": [
+    "as_of_seq",
+    "degeneration",
+    "claims",
+    "gossip",
+    "memory",
+    "epochs",
+    "gate"
+  ],
+  "title": "EventAggregates",
+  "type": "object"
+}

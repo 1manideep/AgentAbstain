@@ -10,6 +10,14 @@
  * scrub range. A same-run reconnect fetches only what it missed: events after the last seq and metrics
  * after the last metrics tick (both server filters are exclusive), plus the day rows.
  *
+ * The event ring holds 2000 events, but the event-derived charts (degeneration per generation, false claims per
+ * tier, the gossip graph, T_c per tier, epochs, the memory card's tallies, the gadget proposals) cover the whole
+ * run: a backfill, and a reconnect that missed events, also fetches GET /api/events/aggregates?as_of_seq= with
+ * the hello's last_seq (the server sums the events table in SQL) and seeds the series with it before any event
+ * is ingested. Events at or below as_of_seq then only fill the ring and the series counts the later ones, so the
+ * seam between the seed and the live stream counts nothing twice. Without the route (an older server) the
+ * series counts what the ring receives, as before.
+ *
  * While a fetch runs, ordered live messages (snapshot, event, metrics, day) wait in `pending`; state
  * messages (roster, gadgets, tasks, chronicle, status) apply at once, so the backfilled events and
  * snapshots see the roster. Every ordered message passes one high-water mark per stream (`marks`), so
@@ -18,6 +26,7 @@
  */
 import type {
   DayMsg,
+  EventAggregatesResponse,
   EventMsg,
   EventsResponse,
   HelloMsg,
@@ -119,6 +128,43 @@ async function pageSnapshots(since: number, until: number, maxPages: number, liv
 async function fetchDays(out: DayMsg[]): Promise<void> {
   const r = await apiGet<MetricsDaysResponse>('/api/metrics?days=1')
   for (const d of r.days ?? []) out.push({ type: 'day', day: d.day, row: d.row })
+}
+
+const isArr = Array.isArray
+
+/** The shape `Series.seedEvents` reads; anything else (an older server's error body, a proxy page) seeds nothing. */
+export function isEventAggregates(x: unknown): x is EventAggregatesResponse {
+  if (!x || typeof x !== 'object') return false
+  const a = x as Record<string, unknown>
+  const d = a.degeneration as Record<string, unknown> | null | undefined
+  const m = a.memory as Record<string, unknown> | null | undefined
+  return (
+    typeof a.as_of_seq === 'number' &&
+    Number.isInteger(a.as_of_seq) &&
+    !!d &&
+    isArr(d.by_generation) &&
+    isArr(d.t_c_by_tier) &&
+    isArr(a.claims) &&
+    isArr(a.gossip) &&
+    !!m &&
+    isArr(m.agents) &&
+    isArr(m.skipped_by_day) &&
+    isArr(m.exams) &&
+    isArr(a.epochs) &&
+    isArr(a.gate)
+  )
+}
+
+/** The whole-run aggregates of the event-derived charts over the events with seq <= asOf (void/server/api.py). */
+async function fetchAggregates(asOf: number, out: EventAggregatesResponse[]): Promise<void> {
+  const r = await apiGet<unknown>(`/api/events/aggregates?as_of_seq=${asOf}`)
+  if (isEventAggregates(r)) out.push(r)
+  else console.warn('aggregates: unexpected body')
+}
+
+/** Seed the series before any fetched event is ingested, so the events the seed covers only fill the ring. */
+function seed(aggs: readonly EventAggregatesResponse[]): void {
+  for (const a of aggs) useStore.getState().seedEventAggregates(a)
 }
 
 export class WsClient {
@@ -294,6 +340,7 @@ export class WsClient {
     const events: EventMsg[] = []
     const metrics: MetricsMsg[] = []
     const days: DayMsg[] = []
+    const aggs: EventAggregatesResponse[] = []
     const ring = history.ringCapacity
     await Promise.all([
       attempt('snapshot', () => pageSnapshots(Math.max(-1, m.tick - ring), m.tick, Math.ceil(ring / SNAPSHOT_PAGE) + 1, live, snaps)),
@@ -302,8 +349,11 @@ export class WsClient {
       ),
       attempt('metrics', () => pageMetrics(-1, m.tick, live, metrics)),
       attempt('day', () => fetchDays(days)),
+      attempt('aggregates', () => fetchAggregates(m.last_seq, aggs)),
     ])
     if (!live()) return
+    // first, so the epochs it rebuilds are known before the snapshots merge their active epoch
+    seed(aggs)
     for (const x of snaps.length > ring ? snaps.slice(snaps.length - ring) : snaps) this.feed(x)
     for (const x of events) this.feed(x)
     for (const x of metrics) this.feed(x)
@@ -317,14 +367,20 @@ export class WsClient {
     const events: EventMsg[] = []
     const metrics: MetricsMsg[] = []
     const days: DayMsg[] = []
+    const aggs: EventAggregatesResponse[] = []
     const jobs: Promise<void>[] = []
-    if (behindEvents) jobs.push(attempt('event', () => pageEvents(k.seq, m.last_seq, EVENT_CATCHUP_PAGES, live, events)))
+    if (behindEvents) {
+      jobs.push(attempt('event', () => pageEvents(k.seq, m.last_seq, EVENT_CATCHUP_PAGES, live, events)))
+      // the gap may be longer than the pages fetched: the seed keeps the charts whole either way
+      jobs.push(attempt('aggregates', () => fetchAggregates(m.last_seq, aggs)))
+    }
     if (behindMetrics) {
       jobs.push(attempt('metrics', () => pageMetrics(k.metricsTick, m.tick, live, metrics)))
       jobs.push(attempt('day', () => fetchDays(days)))
     }
     await Promise.all(jobs)
     if (!live()) return
+    seed(aggs)
     for (const x of events) this.feed(x)
     for (const x of metrics) this.feed(x)
     for (const x of days) this.feed(x)

@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo } from 'react'
-import { isEventKind, type DayRow, type GadgetItem } from '../../protocol'
-import type { EventRing } from '../../state/events'
+import { isEventKind, type DayRow, type EventMsg, type GadgetItem } from '../../protocol'
+import { MAX_GATE_EVENTS } from '../../state/series'
 import { useStore } from '../../state/store'
 import { Card } from '../Card'
 import { fmtPct, SERIES } from '../charts/chartTheme'
@@ -25,54 +25,38 @@ export interface ProposalRow {
   withoutTests: boolean
 }
 
-export const MAX_PROPOSALS = 200
+/** Gate outcomes the list keeps: the series keeps this many gate events for the whole run. */
+export const MAX_PROPOSALS = MAX_GATE_EVENTS
 /** Rows the list shows; older ones are counted, not drawn. */
 const SHOWN = 40
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 
 /**
- * Gate outcomes folded from the event ring as they arrive, so a proposal stays listed after the 2000-event ring has
- * moved past it. Only events newer than the last folded seq are read on each sync; a new run starts over.
+ * The proposal rows of the series' gate events (`Series.gateEvents`: the run's newest MAX_GATE_EVENTS gadget_verified
+ * and gadget_rejected events, seeded from the server's whole-run aggregate on a fresh load, so a proposal stays
+ * listed after the 2000-event ring has moved past it), oldest first. Other kinds are skipped.
  */
 // oxlint-disable-next-line react/only-export-components
-export class ProposalLog {
-  /** Oldest first, at most MAX_PROPOSALS. Replaced (never mutated) when a sync adds rows. */
-  rows: readonly ProposalRow[] = []
-  private runId: string | null = null
-  private lastSeq = 0
-
-  sync(ring: EventRing, runId: string | null): readonly ProposalRow[] {
-    if (runId !== this.runId || ring.lastSeq < this.lastSeq) {
-      this.runId = runId
-      this.lastSeq = 0
-      this.rows = []
-    }
-    if (ring.lastSeq === this.lastSeq) return this.rows
-    const fresh: ProposalRow[] = []
-    for (let abs = ring.total - 1; abs >= ring.oldestAbs; abs--) {
-      const e = ring.atAbs(abs)
-      if (!e || e.seq <= this.lastSeq) break
-      if (isEventKind(e, 'gadget_verified') || isEventKind(e, 'gadget_rejected')) {
-        const p = e.payload
-        const verified = e.kind === 'gadget_verified'
-        fresh.push({
-          seq: e.seq,
-          tick: e.tick,
-          gadgetId: str(p.gadget_id),
-          name: str(p.name) || str(p.gadget_id),
-          owner: str(p.owner) || str(e.agent_id),
-          verified,
-          stage: str(p.stage) || (verified ? 'verified' : 'unknown'),
-          reason: typeof p.reason === 'string' && p.reason ? p.reason : null,
-          withoutTests: p.verified_without_tests === true,
-        })
-      }
-    }
-    this.lastSeq = ring.lastSeq
-    if (fresh.length) this.rows = [...this.rows, ...fresh.reverse()].slice(-MAX_PROPOSALS)
-    return this.rows
+export function proposalRows(events: readonly EventMsg[]): ProposalRow[] {
+  const rows: ProposalRow[] = []
+  for (const e of events) {
+    if (!(isEventKind(e, 'gadget_verified') || isEventKind(e, 'gadget_rejected'))) continue
+    const p = e.payload
+    const verified = e.kind === 'gadget_verified'
+    rows.push({
+      seq: e.seq,
+      tick: e.tick,
+      gadgetId: str(p.gadget_id),
+      name: str(p.name) || str(p.gadget_id),
+      owner: str(p.owner) || str(e.agent_id),
+      verified,
+      stage: str(p.stage) || (verified ? 'verified' : 'unknown'),
+      reason: typeof p.reason === 'string' && p.reason ? p.reason : null,
+      withoutTests: p.verified_without_tests === true,
+    })
   }
+  return rows.length > MAX_PROPOSALS ? rows.slice(-MAX_PROPOSALS) : rows
 }
 
 // ---------------------------------------------------------------- daily failure rate
@@ -211,10 +195,7 @@ export function proposalSummary(rows: readonly ProposalRow[]): string {
  */
 export const GadgetsCard = memo(function GadgetsCard() {
   const seriesRev = useStore((s) => s.seriesRev)
-  const eventsRev = useStore((s) => s.eventsRev)
-  const events = useStore((s) => s.events)
   const series = useStore((s) => s.series)
-  const runId = useStore((s) => s.runId)
   // the pushed registry, or a fresher one from GET /api/gadgets (RegistryRefresh, in the open card's body): the push
   // only follows new verifications
   const registry = useRegistryView()
@@ -223,13 +204,12 @@ export const GadgetsCard = memo(function GadgetsCard() {
   const selectAgent = useStore((s) => s.select)
   const selectedId = useSelectedGadgetId()
 
-  const log = useMemo(() => new ProposalLog(), [])
-  // every ingested event bumps seriesRev (eventsRev moves only when the feed filter matches), so both drive the sync
+  // the gate events change only with gateRev (every ingested event bumps seriesRev, which re-renders the card)
+  const gateRev = series.gateRev
   const proposals = useMemo(() => {
-    void seriesRev
-    void eventsRev
-    return log.sync(events, runId)
-  }, [log, events, runId, seriesRev, eventsRev])
+    void gateRev
+    return proposalRows(series.gateEvents)
+  }, [series, gateRev])
   const daySignature = useMemo(() => {
     void seriesRev
     return series.daily.map((r) => `${r.day}:${r.gadget_use_failure_rate ?? ''}`).join(',')

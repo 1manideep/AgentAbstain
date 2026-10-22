@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Epoch, EventMsg, HelloMsg, MetricsGroup, MetricsRow, RosterAgent, SnapshotAgent, SnapshotMsg, StressBin } from '../protocol'
-import { DEGRADATION_BINS, Series } from './series'
+import type { Epoch, EventAggregatesResponse, EventMsg, HelloMsg, MetricsGroup, MetricsRow, RosterAgent, SnapshotAgent, SnapshotMsg, StressBin } from '../protocol'
+import { claimTier, DEGRADATION_BINS, MAX_GENERATIONS, Series } from './series'
 import { useStore } from './store'
 
 const roster = new Map<string, RosterAgent>(
@@ -291,6 +291,79 @@ describe('memory accumulators', () => {
     const s = new Series()
     s.onEvent(ev('maintenance', { real_cost: 'lots', world_cost: null }, 1, 'c'), roster)
     expect(s.memory.byAgent.get('c')).toMatchObject({ maintenanceCalls: 1, maintenanceReal: 0, maintenanceWorld: 0 })
+  })
+})
+
+describe('seeded event aggregates', () => {
+  const empty = (asOf: number): EventAggregatesResponse => ({
+    as_of_seq: asOf,
+    degeneration: { by_generation: [], t_c_by_tier: [] },
+    claims: [],
+    gossip: [],
+    memory: { agents: [], skipped_by_day: [], exams: [] },
+    epochs: [],
+    gate: [],
+  })
+
+  it('files a claim under the roster tier, else the payload tier, else unknown', () => {
+    expect(claimTier('a', 'dim', roster)).toBe('genius')
+    expect(claimTier('zed', 'slow', roster)).toBe('slow')
+    expect(claimTier(7, '', roster)).toBe('unknown')
+  })
+
+  it('replaces the totals, skips the events the seed covers and counts the later ones once', () => {
+    const s = new Series()
+    s.onEvent(ev('claim', { agent_id: 'a', truthful: false, tier: 'genius' }), roster)
+    const covered = ev('gossip_transfer', { speaker_id: 'a', listener_id: 'b' })
+    const agg = empty(covered.seq)
+    agg.claims = [
+      { agent_id: 'a', tier: 'genius', made: 5, falsy: 2 },
+      { agent_id: 'zed', tier: 'slow', made: 1, falsy: 1 },
+      { agent_id: null, tier: null, made: 1, falsy: 0 },
+    ]
+    agg.degeneration = { by_generation: [{ generation: null, count: 3 }, { generation: 0, count: 2 }, { generation: 40, count: 1 }], t_c_by_tier: [{ tier: 'dim', t_c: 1.8 }] }
+    agg.gossip = [{ speaker_id: 'a', listener_id: 'b', count: 4, last_tick: 9 }]
+    agg.memory = {
+      agents: [{ agent_id: 'b', maintenance_real_micro: 1500, maintenance_world_micro: 3000, maintenance_world_self_micro: 3000, maintenance_calls: 2, maintenance_skipped: 1, asked: 3, correct: 1, abstained: 1, failed: 1 }],
+      skipped_by_day: [{ day: 2, count: 2 }],
+      exams: [{ day: 1, kind: 'node', asked: 3, correct: 1, abstained: 1, failed: 1 }],
+    }
+    expect(s.seedEvents(agg, roster)).toBe(true)
+    expect([...s.falseClaimByTier]).toEqual([
+      ['genius', { made: 5, falsy: 2 }],
+      ['slow', { made: 1, falsy: 1 }],
+      ['unknown', { made: 1, falsy: 0 }],
+    ])
+    expect(s.degenTotal).toBe(6)
+    expect(s.degenByGen[0]).toBe(2)
+    expect(s.degenByGen[MAX_GENERATIONS - 1]).toBe(1)
+    expect([...s.tCByTier]).toEqual([['dim', 1.8]])
+    expect(s.memory.byAgent.get('b')).toMatchObject({ maintenanceReal: 0.0015, maintenanceWorldSelf: 0.003, maintenanceCalls: 2, asked: 3 })
+    expect(s.memory.maintenanceCalls).toBe(2)
+    expect(s.memory.maintenanceSkipped).toBe(2)
+    expect(s.memory.examByDay.get(1)!.get('node')).toEqual({ asked: 3, correct: 1, abstained: 1, failed: 1 })
+
+    // the seed covers this one: skipped; a later one counts once
+    s.onEvent(covered, roster)
+    expect(s.gossipTotal).toBe(4)
+    s.onEvent(ev('gossip_transfer', { speaker_id: 'a', listener_id: 'b' }), roster)
+    expect(s.gossipTotal).toBe(5)
+    expect([...s.gossipEdges.values()]).toEqual([{ from: 'a', to: 'b', count: 5, lastTick: 25 }])
+    s.onEvent(ev('maintenance', { agent_id: 'b', payer: 'b', real_cost: 500, world_cost: 1000 }, 3, 'b'), roster)
+    expect(s.memory.byAgent.get('b')!.maintenanceReal).toBe(0.002)
+    expect(s.memory.maintenanceReal).toBe(0.002)
+  })
+
+  it('refuses a seed older than the events it has counted; clear starts over', () => {
+    const s = new Series()
+    const e = ev('claim', { agent_id: 'a', truthful: true, tier: 'genius' })
+    s.onEvent(e, roster)
+    expect(s.seedEvents(empty(e.seq - 1), roster)).toBe(false)
+    expect(s.falseClaimByTier.get('genius')).toEqual({ made: 1, falsy: 0 })
+    expect(s.seedEvents(empty(e.seq), roster)).toBe(true)
+    expect(s.falseClaimByTier.size).toBe(0)
+    s.clear()
+    expect([s.aggregatesSeq, s.countedSeq]).toEqual([0, 0])
   })
 })
 

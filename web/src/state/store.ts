@@ -8,6 +8,7 @@ import { create } from 'zustand'
 import type {
   ChronicleMsg,
   DayRow,
+  EventAggregatesResponse,
   EventMsg,
   GadgetsMsg,
   HelloConfig,
@@ -154,6 +155,8 @@ export interface VoidState {
   applyTasks: (m: TasksMsg) => void
   applyChronicle: (m: ChronicleMsg) => void
   applyStatus: (m: StatusMsg) => void
+  /** Seed the event-derived chart aggregates with the server's whole-run totals (Series.seedEvents). */
+  seedEventAggregates: (agg: EventAggregatesResponse) => boolean
   resetRun: () => void
 
   // ui
@@ -364,6 +367,13 @@ export const useStore = create<VoidState>()((set, get) => {
     },
 
     applyStatus: (m) => set({ serverPaused: m.paused, tickSeconds: m.tick_seconds, runStatus: m.status }),
+
+    seedEventAggregates: (agg) => {
+      if (!seriesAcc.seedEvents(agg, get().rosterById)) return false
+      pendingSeries = true
+      commit.call()
+      return true
+    },
 
     resetRun: () => {
       statsAcc.clear()
