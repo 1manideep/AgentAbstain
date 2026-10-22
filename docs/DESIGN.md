@@ -85,7 +85,7 @@ void/
   research/   analysis.py compare.py stats.py gates.py export.py report.py exams.py canary.py
               transplant.py generations.py
   research/outcomes/  degradation.py lineage.py memory_structure.py practices.py press.py retrieval.py
-                      reward_exam.py spread.py
+                      reward_exam.py spread.py transmission_fit.py
 configs/      base.yaml demo.yaml demo_memory.yaml scripted_smoke.yaml exp_*.yaml (§17) live_*.yaml (paid, budgeted)
 schemas/      one JSON Schema per server message, plus http/ for HTTP response bodies such as EventAggregates (written by `void schema`, committed)
 web/          Vite + React + R3F (§16)
