@@ -22,6 +22,11 @@ Registered outcomes (``end_of_run_outcome(run, "<name>[.<arg>]")``)
     ``lineage_fitness``       ``F_L``: agent-days summed over each founder's lineage, averaged over founders.
                               ``lineage_fitness.founder.<name or agent id>`` is one founder's lineage sum (the mean
                               over the founders of that name, if a fresh founder reused a name).
+    ``tier_lineage_fitness.<tier>`` ``F_L`` of one rung: the same lineage sums averaged over the founders whose tier
+                              (``agents.model_tier``) is ``<tier>``, each lineage whole (its descendants count
+                              whatever their own tier; with ``population.tier_mutation_prob: 0``, as in E4, they all
+                              keep the founder's). None when the run has no founder on that rung. The per-rung outcome
+                              of H4 (MEMORY_EVOLUTION 6.6: the rung by self-edit interaction on ``F_L``).
     ``net_worth``             per lineage, the living members' balances plus the estates its dead members passed on
                               (their ``estate_out`` ledger amounts), averaged over founders, in USD; the same
                               ``founder.<name or agent id>`` argument.
@@ -58,6 +63,7 @@ __all__ = [
     "lineage_table",
     "max_generation",
     "net_worth",
+    "tier_lineage_fitness",
 ]
 
 FOUNDER_ARG = "founder"
@@ -67,6 +73,7 @@ FOUNDER_ARG = "founder"
 class _Member:
     agent_id: str
     name: str
+    tier: str
     parent_id: str | None
     generation: int
     born_tick: int
@@ -94,8 +101,8 @@ class _World:
 def _load(run_dir: str | Path, day: int | None = None) -> _World:
     """Every agent born by the cutoff (the run's last tick, or the end of ``day``), as it stood then."""
     with connect(run_dir) as db:
-        rows = db.execute("SELECT agent_id, name, parent_id, generation, born_tick, died_tick, balance FROM agents "
-                          "ORDER BY born_tick, agent_id").fetchall()
+        rows = db.execute("SELECT agent_id, name, model_tier, parent_id, generation, born_tick, died_tick, balance "
+                          "FROM agents ORDER BY born_tick, agent_id").fetchall()
         if not rows:
             return _World(ticks_per_day=1, cutoff=0, members={}, root={})
         tpd = int(run_config(run_dir).run.ticks_per_day)
@@ -114,7 +121,8 @@ def _load(run_dir: str | Path, day: int | None = None) -> _World:
             continue
         died = None if r["died_tick"] is None or int(r["died_tick"]) > cutoff else int(r["died_tick"])
         members[aid] = _Member(
-            agent_id=aid, name=str(r["name"]), parent_id=None if r["parent_id"] is None else str(r["parent_id"]),
+            agent_id=aid, name=str(r["name"]), tier=str(r["model_tier"]),
+            parent_id=None if r["parent_id"] is None else str(r["parent_id"]),
             generation=int(r["generation"]), born_tick=int(r["born_tick"]), died_tick=died,
             balance=int(r["balance"]) - later.get(aid, 0), estate=estates.get(aid, 0))
     return _World(ticks_per_day=tpd, cutoff=cutoff, members=members, root=_roots(members))
@@ -150,9 +158,11 @@ def _founder_ids(world: _World, arg: str | None) -> list[str]:
     return [f.agent_id for f in founders if key in (f.agent_id, f.name)]
 
 
-def _per_founder(world: _World, arg: str | None, value: Callable[[_World, _Member], float]) -> float | None:
-    """``value`` summed over each selected founder's lineage, averaged over those founders (None when there are none)."""
-    ids = _founder_ids(world, arg)
+def _per_founder(world: _World, arg: str | None, value: Callable[[_World, _Member], float], *,
+                 ids: list[str] | None = None) -> float | None:
+    """``value`` summed over each selected founder's lineage, averaged over those founders (None when there are none).
+    ``ids`` selects the founders directly instead of ``arg``."""
+    ids = _founder_ids(world, arg) if ids is None else ids
     if not ids:
         return None
     totals = dict.fromkeys(ids, 0.0)
@@ -181,6 +191,13 @@ def _lineage_fitness_on_day(run_dir: str | Path, arg: str | None, day: int | Non
     return _per_founder(_load(run_dir, day), arg, _World.agent_days)
 
 
+def _tier_lineage_fitness_on_day(run_dir: str | Path, arg: str | None, day: int | None) -> float | None:
+    if not arg or "." in arg:
+        raise ValueError(f"tier_lineage_fitness argument {arg!r} must be one tier name: tier_lineage_fitness.<tier>")
+    world = _load(run_dir, day)
+    return _per_founder(world, None, _World.agent_days, ids=[f.agent_id for f in world.founders if f.tier == arg])
+
+
 def _net_worth_on_day(run_dir: str | Path, arg: str | None, day: int | None) -> float | None:
     return _per_founder(_load(run_dir, day), arg, _worth_usd)
 
@@ -201,6 +218,12 @@ def _max_generation_on_day(run_dir: str | Path, arg: str | None, day: int | None
 def lineage_fitness(run_dir: str | Path, arg: str | None = None) -> float | None:
     """``F_L``: agent-days summed over each founder's lineage, averaged over founders (None without agents)."""
     return _lineage_fitness_on_day(run_dir, arg, None)
+
+
+@register("tier_lineage_fitness", daily=_tier_lineage_fitness_on_day)
+def tier_lineage_fitness(run_dir: str | Path, arg: str | None = None) -> float | None:
+    """``F_L`` of the founders on rung ``arg`` (their lineages whole), averaged over them; None without such a founder."""
+    return _tier_lineage_fitness_on_day(run_dir, arg, None)
 
 
 @register("net_worth", daily=_net_worth_on_day)

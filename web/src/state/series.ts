@@ -5,8 +5,13 @@
  * Replays are safe: snapshots at or below the newest counted tick are ignored
  * (DESIGN §15 replays the last 60 on every reconnect), metrics rows likewise,
  * and events are deduplicated by seq before they reach `onEvent` (EventRing).
+ *
+ * Event-derived aggregates (degeneration per generation, T_c per tier, false claims per tier, the gossip graph,
+ * epochs, the memory accumulators and the gadget gate events) cover the whole run, not only the 2000-event ring:
+ * a fresh tab seeds them from GET /api/events/aggregates (`seedEvents`), which counts every event up to its
+ * `as_of_seq`, and `onEvent` then counts only events with a larger seq, so the seam counts nothing twice.
  */
-import type { DayRow, Epoch, EventMsg, MetricsRow, RosterAgent, SnapshotMsg } from '../protocol'
+import type { DayRow, Epoch, EventAggregatesResponse, EventMsg, MemoryAggregate, MetricsRow, RosterAgent, SnapshotMsg } from '../protocol'
 import { isEventKind } from '../protocol'
 
 export const TEFF_MIN = 0.5
@@ -22,11 +27,20 @@ export const DEGRADATION_BINS = 10
 export const MAX_EPOCH_RECORDS = 48
 /** Epochs kept by id. */
 export const MAX_EPOCH_SPANS = 256
+/** gadget_verified / gadget_rejected events kept for the proposals list (GATE_EVENTS_LIMIT in void/server/api.py). */
+export const MAX_GATE_EVENTS = 200
 
 const MICRO = 1_000_000
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
+
+const genIndex = (g: number): number => (g < 0 ? 0 : g >= MAX_GENERATIONS ? MAX_GENERATIONS - 1 : g)
+
+/** A claim's tier: the roster's tier for the speaker, else the payload's, else 'unknown' (live and seeded alike). */
+export function claimTier(agentId: unknown, payloadTier: unknown, rosterById: ReadonlyMap<string, RosterAgent>): string {
+  return (typeof agentId === 'string' ? rosterById.get(agentId)?.tier : undefined) ?? str(payloadTier) ?? 'unknown'
+}
 
 /** Fixed-capacity per-tick ring of numbers. */
 export class TickRing {
@@ -122,11 +136,15 @@ export interface GossipEdge {
 
 /** Memory-layer totals for one agent, from maintenance and exam_answered events. */
 export interface AgentMemoryAcc {
-  /** Maintenance cost in USD (the payload carries micro-dollars), whoever paid. */
+  /** Maintenance cost in USD (the payload carries micro-dollars), whoever paid: the micro sums below over 1e6. */
   maintenanceReal: number
   maintenanceWorld: number
   /** World cost the agent paid from its own wallet (payer is the agent, not the research pool). */
   maintenanceWorldSelf: number
+  /** The same costs summed in micro-dollars (exact, so a seeded sum equals a live one). */
+  maintenanceRealMicro: number
+  maintenanceWorldMicro: number
+  maintenanceWorldSelfMicro: number
   maintenanceCalls: number
   maintenanceSkipped: number
   /** Graded audit items; failed calls are kept out, as the server's ExamReport does. */
@@ -147,6 +165,9 @@ const emptyAgentMemory = (): AgentMemoryAcc => ({
   maintenanceReal: 0,
   maintenanceWorld: 0,
   maintenanceWorldSelf: 0,
+  maintenanceRealMicro: 0,
+  maintenanceWorldMicro: 0,
+  maintenanceWorldSelfMicro: 0,
   maintenanceCalls: 0,
   maintenanceSkipped: 0,
   asked: 0,
@@ -166,6 +187,8 @@ export class MemorySeries {
   maintenanceWorld = 0
   maintenanceCalls = 0
   maintenanceSkipped = 0
+  private realMicro = 0
+  private worldMicro = 0
 
   clear(): void {
     this.byAgent.clear()
@@ -175,6 +198,46 @@ export class MemorySeries {
     this.maintenanceWorld = 0
     this.maintenanceCalls = 0
     this.maintenanceSkipped = 0
+    this.realMicro = 0
+    this.worldMicro = 0
+  }
+
+  /** Replace every total with the server's whole-run aggregate (GET /api/events/aggregates `memory`). */
+  seed(m: MemoryAggregate): void {
+    this.clear()
+    for (const r of m.agents) {
+      const a = this.agent(r.agent_id)
+      a.maintenanceRealMicro = r.maintenance_real_micro
+      a.maintenanceWorldMicro = r.maintenance_world_micro
+      a.maintenanceWorldSelfMicro = r.maintenance_world_self_micro
+      a.maintenanceReal = a.maintenanceRealMicro / MICRO
+      a.maintenanceWorld = a.maintenanceWorldMicro / MICRO
+      a.maintenanceWorldSelf = a.maintenanceWorldSelfMicro / MICRO
+      a.maintenanceCalls = r.maintenance_calls
+      a.maintenanceSkipped = r.maintenance_skipped
+      a.asked = r.asked
+      a.correct = r.correct
+      a.abstained = r.abstained
+      a.failed = r.failed
+      this.realMicro += r.maintenance_real_micro
+      this.worldMicro += r.maintenance_world_micro
+      this.maintenanceCalls += r.maintenance_calls
+    }
+    this.maintenanceReal = this.realMicro / MICRO
+    this.maintenanceWorld = this.worldMicro / MICRO
+    for (const d of m.skipped_by_day) {
+      this.skippedByDay.set(d.day, (this.skippedByDay.get(d.day) ?? 0) + d.count)
+      this.maintenanceSkipped += d.count
+    }
+    for (const x of m.exams) {
+      let byKind = this.examByDay.get(x.day)
+      if (!byKind) {
+        byKind = new Map()
+        this.examByDay.set(x.day, byKind)
+      }
+      const t = byKind.get(x.kind) ?? { asked: 0, correct: 0, abstained: 0, failed: 0 }
+      byKind.set(x.kind, { asked: t.asked + x.asked, correct: t.correct + x.correct, abstained: t.abstained + x.abstained, failed: t.failed + x.failed })
+    }
   }
 
   agent(id: string): AgentMemoryAcc {
@@ -187,15 +250,22 @@ export class MemorySeries {
   }
 
   onMaintenance(agentId: string, p: Record<string, unknown>): void {
-    const real = (num(p.real_cost) ?? 0) / MICRO
-    const world = (num(p.world_cost) ?? 0) / MICRO
+    const real = num(p.real_cost) ?? 0
+    const world = num(p.world_cost) ?? 0
     const a = this.agent(agentId)
-    a.maintenanceReal += real
-    a.maintenanceWorld += world
-    if (p.payer === agentId) a.maintenanceWorldSelf += world
+    a.maintenanceRealMicro += real
+    a.maintenanceWorldMicro += world
+    a.maintenanceReal = a.maintenanceRealMicro / MICRO
+    a.maintenanceWorld = a.maintenanceWorldMicro / MICRO
+    if (p.payer === agentId) {
+      a.maintenanceWorldSelfMicro += world
+      a.maintenanceWorldSelf = a.maintenanceWorldSelfMicro / MICRO
+    }
     a.maintenanceCalls++
-    this.maintenanceReal += real
-    this.maintenanceWorld += world
+    this.realMicro += real
+    this.worldMicro += world
+    this.maintenanceReal = this.realMicro / MICRO
+    this.maintenanceWorld = this.worldMicro / MICRO
     this.maintenanceCalls++
   }
 
@@ -279,6 +349,15 @@ export class Series {
   lastSnapshotTick = -1
   snapshotsCounted = 0
   memory = new MemorySeries()
+  /** gadget_verified / gadget_rejected events, oldest first, the newest MAX_GATE_EVENTS (the proposals list). */
+  gateEvents: EventMsg[] = []
+  /** Bumped whenever `gateEvents` changes. */
+  gateRev = 0
+  /**
+   * Events with seq at or below this were counted by a server aggregate (`seedEvents`); `onEvent` skips them.
+   * 0 until a seed: then every event that reaches `onEvent` counts (fixture replay, a server without the route).
+   */
+  aggregatesSeq = 0
 
   /** Called on hello: a new run id clears every aggregate. Returns true when it cleared. */
   beginRun(runId: string): boolean {
@@ -296,6 +375,9 @@ export class Series {
     this.degradationBins.clear()
     this.epochsById.clear()
     this.memory.clear()
+    this.gateEvents = []
+    this.gateRev++
+    this.aggregatesSeq = 0
     this.teffBins.fill(0)
     this.teffRing = []
     this.teffRingHead = 0
@@ -472,41 +554,92 @@ export class Series {
     if (this.daily.length > 400) this.daily.shift()
   }
 
-  /** Per event: degeneration per generation, false claims per tier, gossip graph, epochs. */
+  /**
+   * Replace every event-derived aggregate with the server's whole-run totals over the events with
+   * seq <= `agg.as_of_seq`; from here on `onEvent` counts only later events. Claims take the speaker's tier
+   * from the roster as they do live, so call this once the roster is in.
+   */
+  seedEvents(agg: EventAggregatesResponse, rosterById: ReadonlyMap<string, RosterAgent>): void {
+    this.degenByGen.fill(0)
+    this.degenTotal = 0
+    this.tCByTier.clear()
+    for (const r of agg.degeneration.by_generation) {
+      this.degenTotal += r.count
+      if (Number.isInteger(r.generation)) this.degenByGen[genIndex(r.generation as number)]! += r.count
+    }
+    for (const t of agg.degeneration.t_c_by_tier) this.tCByTier.set(t.tier, t.t_c)
+
+    this.falseClaimByTier.clear()
+    for (const c of agg.claims) this.addClaims(claimTier(c.agent_id, c.tier, rosterById), c.made, c.false)
+
+    this.gossipEdges.clear()
+    this.gossipTotal = 0
+    for (const g of agg.gossip) this.addGossip(g.speaker_id ?? '', g.listener_id ?? '', g.count, g.last_tick)
+
+    this.epochs = []
+    this.epochsById.clear()
+    for (const e of agg.epochs) this.onEpochEvent(e.seq, e.tick, e.day, e.payload)
+
+    this.memory.seed(agg.memory)
+
+    this.gateEvents = agg.gate.slice(-MAX_GATE_EVENTS)
+    this.gateRev++
+    this.aggregatesSeq = agg.as_of_seq
+  }
+
+  private addClaims(tier: string, made: number, falsy: number): void {
+    let c = this.falseClaimByTier.get(tier)
+    if (!c) {
+      c = { made: 0, falsy: 0 }
+      this.falseClaimByTier.set(tier, c)
+    }
+    c.made += made
+    c.falsy += falsy
+  }
+
+  private addGossip(from: string, to: string, count: number, tick: number): void {
+    const key = from + '>' + to
+    const edge = this.gossipEdges.get(key)
+    if (edge) {
+      edge.count += count
+      edge.lastTick = tick
+    } else {
+      this.gossipEdges.set(key, { from, to, count, lastTick: tick })
+    }
+    this.gossipTotal += count
+  }
+
+  /**
+   * Per event: degeneration per generation, false claims per tier, gossip graph, epochs, memory, gate outcomes.
+   * Events at or below `aggregatesSeq` are already in the seeded totals and are skipped.
+   */
   onEvent(e: EventMsg, rosterById: ReadonlyMap<string, RosterAgent>): void {
+    if (e.seq <= this.aggregatesSeq) return
     if (isEventKind(e, 'degeneration')) {
-      const g = e.payload.generation
-      const gi = g < 0 ? 0 : g >= MAX_GENERATIONS ? MAX_GENERATIONS - 1 : g
-      this.degenByGen[gi]!++
+      const g: unknown = e.payload.generation
+      // an integer generation is a bar; anything else counts in the total only (as the server's aggregate does)
+      if (Number.isInteger(g)) this.degenByGen[genIndex(g as number)]!++
       this.degenTotal++
-      if (typeof e.payload.t_c === 'number' && e.payload.tier) this.tCByTier.set(e.payload.tier, e.payload.t_c)
+      if (typeof e.payload.t_c === 'number' && Number.isFinite(e.payload.t_c) && str(e.payload.tier)) this.tCByTier.set(e.payload.tier, e.payload.t_c)
       return
     }
     if (isEventKind(e, 'claim')) {
-      const tier = rosterById.get(e.payload.agent_id)?.tier ?? 'unknown'
-      let c = this.falseClaimByTier.get(tier)
-      if (!c) {
-        c = { made: 0, falsy: 0 }
-        this.falseClaimByTier.set(tier, c)
-      }
-      c.made++
-      if (!e.payload.truthful) c.falsy++
+      this.addClaims(claimTier(e.payload.agent_id, e.payload.tier, rosterById), 1, e.payload.truthful ? 0 : 1)
       return
     }
     if (isEventKind(e, 'gossip_transfer')) {
-      const key = e.payload.speaker_id + '>' + e.payload.listener_id
-      const edge = this.gossipEdges.get(key)
-      if (edge) {
-        edge.count++
-        edge.lastTick = e.tick
-      } else {
-        this.gossipEdges.set(key, { from: e.payload.speaker_id, to: e.payload.listener_id, count: 1, lastTick: e.tick })
-      }
-      this.gossipTotal++
+      const p: Record<string, unknown> = e.payload as unknown as Record<string, unknown>
+      this.addGossip(typeof p.speaker_id === 'string' ? p.speaker_id : '', typeof p.listener_id === 'string' ? p.listener_id : '', 1, e.tick)
       return
     }
     if (isEventKind(e, 'epoch')) {
       this.onEpochEvent(e.seq, e.tick, e.day, e.payload)
+      return
+    }
+    if (isEventKind(e, 'gadget_verified') || isEventKind(e, 'gadget_rejected')) {
+      this.gateEvents.push(e)
+      if (this.gateEvents.length > MAX_GATE_EVENTS) this.gateEvents.splice(0, this.gateEvents.length - MAX_GATE_EVENTS)
+      this.gateRev++
       return
     }
     if (isEventKind(e, 'maintenance')) {

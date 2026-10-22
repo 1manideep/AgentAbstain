@@ -16,7 +16,14 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from void.economy.catalog import (
     MODEL_PRICES,
@@ -567,8 +574,14 @@ class TracerConfig(StrictModel):
     node_index: int = 0
 
 
+LEVEL_PLACEHOLDER = "{level}"
+# HypothesisConfig fields added with the interaction kind; left out of the dump while None, so a hypothesis that does
+# not use them serializes, and hashes, exactly as before they existed
+_INTERACTION_FIELDS = ("arm_c", "arm_d", "outcome_template", "levels", "reference")
+
+
 class HypothesisConfig(StrictModel):
-    """One pre-registered contrast between two arms (MEMORY_EVOLUTION §6.11, §5.2, §6.2).
+    """One pre-registered contrast between arms (MEMORY_EVOLUTION §6.11, §5.2, §6.2; H4 for ``interaction``).
 
     The effect is ``delta = arm_b - arm_a`` of ``outcome`` (an end-of-run outcome path), paired by seed.
     ``superiority`` passes when delta clears ``margin`` in ``direction``; ``non_superiority`` when it is not
@@ -576,32 +589,133 @@ class HypothesisConfig(StrictModel):
     +/- margin, so a claim of no effect states its margin. ``margin_unit: sd`` reads the margin in standard deviations
     of the paired differences. Holm correction runs across the hypotheses with ``primary: true``; ``min_power`` also
     requires at least that power at the observed effect size.
+
+    ``interaction`` is a difference of differences, per seed, in one of two layouts:
+
+    * four arms (a 2x2 between arms): ``arm_a``, ``arm_b``, ``arm_c``, ``arm_d`` and ``outcome``; one contrast,
+      ``(arm_d - arm_c) - (arm_b - arm_a)``: the effect of the a -> b change measured where the other factor is at its
+      second level (c -> d) minus where it is at its first;
+    * arm x within-run levels: ``arm_a``, ``arm_b``, ``outcome_template`` (an outcome path holding ``{level}``),
+      ``levels`` (two or more) and ``reference`` (one of them, default the first); one contrast per other level L,
+      ``(arm_b - arm_a at L) - (arm_b - arm_a at reference)``.
+
+    Its ``direction`` may also be ``two_sided`` (the only kind that takes it). ``void.research.compare`` decides it:
+    a contrast clears when its interval clears the margin on the declared side and its p, Holm-adjusted across the
+    hypothesis's own contrasts, is below alpha; the hypothesis passes when at least one contrast clears.
     """
 
     name: str
     arm_a: str
     arm_b: str
-    outcome: str
-    kind: Literal["superiority", "non_superiority", "equivalence"] = "superiority"
-    direction: Literal["greater", "less"] = "greater"
+    outcome: str | None = None
+    kind: Literal["superiority", "non_superiority", "equivalence", "interaction"] = "superiority"
+    direction: Literal["greater", "less", "two_sided"] = "greater"
     margin: float = 0.0
     margin_unit: Literal["abs", "sd"] = "abs"
     primary: bool = True
     min_power: float | None = None
+    arm_c: str | None = None
+    arm_d: str | None = None
+    outcome_template: str | None = None
+    levels: list[str] | None = None
+    reference: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unused_interaction_fields(self, handler: SerializerFunctionWrapHandler) -> Any:
+        data = handler(self)
+        if isinstance(data, dict):
+            for key in _INTERACTION_FIELDS:
+                if key in data and data[key] is None:
+                    del data[key]
+        return data
 
     @model_validator(mode="after")
     def _check(self) -> HypothesisConfig:
+        where = f"experiment.hypotheses {self.name!r}"
         if not self.name.strip():
             raise ValueError("experiment.hypotheses: name must be non-empty")
         if self.arm_a == self.arm_b:
-            raise ValueError(f"experiment.hypotheses {self.name!r}: arm_a and arm_b must differ")
+            raise ValueError(f"{where}: arm_a and arm_b must differ")
         if self.margin < 0:
-            raise ValueError(f"experiment.hypotheses {self.name!r}: margin must be >= 0")
+            raise ValueError(f"{where}: margin must be >= 0")
         if self.kind == "equivalence" and self.margin <= 0:
-            raise ValueError(f"experiment.hypotheses {self.name!r}: an equivalence hypothesis needs margin > 0")
+            raise ValueError(f"{where}: an equivalence hypothesis needs margin > 0")
         if self.min_power is not None and not (0.0 < self.min_power < 1.0):
-            raise ValueError(f"experiment.hypotheses {self.name!r}: min_power must be within (0, 1)")
+            raise ValueError(f"{where}: min_power must be within (0, 1)")
+        if self.outcome is not None and LEVEL_PLACEHOLDER in self.outcome:
+            raise ValueError(f"{where}: outcome holds {LEVEL_PLACEHOLDER}; a per-level outcome is an interaction "
+                             "hypothesis's outcome_template, with its levels")
+        if self.kind != "interaction":
+            used = [k for k in _INTERACTION_FIELDS if getattr(self, k) is not None]
+            if used:
+                raise ValueError(f"{where}: {', '.join(used)} only apply to kind: interaction, not {self.kind}")
+            if self.direction == "two_sided":
+                raise ValueError(f"{where}: direction two_sided only applies to kind: interaction; a {self.kind} "
+                                 "hypothesis states its side (greater or less)")
+            if self.outcome is None:
+                raise ValueError(f"{where}: outcome is required")
+            return self
+        four_arms = self.arm_c is not None or self.arm_d is not None
+        by_level = self.levels is not None or self.outcome_template is not None or self.reference is not None
+        if four_arms and by_level:
+            raise ValueError(f"{where}: an interaction hypothesis is either four arms (arm_c, arm_d, outcome) or arm x "
+                             "levels (outcome_template, levels, reference), not both")
+        if four_arms:
+            if self.arm_c is None or self.arm_d is None:
+                raise ValueError(f"{where}: a four-arm interaction needs both arm_c and arm_d")
+            arms = [self.arm_a, self.arm_b, self.arm_c, self.arm_d]
+            if len(set(arms)) != 4:
+                raise ValueError(f"{where}: arm_a, arm_b, arm_c and arm_d must be four different arms, got {arms}")
+            if self.outcome is None:
+                raise ValueError(f"{where}: a four-arm interaction needs outcome")
+            return self
+        if not by_level:
+            raise ValueError(f"{where}: an interaction hypothesis needs arm_c and arm_d (four arms, a 2x2) or "
+                             "outcome_template and levels (arm x within-run levels)")
+        if self.outcome is not None:
+            raise ValueError(f"{where}: an arm x levels interaction reads outcome_template (with {LEVEL_PLACEHOLDER}), "
+                             "not outcome")
+        template = self.outcome_template
+        if template is None or LEVEL_PLACEHOLDER not in template:
+            raise ValueError(f"{where}: an arm x levels interaction needs outcome_template holding {LEVEL_PLACEHOLDER}")
+        rest = template.replace(LEVEL_PLACEHOLDER, "")
+        if "{" in rest or "}" in rest or not rest.strip("."):
+            raise ValueError(f"{where}: outcome_template {template!r} must be an outcome path whose only placeholder "
+                             f"is {LEVEL_PLACEHOLDER}")
+        levels = self.levels or []
+        if len(levels) < 2:
+            raise ValueError(f"{where}: an arm x levels interaction needs at least two levels")
+        if any(not isinstance(lv, str) or not lv.strip() or "." in lv or "{" in lv or "}" in lv for lv in levels):
+            raise ValueError(f"{where}: levels must be non-empty names without dots or braces, got {levels}")
+        if len(set(levels)) != len(levels):
+            raise ValueError(f"{where}: levels must be unique, got {levels}")
+        if self.reference is not None and self.reference not in levels:
+            raise ValueError(f"{where}: reference {self.reference!r} is not one of the levels {levels}")
         return self
+
+    @property
+    def layout(self) -> str | None:
+        """``"four_arms"`` or ``"levels"`` for an interaction hypothesis, None for the other kinds."""
+        if self.kind != "interaction":
+            return None
+        return "four_arms" if self.arm_c is not None else "levels"
+
+    @property
+    def reference_level(self) -> str | None:
+        """The reference level of an arm x levels interaction (``reference``, else the first level); None otherwise."""
+        if not self.levels:
+            return None
+        return self.reference if self.reference is not None else self.levels[0]
+
+    def level_outcomes(self) -> dict[str, str]:
+        """``{level: outcome path}`` of an arm x levels interaction, in the order of ``levels``; empty otherwise."""
+        if not self.levels or self.outcome_template is None:
+            return {}
+        return {lv: self.outcome_template.replace(LEVEL_PLACEHOLDER, lv) for lv in self.levels}
+
+    def outcome_paths(self) -> list[str]:
+        """Every end-of-run outcome path the hypothesis reads: ``outcome``, or one per level."""
+        return list(self.level_outcomes().values()) if self.levels else [str(self.outcome)]
 
 
 class ExperimentConfig(StrictModel):
