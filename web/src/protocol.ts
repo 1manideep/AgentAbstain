@@ -808,6 +808,99 @@ export interface SnapshotsResponse {
   snapshots: SnapshotMsg[]
 }
 
+// ---------------------------------------------------------------- GET /api/events/aggregates?as_of_seq=
+// Wire model EventAggregates in void/server/protocol.py (schemas/http/event_aggregates.schema.json): the whole-run
+// totals of the event-derived charts over every event with seq <= as_of_seq, computed in SQL (void/server/api.py
+// build_event_aggregates). Groups come in order of their first event, the order a live client meets them in.
+
+export interface GenerationCount {
+  /** payload.generation; null when it was not an integral number (counted in the total only). */
+  generation: number | null
+  count: number
+}
+
+export interface TierCollapse {
+  tier: string
+  /** The newest finite payload.t_c of the tier's degeneration events. */
+  t_c: number
+}
+
+export interface DegenerationAggregate {
+  by_generation: GenerationCount[]
+  t_c_by_tier: TierCollapse[]
+}
+
+/** Claims per speaker (payload.agent_id) and payload tier. */
+export interface ClaimTally {
+  /** null when payload.agent_id was not a string. */
+  agent_id: string | null
+  /** payload.tier; the client files the group under the roster's tier for the speaker, as it does live. */
+  tier: string | null
+  made: number
+  /** Claims whose payload.truthful is not truthy. */
+  falsy: number
+}
+
+/** Gossip transfers per speaker -> listener edge ('' for an id that was not a string). */
+export interface GossipEdgeTally {
+  speaker_id: string
+  listener_id: string
+  count: number
+  /** Tick of the edge's newest transfer. */
+  last_tick: number
+}
+
+/** One agent's maintenance, maintenance_skipped and exam_answered events. Costs are micro-dollars. */
+export interface MemoryAgentTally {
+  agent_id: string
+  maintenance_real_micro: number
+  maintenance_world_micro: number
+  /** World cost of the maintenance calls the agent paid itself. */
+  maintenance_world_self_micro: number
+  maintenance_calls: number
+  maintenance_skipped: number
+  /** Graded exam items (exam_answered without payload.failed). */
+  asked: number
+  correct: number
+  abstained: number
+  failed: number
+}
+
+export interface DayCount {
+  day: number
+  count: number
+}
+
+export interface ExamDayTally {
+  day: number
+  /** payload.kind (the question kind); 'unknown' when absent. */
+  kind: string
+  asked: number
+  correct: number
+  abstained: number
+  failed: number
+}
+
+export interface MemoryAggregate {
+  agents: MemoryAgentTally[]
+  /** maintenance_skipped events per day, with or without an agent. */
+  skipped_by_day: DayCount[]
+  exams: ExamDayTally[]
+}
+
+export interface EventAggregatesResponse {
+  /** Every event with seq <= as_of_seq is counted, nothing after it: the client counts only later events on top. */
+  as_of_seq: number
+  degeneration: DegenerationAggregate
+  claims: ClaimTally[]
+  gossip: GossipEdgeTally[]
+  memory: MemoryAggregate
+  /** The epoch events (the newest 1000), oldest first. */
+  epochs: EventMsg[]
+  /** The newest 200 gadget_verified / gadget_rejected events (the proposals list), oldest first. */
+  gate: EventMsg[]
+}
+
 // ---------------------------------------------------------------- memory layer (MEMORY_EVOLUTION §5)
 
 /** policy_versions.source (void/db.py CHECK). */

@@ -4,6 +4,9 @@ The models are the wire contract: ``void schema`` writes ``schemas/<name>.schema
 type generator, ``web/src/protocol.ts`` mirrors them by hand) and ``void mock-feed`` validates every line it writes
 against :func:`parse_message`. Extra keys are ignored on validation (and therefore permitted by the exported
 schemas), so the simulation may add fields without breaking older clients.
+
+HTTP response bodies with a wire model (:data:`RESPONSE_MODELS`, so far ``GET /api/events/aggregates``) are exported
+next to them as ``schemas/http/<name>.schema.json``; they are bodies, not messages, so they carry no ``type``.
 """
 
 from __future__ import annotations
@@ -22,7 +25,10 @@ __all__ = [
     "GadgetRender", "GadgetItem", "GadgetsMsg",
     "TaskApplication", "TaskItem", "TasksMsg",
     "ChronicleMsg", "EventMsg", "MetricsMsg", "DayMsg", "StatusMsg",
-    "ServerMessage", "MESSAGE_MODELS", "SCHEMA_NAMES", "parse_message", "export_schemas",
+    "GATE_EVENTS_LIMIT", "EPOCH_EVENTS_LIMIT", "GenerationCount", "TierCollapse", "DegenerationAggregate", "ClaimTally", "GossipEdgeTally",
+    "MemoryAgentTally", "DayCount", "ExamDayTally", "MemoryAggregate", "EventAggregates",
+    "ServerMessage", "MESSAGE_MODELS", "SCHEMA_NAMES", "RESPONSE_MODELS", "RESPONSE_SCHEMA_DIR",
+    "parse_message", "export_schemas",
 ]
 
 # ``failed``: a tick raised; the state was re-synced with the last committed tick and no further tick runs (DESIGN §14).
@@ -281,6 +287,97 @@ class StatusMsg(BaseModel):
     status: RunStatus
 
 
+# --- HTTP: GET /api/events/aggregates ----------------------------------------------------------------------
+# The whole-run totals of the web's event-derived charts (void/server/api.py build_event_aggregates); a body, not a
+# message, so it has no ``type``. Groups come in order of their first event, the order a live client meets them in.
+#: Gate events in the aggregates: the web's proposals list keeps this many (MAX_GATE_EVENTS in web/src/state/series.ts).
+GATE_EVENTS_LIMIT = 200
+#: Epoch events in the aggregates (a run schedules a handful; operators add a few more).
+EPOCH_EVENTS_LIMIT = 1000
+
+
+class GenerationCount(BaseModel):
+    generation: int | None = Field(description="payload.generation; null when it was not an integral number (total only)")
+    count: int
+
+
+class TierCollapse(BaseModel):
+    tier: str
+    t_c: float = Field(description="The newest finite payload.t_c of the tier's degeneration events")
+
+
+class DegenerationAggregate(BaseModel):
+    by_generation: list[GenerationCount] = Field(description="degeneration events per payload.generation")
+    t_c_by_tier: list[TierCollapse] = Field(description="Tiers in order of their first degeneration event with a t_c")
+
+
+class ClaimTally(BaseModel):
+    agent_id: str | None = Field(description="payload.agent_id (the speaker); null when it was not a string")
+    tier: str | None = Field(description="payload.tier; the client files the group under the roster's tier for the speaker")
+    made: int
+    falsy: int = Field(description="Claims whose payload.truthful is not truthy")
+
+
+class GossipEdgeTally(BaseModel):
+    speaker_id: str = Field(description="payload.speaker_id; '' when it was not a string")
+    listener_id: str = Field(description="payload.listener_id; '' when it was not a string")
+    count: int
+    last_tick: int = Field(description="Tick of the edge's newest transfer")
+
+
+class MemoryAgentTally(BaseModel):
+    """One agent's maintenance, maintenance_skipped and exam_answered events (agent: payload.agent_id, else the event's)."""
+
+    agent_id: str
+    maintenance_real_micro: float = Field(description="Sum of maintenance payload.real_cost (micro-dollars)")
+    maintenance_world_micro: float = Field(description="Sum of maintenance payload.world_cost (micro-dollars)")
+    maintenance_world_self_micro: float = Field(description="World cost of the maintenance calls the agent paid itself")
+    maintenance_calls: int
+    maintenance_skipped: int
+    asked: int = Field(description="exam_answered events without payload.failed (graded items)")
+    correct: int
+    abstained: int
+    failed: int
+
+
+class DayCount(BaseModel):
+    day: int
+    count: int
+
+
+class ExamDayTally(BaseModel):
+    day: int
+    kind: str = Field(description="payload.kind (the question kind); 'unknown' when absent")
+    asked: int
+    correct: int
+    abstained: int
+    failed: int
+
+
+class MemoryAggregate(BaseModel):
+    agents: list[MemoryAgentTally]
+    skipped_by_day: list[DayCount] = Field(description="maintenance_skipped events per day, with or without an agent")
+    exams: list[ExamDayTally] = Field(description="exam_answered events per day and question kind")
+
+
+class EventAggregates(BaseModel):
+    """Whole-run totals of the event-derived charts over every event with ``seq <= as_of_seq``.
+
+    A client seeds its aggregates with these and then counts only events with a larger seq, so the backfill and the
+    live stream meet without overlap. Epoch events (few) and the newest gadget gate events (the proposals list) come
+    as event messages, for the reducers that keep the events themselves.
+    """
+
+    as_of_seq: int = Field(description="Every event with seq <= as_of_seq is counted; nothing after it")
+    degeneration: DegenerationAggregate
+    claims: list[ClaimTally] = Field(description="Per speaker and payload tier")
+    gossip: list[GossipEdgeTally] = Field(description="Per speaker -> listener edge")
+    memory: MemoryAggregate
+    epochs: list[EventMsg] = Field(description=f"The epoch events (the newest {EPOCH_EVENTS_LIMIT}), oldest first")
+    gate: list[EventMsg] = Field(
+        description=f"The newest {GATE_EVENTS_LIMIT} gadget_verified / gadget_rejected events, oldest first")
+
+
 ServerMessage = Annotated[
     Hello | Roster | Snapshot | GadgetsMsg | TasksMsg | ChronicleMsg | EventMsg | MetricsMsg | DayMsg | StatusMsg,
     Field(discriminator="type"),
@@ -295,6 +392,10 @@ MESSAGE_MODELS: dict[str, type[BaseModel]] = {
 SCHEMA_NAMES: tuple[str, ...] = ("hello", "snapshot", "event", "metrics", "day", "roster", "gadgets", "tasks", "chronicle",
                                  "status")
 
+#: HTTP response bodies with a wire model, exported to ``<out>/http/<name>.schema.json`` (DESIGN §15).
+RESPONSE_MODELS: dict[str, type[BaseModel]] = {"event_aggregates": EventAggregates}
+RESPONSE_SCHEMA_DIR = "http"
+
 _adapter: TypeAdapter[Any] = TypeAdapter(ServerMessage)
 
 
@@ -303,18 +404,23 @@ def parse_message(data: dict[str, Any]) -> BaseModel:
     return _adapter.validate_python(data)
 
 
+def _write_schema(model: type[BaseModel], out_dir: Path, rel: str) -> Path:
+    schema = model.model_json_schema()
+    schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    schema["$id"] = f"https://void.local/schemas/{rel}"
+    schema.setdefault("title", model.__name__)
+    path = out_dir / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
 def export_schemas(out_dir: Path) -> list[Path]:
-    """Write ``<name>.schema.json`` for every name in :data:`SCHEMA_NAMES`; returns the paths written."""
+    """Write ``<name>.schema.json`` for every name in :data:`SCHEMA_NAMES` and ``http/<name>.schema.json`` for every
+    response model in :data:`RESPONSE_MODELS`; returns the paths written."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    written: list[Path] = []
-    for name in SCHEMA_NAMES:
-        model = MESSAGE_MODELS[name]
-        schema = model.model_json_schema()
-        schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
-        schema["$id"] = f"https://void.local/schemas/{name}.schema.json"
-        schema.setdefault("title", model.__name__)
-        path = out_dir / f"{name}.schema.json"
-        path.write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        written.append(path)
+    written = [_write_schema(MESSAGE_MODELS[name], out_dir, f"{name}.schema.json") for name in SCHEMA_NAMES]
+    written += [_write_schema(model, out_dir, f"{RESPONSE_SCHEMA_DIR}/{name}.schema.json")
+                for name, model in RESPONSE_MODELS.items()]
     return written

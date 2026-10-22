@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { DayMsg, EventMsg, HelloMsg, MetricsMsg, ServerMsg, SnapshotMsg } from '../protocol'
+import type { DayMsg, EventAggregatesResponse, EventMsg, HelloMsg, MetricsMsg, ServerMsg, SnapshotMsg } from '../protocol'
 import { history } from '../state/history'
 import { useStore } from '../state/store'
 import { WsClient } from './ws'
@@ -66,7 +66,20 @@ function hello(runId: string, tick: number, lastSeq: number): HelloMsg {
 }
 
 /** What the fake server holds when a request is answered; void/server/api.py semantics (exclusive since filters). */
-const world = { maxTick: 0, maxSeq: 0, days: 0, ring: 600 }
+const world = { maxTick: 0, maxSeq: 0, days: 0, ring: 600, aggregates: true }
+
+/** GET /api/events/aggregates with nothing counted (the event-derived sums are tested in aggregates.test.ts). */
+function emptyAggregates(asOf: number): EventAggregatesResponse {
+  return {
+    as_of_seq: asOf,
+    degeneration: { by_generation: [], t_c_by_tier: [] },
+    claims: [],
+    gossip: [],
+    memory: { agents: [], skipped_by_day: [], exams: [] },
+    epochs: [],
+    gate: [],
+  }
+}
 /** While set, answers are computed at request time but delivered only when `release()` is called. */
 let holding = false
 let held: Array<() => void> = []
@@ -108,6 +121,10 @@ function answer(path: string): unknown {
     const out: SnapshotMsg[] = []
     for (let t = Math.max(oldest, since + 1); t <= world.maxTick && out.length < limit; t++) out.push(snapshot(t))
     return { snapshots: out }
+  }
+  if (u.pathname === '/api/events/aggregates' && world.aggregates) {
+    // capped at the newest event, like the route
+    return emptyAggregates(Math.min(q('as_of_seq', world.maxSeq), world.maxSeq))
   }
   throw new Error(`unexpected GET ${path}`)
 }
@@ -188,6 +205,7 @@ beforeEach(() => {
   world.maxSeq = 0
   world.days = 0
   world.ring = 600
+  world.aggregates = true
   mocks.ingest.mockReset()
   mocks.apiGet.mockReset()
   mocks.apiGet.mockImplementation((path: string) => {
@@ -237,6 +255,7 @@ describe('fresh load', () => {
         '/api/metrics?days=1',
         '/api/snapshots?since_tick=-1&limit=200',
         '/api/snapshots?since_tick=200&limit=200',
+        '/api/events/aggregates?as_of_seq=2555',
       ].sort(),
     )
 
@@ -260,6 +279,8 @@ describe('fresh load', () => {
     expect(history.runId).toBe('r1')
     expect(history.renderDelayTicks).toBe(2)
     expect(client!.marks).toEqual({ seq: 2560, metricsTick: 310, snapTick: 310 })
+    // the series was seeded up to the hello's last_seq: the backfilled events at or below it only fill the ring
+    expect(useStore.getState().series.aggregatesSeq).toBe(2555)
 
     // Live traffic after the backfill: duplicates are still dropped.
     mocks.ingest.mockClear()
@@ -269,6 +290,31 @@ describe('fresh load', () => {
     ws.send(event(2561))
     expect(keysOf('snapshot')).toEqual([311])
     expect(keysOf('event')).toEqual([2561])
+  })
+
+  it('backfills the same streams from a server without the aggregates route, and seeds nothing', async () => {
+    world.aggregates = false
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await freshLoad()
+    expect(requested()).toContain('/api/events/aggregates?as_of_seq=2555')
+    expect(keysOf('snapshot')).toEqual(range(1, 310))
+    expect(keysOf('event')).toEqual(range(556, 2560))
+    expect(keysOf('metrics')).toEqual(range(1, 310))
+    // no seed: the series counts every event that reaches it, as before the route existed
+    expect(useStore.getState().series.aggregatesSeq).toBe(0)
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('ignores an aggregates body of the wrong shape', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    mocks.apiGet.mockImplementation((path: string) =>
+      Promise.resolve(path.startsWith('/api/events/aggregates') ? { as_of_seq: 2555, claims: 'nope' } : answer(path)),
+    )
+    await freshLoad()
+    expect(keysOf('event')).toEqual(range(556, 2560))
+    expect(useStore.getState().series.aggregatesSeq).toBe(0)
+    warn.mockRestore()
   })
 
   it('keeps only what the history ring holds when the server ring is larger', async () => {
@@ -303,8 +349,15 @@ describe('reconnect', () => {
     await client!.settled()
 
     expect(requested().sort()).toEqual(
-      ['/api/events?since_seq=2560&limit=1000', '/api/metrics?since_tick=310&limit=1000', '/api/metrics?days=1'].sort(),
+      [
+        '/api/events?since_seq=2560&limit=1000',
+        '/api/events/aggregates?as_of_seq=2600',
+        '/api/metrics?since_tick=310&limit=1000',
+        '/api/metrics?days=1',
+      ].sort(),
     )
+    // a reconnect that missed events seeds again, at the new hello's last_seq
+    expect(useStore.getState().series.aggregatesSeq).toBe(2600)
     expect(keysOf('snapshot')).toEqual(range(311, 320))
     expect(keysOf('event')).toEqual(range(2561, 2700))
     expect(keysOf('metrics')).toEqual(range(311, 325))

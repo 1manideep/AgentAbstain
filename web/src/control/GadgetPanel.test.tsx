@@ -3,8 +3,9 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DayRow, EventMsg, GadgetItem, GadgetsMsg, RosterAgent } from '../protocol'
 import { EventRing } from '../state/events'
+import { Series } from '../state/series'
 import { useStore } from '../state/store'
-import { dailyFailureRate, GadgetsCard, MAX_PROPOSALS, ProposalLog, proposalSummary } from './cards/GadgetsCard'
+import { dailyFailureRate, GadgetsCard, MAX_PROPOSALS, proposalRows, proposalSummary } from './cards/GadgetsCard'
 import { EMPTY_TEXT } from './cards/EmptyState'
 import {
   COUNTS_STALE_TITLE,
@@ -188,35 +189,42 @@ describe('gadget panel (connected)', () => {
   })
 })
 
-describe('proposal log', () => {
-  it('keeps gate outcomes the ring has evicted and reads only newer events on each sync', () => {
+describe('proposal rows', () => {
+  it('keeps gate outcomes the event ring has evicted: the series holds the gate events for the whole run', () => {
+    const series = new Series()
     const ring = new EventRing(4)
-    const log = new ProposalLog()
-    ring.push(gateEvent('gadget_verified', 4, { gadget_id: 'g1', name: 'beacon', owner: 'a1', stage: 'verified', reason: '', verified_without_tests: true }))
-    ring.push(gateEvent('gadget_rejected', 5, { gadget_id: 'g2', name: 'horn', owner: 'a2', stage: 'tests', reason: 'assert failed' }))
-    const first = log.sync(ring, 'r')
+    const push = (e: EventMsg) => {
+      if (ring.push(e)) series.onEvent(e, new Map())
+    }
+    push(gateEvent('gadget_verified', 4, { gadget_id: 'g1', name: 'beacon', owner: 'a1', stage: 'verified', reason: '', verified_without_tests: true }))
+    push(gateEvent('gadget_rejected', 5, { gadget_id: 'g2', name: 'horn', owner: 'a2', stage: 'tests', reason: 'assert failed' }))
+    const first = proposalRows(series.gateEvents)
     expect(first.map((r) => [r.gadgetId, r.verified, r.stage, r.reason, r.withoutTests])).toEqual([
       ['g1', true, 'verified', null, true],
       ['g2', false, 'tests', 'assert failed', false],
     ])
-    // an unchanged ring returns the same rows
-    expect(log.sync(ring, 'r')).toBe(first)
-    for (let i = 0; i < 5; i++) ring.push(otherEvent(6 + i))
-    ring.push(gateEvent('gadget_rejected', 12, { gadget_id: 'g3', name: 'lamp', owner: 'a1', stage: 'static', reason: 'import os' }))
+    const rev = series.gateRev
+    for (let i = 0; i < 5; i++) push(otherEvent(6 + i))
+    // other kinds leave the gate events alone
+    expect(series.gateRev).toBe(rev)
+    push(gateEvent('gadget_rejected', 12, { gadget_id: 'g3', name: 'lamp', owner: 'a1', stage: 'static', reason: 'import os' }))
     expect(ring.atAbs(0)).toBeNull()
-    expect(log.sync(ring, 'r').map((r) => r.gadgetId)).toEqual(['g1', 'g2', 'g3'])
-    expect(proposalSummary(log.rows)).toBe('1 verified · 2 rejected (static 1, tests 1)')
-    // another run starts over from what its ring holds
-    expect(log.sync(new EventRing(4), 'r2')).toEqual([])
+    const rows = proposalRows(series.gateEvents)
+    expect(rows.map((r) => r.gadgetId)).toEqual(['g1', 'g2', 'g3'])
+    expect(proposalSummary(rows)).toBe('1 verified · 2 rejected (static 1, tests 1)')
+    // another run starts over
+    series.beginRun('r1')
+    series.beginRun('r2')
+    expect(proposalRows(series.gateEvents)).toEqual([])
   })
 
-  it('caps the rows it keeps', () => {
-    const ring = new EventRing(MAX_PROPOSALS * 2)
-    const log = new ProposalLog()
-    for (let i = 0; i < MAX_PROPOSALS + 5; i++) ring.push(gateEvent('gadget_rejected', i, { gadget_id: `g${i}`, name: 'x', owner: 'a', stage: 'size', reason: 'big' }))
-    const rows = log.sync(ring, 'r')
+  it('caps the rows it keeps and skips other kinds', () => {
+    const series = new Series()
+    for (let i = 0; i < MAX_PROPOSALS + 5; i++) series.onEvent(gateEvent('gadget_rejected', i, { gadget_id: `g${i}`, name: 'x', owner: 'a', stage: 'size', reason: 'big' }), new Map())
+    const rows = proposalRows(series.gateEvents)
     expect(rows).toHaveLength(MAX_PROPOSALS)
     expect(rows[rows.length - 1]!.gadgetId).toBe(`g${MAX_PROPOSALS + 4}`)
+    expect(proposalRows([otherEvent(1), ...series.gateEvents.slice(-1)]).map((r) => r.gadgetId)).toEqual([`g${MAX_PROPOSALS + 4}`])
   })
 })
 

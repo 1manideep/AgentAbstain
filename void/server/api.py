@@ -12,6 +12,10 @@ text (policy texts, command arguments and messages, practice excerpts, exam answ
 strings; the client renders it as text, never as HTML. The open routes' shapes are mirrored in ``web/src/protocol.ts``
 (``PolicyResponse``, ``MemoryCommandsResponse``, ``MemorySummaryResponse``, ``PracticesResponse``) and held to them
 by tests/test_server_memory_api.py.
+
+``/api/events/aggregates`` serves the whole-run totals of the web's event-derived charts, computed in SQL over the
+events table up to a seq, so a fresh tab does not have to page every event; its body is the ``EventAggregates`` wire
+model (void/server/protocol.py), held to SQL counts and to protocol.ts by tests/test_server_event_aggregates.py.
 """
 
 from __future__ import annotations
@@ -28,8 +32,9 @@ from void.events import OPERATOR, Event, Kind
 from void.memory.vault_stats import agent_vault_stats
 from void.server.auth import is_same_origin_fetch, require_operator
 from void.server.driver import RunEnded
+from void.server.protocol import EPOCH_EVENTS_LIMIT, GATE_EVENTS_LIMIT, EventAggregates
 
-__all__ = ["router", "MAX_LIMIT", "MEMORY_COMMANDS_LIMIT", "build_memory_summary"]
+__all__ = ["router", "MAX_LIMIT", "MEMORY_COMMANDS_LIMIT", "build_memory_summary", "build_event_aggregates"]
 
 log = logging.getLogger("void.server.api")
 
@@ -370,9 +375,165 @@ async def events(request: Request, since_seq: int = Query(default=0, ge=0),
     rows = db.fetchall("SELECT seq, tick, day, kind, agent_id, payload, visibility FROM events WHERE seq > ? ORDER BY seq LIMIT ?",
                        (since_seq, limit))
     last = db.fetchone("SELECT COALESCE(MAX(seq), 0) AS s FROM events")
-    out = [{"type": "event", "seq": int(r["seq"]), "tick": int(r["tick"]), "day": int(r["day"]), "kind": r["kind"],
-            "agent_id": r["agent_id"], "visibility": r["visibility"], "payload": json.loads(r["payload"])} for r in rows]
-    return {"events": out, "last_seq": int(last["s"]) if last else 0}
+    return {"events": [_event_row(r) for r in rows], "last_seq": int(last["s"]) if last else 0}
+
+
+def _event_row(r: Any) -> dict[str, Any]:
+    return {"type": "event", "seq": int(r["seq"]), "tick": int(r["tick"]), "day": int(r["day"]), "kind": r["kind"],
+            "agent_id": r["agent_id"], "visibility": r["visibility"], "payload": json.loads(r["payload"])}
+
+
+# --- whole-run aggregates of the event-derived charts ------------------------------------------------------------
+# Each query mirrors one branch of the web reducer (web/src/state/series.ts Series.onEvent), so a client seeded with
+# the answer that then counts only later events holds what a client that counted every event holds. A payload field
+# counts only where the reducer reads it the same way: JavaScript truthiness, `=== true`, a finite number, a non-empty
+# string. Payloads are json.dumps output (void/db.py persist_event), so every row parses; each total is a grouped
+# query over the `kind` index, bounded by `seq <= as_of_seq` so rows written meanwhile never leak in.
+def _jt(field: str) -> str:
+    return f"json_type(payload, '$.{field}')"
+
+
+def _jx(field: str) -> str:
+    return f"json_extract(payload, '$.{field}')"
+
+
+def _nonempty_text(field: str) -> str:
+    """``typeof payload.<field> === 'string' && payload.<field> !== ''`` (0 or 1, never NULL)."""
+    return f"COALESCE({_jt(field)} = 'text' AND {_jx(field)} <> '', 0)"
+
+
+def _is_true(field: str) -> str:
+    """``payload.<field> === true`` (0 or 1)."""
+    return f"({_jt(field)} IS 'true')"
+
+
+def _js_truthy(field: str) -> str:
+    """``!!payload.<field>`` (0 or 1): true, a non-zero number, a non-empty string, an object or an array."""
+    v = _jx(field)
+    return (f"(CASE {_jt(field)} WHEN 'true' THEN 1 WHEN 'object' THEN 1 WHEN 'array' THEN 1 WHEN 'integer' THEN {v} <> 0 "
+            f"WHEN 'real' THEN {v} <> 0 WHEN 'text' THEN {v} <> '' ELSE 0 END)")
+
+
+def _text_or(field: str, fallback: str) -> str:
+    """``payload.<field>`` when it is a string, else ``fallback`` (an SQL expression)."""
+    return f"(CASE WHEN {_jt(field)} = 'text' THEN {_jx(field)} ELSE {fallback} END)"
+
+
+def _nonempty_text_or(field: str, fallback: str) -> str:
+    """``payload.<field>`` when it is a non-empty string, else ``fallback`` (an SQL expression)."""
+    return f"(CASE WHEN {_nonempty_text(field)} THEN {_jx(field)} ELSE {fallback} END)"
+
+
+def _number_or_zero(field: str) -> str:
+    return f"(CASE WHEN {_jt(field)} IN ('integer', 'real') THEN {_jx(field)} ELSE 0 END)"
+
+
+def _degeneration(db: Any, upto: int) -> dict[str, Any]:
+    g = _jx("generation")
+    # an integral generation is a bar (the client clamps it into the chart); any other value counts in the total only
+    by_generation = db.fetchall(
+        f"SELECT CASE WHEN {_jt('generation')} IN ('integer', 'real') AND {g} = CAST({g} AS INTEGER) THEN CAST({g} AS INTEGER) END "
+        "AS g, COUNT(*) AS n FROM events WHERE kind = ? AND seq <= ? GROUP BY 1 ORDER BY 1", (Kind.DEGENERATION, upto))
+    # the newest finite t_c per tier, tiers in order of their first such event (a Map's insertion order)
+    t_c = db.fetchall(
+        f"SELECT tier, t_c FROM (SELECT {_jx('tier')} AS tier, {_jx('t_c')} AS t_c, "
+        f"ROW_NUMBER() OVER (PARTITION BY {_jx('tier')} ORDER BY seq DESC) AS rn, "
+        f"MIN(seq) OVER (PARTITION BY {_jx('tier')}) AS first FROM events "
+        f"WHERE kind = ? AND seq <= ? AND {_nonempty_text('tier')} AND {_jt('t_c')} IN ('integer', 'real')) "
+        "WHERE rn = 1 ORDER BY first", (Kind.DEGENERATION, upto))
+    return {"by_generation": [{"generation": None if r["g"] is None else int(r["g"]), "count": int(r["n"])} for r in by_generation],
+            "t_c_by_tier": [{"tier": str(r["tier"]), "t_c": float(r["t_c"])} for r in t_c]}
+
+
+def _claims(db: Any, upto: int) -> list[dict[str, Any]]:
+    # per (speaker, payload tier): the client files each group under the roster's tier for the speaker, as it does live
+    rows = db.fetchall(
+        f"SELECT {_text_or('agent_id', 'NULL')} AS speaker, {_nonempty_text_or('tier', 'NULL')} AS tier, COUNT(*) AS made, "
+        f"SUM(1 - {_js_truthy('truthful')}) AS falsy, MIN(seq) AS first FROM events WHERE kind = ? AND seq <= ? "
+        "GROUP BY 1, 2 ORDER BY first", (Kind.CLAIM, upto))
+    return [{"agent_id": r["speaker"], "tier": r["tier"], "made": int(r["made"]), "falsy": int(r["falsy"])} for r in rows]
+
+
+def _gossip(db: Any, upto: int) -> list[dict[str, Any]]:
+    # a speaker or listener that is not a string is '' (as live); ticks never go back as seq grows, so MAX(tick) is
+    # the tick of the edge's newest transfer
+    rows = db.fetchall(
+        f"SELECT {_text_or('speaker_id', repr(''))} AS speaker, {_text_or('listener_id', repr(''))} AS listener, "
+        "COUNT(*) AS n, MAX(tick) AS last_tick, MIN(seq) AS first FROM events WHERE kind = ? AND seq <= ? "
+        "GROUP BY 1, 2 ORDER BY first", (Kind.GOSSIP_TRANSFER, upto))
+    return [{"speaker_id": str(r["speaker"]), "listener_id": str(r["listener"]), "count": int(r["n"]),
+             "last_tick": int(r["last_tick"])} for r in rows]
+
+
+def _memory(db: Any, upto: int) -> dict[str, Any]:
+    maint = f"kind = '{Kind.MAINTENANCE}'"
+    graded = f"(kind = '{Kind.EXAM_ANSWERED}' AND NOT {_is_true('failed')})"
+    # the agent is payload.agent_id when it is a non-empty string, else the event's agent_id (MemorySeries)
+    agents = db.fetchall(
+        f"SELECT aid, SUM(CASE WHEN {maint} THEN {_number_or_zero('real_cost')} ELSE 0 END) AS real, "
+        f"SUM(CASE WHEN {maint} THEN {_number_or_zero('world_cost')} ELSE 0 END) AS world, "
+        f"SUM(CASE WHEN {maint} AND {_jt('payer')} = 'text' AND {_jx('payer')} = aid THEN {_number_or_zero('world_cost')} ELSE 0 END) "
+        f"AS world_self, SUM({maint}) AS calls, SUM(kind = '{Kind.MAINTENANCE_SKIPPED}') AS skipped, "
+        f"SUM(kind = '{Kind.EXAM_ANSWERED}' AND {_is_true('failed')}) AS failed, SUM({graded}) AS asked, "
+        f"SUM({graded} AND {_is_true('correct')}) AS correct, SUM({graded} AND {_is_true('abstained')}) AS abstained, "
+        f"MIN(seq) AS first FROM (SELECT seq, kind, payload, {_nonempty_text_or('agent_id', 'agent_id')} AS aid FROM events "
+        "WHERE kind IN (?, ?, ?) AND seq <= ?) WHERE aid IS NOT NULL AND aid <> '' GROUP BY aid ORDER BY first",
+        (Kind.MAINTENANCE, Kind.MAINTENANCE_SKIPPED, Kind.EXAM_ANSWERED, upto))
+    skipped = db.fetchall("SELECT day, COUNT(*) AS n FROM events WHERE kind = ? AND seq <= ? GROUP BY day ORDER BY day",
+                          (Kind.MAINTENANCE_SKIPPED, upto))
+    exams = db.fetchall(
+        f"SELECT day, {_nonempty_text_or('kind', repr('unknown'))} AS k, SUM({graded}) AS asked, "
+        f"SUM({graded} AND {_is_true('correct')}) AS correct, SUM({graded} AND {_is_true('abstained')}) AS abstained, "
+        f"SUM({_is_true('failed')}) AS failed, MIN(seq) AS first FROM events WHERE kind = ? AND seq <= ? "
+        "GROUP BY 1, 2 ORDER BY day, first", (Kind.EXAM_ANSWERED, upto))
+    return {
+        "agents": [{"agent_id": str(r["aid"]), "maintenance_real_micro": r["real"] or 0, "maintenance_world_micro": r["world"] or 0,
+                    "maintenance_world_self_micro": r["world_self"] or 0, "maintenance_calls": int(r["calls"] or 0),
+                    "maintenance_skipped": int(r["skipped"] or 0), "asked": int(r["asked"] or 0), "correct": int(r["correct"] or 0),
+                    "abstained": int(r["abstained"] or 0), "failed": int(r["failed"] or 0)} for r in agents],
+        "skipped_by_day": [{"day": int(r["day"]), "count": int(r["n"])} for r in skipped],
+        "exams": [{"day": int(r["day"]), "kind": str(r["k"]), "asked": int(r["asked"]), "correct": int(r["correct"]),
+                   "abstained": int(r["abstained"]), "failed": int(r["failed"])} for r in exams],
+    }
+
+
+def _newest_events(db: Any, kinds: tuple[str, ...], upto: int, limit: int) -> list[dict[str, Any]]:
+    marks = ", ".join("?" for _ in kinds)
+    rows = db.fetchall("SELECT seq, tick, day, kind, agent_id, payload, visibility FROM events "
+                       f"WHERE kind IN ({marks}) AND seq <= ? ORDER BY seq DESC LIMIT ?", (*kinds, upto, limit))
+    return [_event_row(r) for r in reversed(rows)]
+
+
+def build_event_aggregates(db: Any, as_of_seq: int | None = None) -> dict[str, Any]:
+    """Whole-run totals of the web's event-derived charts over the events with ``seq <= as_of_seq`` (default: all).
+
+    The answer's ``as_of_seq`` is the seq actually covered (the request's, capped at the newest event), so a client
+    that counts only the events after it counts nothing twice. Only the epoch events and the newest
+    :data:`GATE_EVENTS_LIMIT` gate events come back as events; everything else is a count or a sum.
+    """
+    row = db.fetchone("SELECT COALESCE(MAX(seq), 0) AS s FROM events")
+    newest = int(row["s"]) if row else 0
+    upto = newest if as_of_seq is None else max(0, min(int(as_of_seq), newest))
+    return {
+        "as_of_seq": upto,
+        "degeneration": _degeneration(db, upto),
+        "claims": _claims(db, upto),
+        "gossip": _gossip(db, upto),
+        "memory": _memory(db, upto),
+        "epochs": _newest_events(db, (Kind.EPOCH,), upto, EPOCH_EVENTS_LIMIT),
+        "gate": _newest_events(db, (Kind.GADGET_VERIFIED, Kind.GADGET_REJECTED), upto, GATE_EVENTS_LIMIT),
+    }
+
+
+@router.get("/events/aggregates")
+async def event_aggregates(request: Request, as_of_seq: int | None = Query(default=None, ge=0)) -> dict[str, Any]:
+    """Whole-run aggregates of the event-derived charts as of ``as_of_seq`` (default: the newest event).
+
+    Open like ``/api/events`` (a foreign Origin is refused by the origin guard; no token): it only sums rows that
+    route already serves to any same-origin GET.
+    """
+    body = build_event_aggregates(_sim(request).db, as_of_seq)
+    return EventAggregates.model_validate(body).model_dump(mode="json")
 
 
 @router.get("/snapshots")
