@@ -12,17 +12,14 @@ What is here, and which promise each piece keeps:
 * :func:`superiority` / :func:`non_superiority` -- the pre-registered "the interval clears the margin"
   rules; a PASS also needs the margin-shifted t p-value (the one :func:`holm` adjusts) below alpha, so the
   verdict and the reported p never disagree.
-* :func:`contrast_test` -- one interaction contrast (a per-seed difference of differences) against a margin in
-  ``greater``, ``less`` or ``two_sided`` direction: superiority's interval and t rules, on the observed side for
-  ``two_sided``.
 * :func:`tost_paired` -- two one-sided tests: a claim of *no effect* needs equivalence within a stated
   margin, never a non-significant p-value (6.11; H1 uses a margin of 0.25 SD).
 * :func:`holm` -- Holm step-down adjustment across the pre-registered primary endpoints.
 * :func:`power_paired` / :func:`n_for_power` -- approximate power of the paired design (6.2, E0 gate);
   :func:`power_tost` -- approximate power of the equivalence test at a zero effect.
 * :func:`sign_test` -- exact two-sided sign test.
-* :func:`interaction_2x2` -- per-seed main effects and interaction of a 2x2 factorial, descriptive (Q2:
-  scarcity x capability tier); a declared interaction (H4: rung x self-edit) is decided with :func:`contrast_test`.
+* :func:`interaction_2x2` -- per-seed main effects and interaction of a 2x2 factorial (H4: rung x
+  self-edit; Q2: scarcity x capability tier).
 * :func:`slope_by_seed` -- the slope of a generation analysis with a random intercept per seed (6.11),
   estimated within seeds with a cluster bootstrap by seed.
 
@@ -41,7 +38,6 @@ from typing import Any
 __all__ = [
     "betai",
     "bootstrap_ci",
-    "contrast_test",
     "holm",
     "interaction_2x2",
     "n_for_power",
@@ -61,7 +57,6 @@ __all__ = [
 N_BOOT = 2000
 BOOT_SEED = 0
 DIRECTIONS = ("greater", "less")
-CONTRAST_DIRECTIONS = ("greater", "less", "two_sided")
 _NORMAL = statistics.NormalDist()
 _BETACF_MAXIT = 500
 _BETACF_EPS = 1e-15
@@ -357,30 +352,6 @@ def non_superiority(diffs: Sequence[float], margin: float, direction: str, alpha
     sup = superiority(diffs, margin, direction, alpha, n_boot=n_boot, seed=seed)
     passed = None if sup["passed"] is None else not sup["passed"]
     return {"passed": passed, "ci": sup["ci"], "p": sup["p"], "n": sup["n"], "mean": sup["mean"]}
-
-
-def contrast_test(values: Sequence[float], margin: float, direction: str, alpha: float = 0.05, *,
-                  n_boot: int = N_BOOT, seed: int = BOOT_SEED) -> dict[str, Any]:
-    """Does one interaction contrast clear ``margin`` in ``direction``? ``values`` are its per-seed estimates (a
-    difference of paired differences: one value per seed, used like a paired difference).
-
-    ``greater`` and ``less`` are :func:`superiority` exactly. ``two_sided`` asks whether the contrast lies beyond
-    ``margin`` on either side: it is :func:`superiority` on the side of the observed mean (``greater`` when the mean
-    is at or above 0). That side has the smaller margin-shifted one-sided t p-value, so its ``p`` (twice that, capped
-    at 1) is the two-sided p; at margin 0 it is the ordinary two-sided paired t p-value. The interval is the two-sided
-    ``1 - alpha`` paired percentile bootstrap in every direction. ``passed`` is ``ci_clears and p < alpha`` before any
-    multiplicity adjustment (None below two values).
-
-    Returns ``{passed, ci, p, n, mean, side, ci_clears, p_clears}``; ``side`` is the side tested (None without values).
-    """
-    if direction not in CONTRAST_DIRECTIONS:
-        raise ValueError(f"direction must be one of {CONTRAST_DIRECTIONS}, not {direction!r}")
-    d = _clean(values)
-    side: str | None = direction
-    if direction == "two_sided":
-        side = ("greater" if sum(d) / len(d) >= 0 else "less") if d else None
-    sup = superiority(d, margin, side or "greater", alpha, n_boot=n_boot, seed=seed)
-    return {**sup, "side": side}
 
 
 def tost_paired(diffs: Sequence[float], margin: float, alpha: float = 0.05) -> dict[str, Any]:
