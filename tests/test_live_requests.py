@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 from conftest import REPO
-from live_mock import message_body, mock_client, wire_client
+from live_mock import THINK, THINK_BY_TIER, message_body, mock_client, tok, wire_client
 from test_brains import obs
 from test_share_practice import SCHEMA_SHA256
 
@@ -33,14 +33,18 @@ from void.brain.anthropic_brain import (
 from void.brain.base import Sampling
 from void.brain.decision import SHARE_PRACTICE, share_practice_enabled, strict_json_schema
 from void.config import load_config
-from void.economy.catalog import rejects_sampling
+from void.economy.catalog import fallback_targets, rejects_sampling, same_model
 
 LADDER = "configs/live_claude_ladder.yaml"
 DECISION = json.dumps({"thought": "north", "memory_ops": [], "action": {
     "type": "move", "target": None, "x": 1, "y": 2, "text": None, "note_title": None, "amount_usd": None, "delta": None,
     "name": None, "code": None, "tests": None, "params": None, "claims": []}})
 SAMPLING_KEYS = ("temperature", "top_p", "top_k")
-TIERS = {"frontier": "claude-opus-5-5", "standard": "claude-sonnet-5-5", "swift": "claude-haiku-5-5"}
+# The exact model each ladder tier sends, read from the kit's own config: no model is named in this file.
+_LADDER_TIERS = load_config(REPO / LADDER).tiers
+TIERS = {tier: _LADDER_TIERS[tier].model for tier in ("frontier", "standard", "swift")}
+# The ladder's cheapest rung is on the one model without a server-side refusal fallback: never ask for one there.
+NO_FALLBACK = TIERS["swift"]
 
 
 def _capture(tier: str, call: str, *, cfg: Any = None, text: str = DECISION, stop: str = "end_turn",
@@ -75,10 +79,18 @@ def _assert_no_400_shapes(req: dict[str, Any], model: str) -> None:
     assert body["output_config"]["effort"] == "low", "effort goes inside output_config and is always explicit"
     assert "effort" not in body
     beta = headers.get("anthropic-beta", "")
-    if model == "claude-haiku-5-5":  # no server-side fallback: never ask for one
+    if model == NO_FALLBACK:  # no server-side fallback: never ask for one
         assert "fallbacks" not in body and FALLBACK_BETA not in beta and req["path"] == "/v1/messages"
     else:
         assert body.get("fallbacks") == "default" and FALLBACK_BETA in beta and "server-side-fallback-2026-06-01" not in beta
+
+
+def test_the_ladder_tiers_are_three_distinct_models_and_only_swift_has_no_fallback() -> None:
+    assert all(TIERS.values()) and len(set(TIERS.values())) == len(TIERS), TIERS
+    for tier, model in TIERS.items():
+        has_fallback = model != NO_FALLBACK
+        assert bool(fallback_targets(model)) == has_fallback, (tier, model)
+        assert _LADDER_TIERS[tier].refusal_fallbacks == has_fallback, (tier, model)
 
 
 @pytest.mark.parametrize("tier", sorted(TIERS))
@@ -87,6 +99,7 @@ def test_structured_requests_carry_nothing_the_api_rejects(tier: str, call: str)
     captured, result = _capture(tier, call)
     _assert_no_400_shapes(captured[-1], TIERS[tier])
     body = captured[-1]["body"]
+    assert body["model"] == TIERS[tier]
     assert body["output_config"]["format"]["type"] == "json_schema"
     assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert body["max_tokens"] == (2048 if call == "decide" else 1024)
@@ -97,6 +110,7 @@ def test_structured_requests_carry_nothing_the_api_rejects(tier: str, call: str)
 def test_text_completions_send_effort_and_no_fallbacks(tier: str) -> None:
     captured, result = _capture(tier, "text", text="A short column.")
     body = captured[-1]["body"]
+    assert body["model"] == TIERS[tier]
     for key in SAMPLING_KEYS + ("thinking", "tool_choice", "fallbacks"):
         assert key not in body
     assert body["output_config"] == {"effort": "low"} and body["max_tokens"] == 1024 and captured[-1]["path"] == "/v1/messages"
@@ -110,6 +124,7 @@ def test_no_temperature_reaches_a_model_that_rejects_sampling_even_if_the_tier_s
         # bypass validation, as a hand-edited or stale config object would
         cfg.tiers[tier] = cfg.tiers[tier].model_construct(**{**cfg.tiers[tier].model_dump(), "supports_temperature": True})
         captured, _ = _capture(tier, "decide", cfg=cfg, sampling=Sampling(1.5, 0.9, False, api_temperature=0.9))
+        assert captured[-1]["body"]["model"] == model
         assert not any(k in captured[-1]["body"] for k in SAMPLING_KEYS), model
 
 
@@ -159,6 +174,16 @@ def test_clients_never_retry_and_injected_clients_get_the_header(monkeypatch: py
     assert prepare_client(fake) is fake  # a test double without with_options is used as it is
 
 
+@pytest.mark.parametrize("tier", sorted(TIERS))
+def test_the_mock_client_keys_its_thinking_by_the_model_the_brain_sends(tier: str) -> None:
+    """live_mock's thinking table is read from the same config, so each tier's offline answer bills that tier's row."""
+    assert THINK[TIERS[tier]] == THINK_BY_TIER[tier]
+    fake = mock_client()
+    r = asyncio.run(AnthropicBrain(tier, load_config(LADDER), client=fake).decide(obs(tier=tier), Sampling(1.0, 0.2, False)))
+    assert r.ok and fake.log[-1]["model"] == TIERS[tier] and fake.log[-1]["purpose"] == "decide"
+    assert r.usage.output_tokens == tok(r.raw_text) + THINK_BY_TIER[tier][0]
+
+
 def test_a_fallback_400_disables_fallbacks_with_a_warning(caplog: pytest.LogCaptureFixture) -> None:
     import anthropic
     import httpx2
@@ -199,17 +224,24 @@ def test_fallback_served_usage_is_priced_per_attempt() -> None:
     from void.economy.pricing import real_cost_micro
 
     cfg = load_config(LADDER)
+    primary = cfg.tiers["frontier"].model
+    # a declined frontier request is served by the first of its model's documented fallback targets (the kit's table)
+    targets = fallback_targets(primary)
+    assert targets, primary
+    fallback = targets[0]
+    assert fallback != primary and not same_model(primary, fallback), (primary, fallback)
     captured: list[dict[str, Any]] = []
     iterations = [
-        {"type": "message", "model": "claude-opus-5-5", "input_tokens": 1500, "output_tokens": 0,
+        {"type": "message", "model": primary, "input_tokens": 1500, "output_tokens": 0,
          "cache_read_input_tokens": 0, "cache_creation_input_tokens": 800},
-        {"type": "fallback_message", "model": "claude-opus-5", "input_tokens": 1500, "output_tokens": 400,
+        {"type": "fallback_message", "model": fallback, "input_tokens": 1500, "output_tokens": 400,
          "cache_read_input_tokens": 0, "cache_creation_input_tokens": 800},
     ]
-    client = wire_client(captured, lambda body: message_body("claude-opus-5", DECISION, iterations=iterations),
+    client = wire_client(captured, lambda body: message_body(fallback, DECISION, iterations=iterations),
                          build=lambda **kw: make_client(cfg, **kw))
     r = asyncio.run(AnthropicBrain("frontier", cfg, client=client).decide(obs(tier="frontier"), Sampling(1.0, 0.2, False)))
-    assert r.ok and [m for m, _ in r.usage.attempts] == ["claude-opus-5-5", "claude-opus-5"]
+    assert captured[-1]["body"]["model"] == primary
+    assert r.ok and [m for m, _ in r.usage.attempts] == [primary, fallback]
     # 1500 in + 800 cache write at the primary's rates, then the same plus 400 out at the fallback's rates
     assert real_cost_micro(r.usage, cfg.tiers["frontier"], cfg.tiers) == (1500 * 4 + 800 * 5) + (1500 * 5 + 800 * 6.25 + 400 * 25)
 
